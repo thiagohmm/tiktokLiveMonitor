@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+dist-win-fresh/
+executables/
+release/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# macOS artifacts from zip extraction
+__MACOSX/
+
+# Binary files
+*.exe
+*.dmg
+*.AppImage
+*.zip
+*.deb
+*.rpm
+*.snap
+
+# Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Workspace
+.vscode/
+.idea/

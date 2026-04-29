@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  tiktok-monitor:
+    build: .
+    container_name: tiktok-live-monitor
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - .:/app
+      - /app/node_modules
+    # Required for Electron to access GPU/Hardware if available
+    privileged: true
+    network_mode: host

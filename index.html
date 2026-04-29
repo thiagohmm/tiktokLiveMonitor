@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor de Live TikTok</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            background-color: #f4f4f9;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        input[type="text"] {
+            flex-grow: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        input[type="number"] {
+            width: 80px;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            background-color: #fe2c55;
+            color: white;
+            font-weight: bold;
+        }
+        button:hover {
+            opacity: 0.9;
+        }
+        #status {
+            margin-bottom: 20px;
+            font-size: 0.9em;
+            color: #666;
+        }
+        .table-container {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #eee;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+        .user-row,
+        .pinned-comment-row {
+            border-bottom: 1px solid #eee;
+        }
+        .user-row.red,
+        .gift-row.red {
+            background-color: #ffcccc !important;
+        }
+        .user-row td,
+        .gift-row td,
+        .pinned-comment-row td {
+            padding: 15px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+        }
+        th {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            text-align: left;
+            background-color: #fe2c55;
+            color: white;
+            padding: 12px 15px;
+        }
+        .user-name {
+            font-weight: bold;
+            display: block;
+        }
+        .action-btn {
+            background-color: #4caf50;
+            padding: 5px 10px;
+            font-size: 0.8em;
+        }
+        .section-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .expiration-control {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #555;
+            font-size: 0.9em;
+            font-weight: normal;
+        }
+        .comment-cell {
+            max-width: 420px;
+            white-space: normal;
+            word-break: break-word;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>TikTok Live Monitor</h1>
+        <div class="header">
+            <input type="text" id="username" placeholder="Digite o @username da live...">
+            <button id="connectBtn">Conectar</button>
+            <button id="disconnectBtn" style="background-color: #555; display: none;">Desconectar</button>
+        </div>
+        <div id="status">Desconectado</div>
+
+        <div style="margin-bottom: 20px;">
+            <canvas id="messageChart" height="150"></canvas>
+        </div>
+
+        <div class="section-title">
+            <h3>Presentes Alvos (Tiny Dyny/Perfume)</h3>
+            <label class="expiration-control">
+                Expirar em
+                <input type="number" id="targetExpirationMinutes" min="1" step="1" value="4">
+                min
+            </label>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Usuário</th>
+                        <th>Presente</th>
+                        <th>Ação</th>
+                    </tr>
+                </thead>
+                <tbody id="userTableBody">
+                    <!-- Usuários filtrados aparecerão aqui -->
+                </tbody>
+            </table>
+        </div>
+
+        <h3>Comentários Fixados</h3>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Usuário</th>
+                        <th>Comentário</th>
+                    </tr>
+                </thead>
+                <tbody id="pinnedCommentsTableBody">
+                    <!-- Comentários fixados aparecerão aqui -->
+                </tbody>
+            </table>
+        </div>
+
+        <h3>Todos os Presentes</h3>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Usuário</th>
+                        <th>Presente</th>
+                    </tr>
+                </thead>
+                <tbody id="allGiftsTableBody">
+                    <!-- Todos os presentes aparecerão aqui -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script src="renderer.js"></script>
+</body>
+</html>
