@@ -1,9 +1,9 @@
 {
   "name": "tiktok-live-monitor",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "server.js",
   "scripts": {
-    "start": "electron .",
+    "start": "node server.js",
     "build": "electron-builder",
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux",

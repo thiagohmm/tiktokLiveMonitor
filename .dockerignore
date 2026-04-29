@@ -1,0 +1,11 @@
+node_modules/
+dist/
+dist-win-fresh/
+executables/
+release/
+.git/
+.gitignore
+.codex
+.DS_Store
+*.log
+*:Zone.Identifier

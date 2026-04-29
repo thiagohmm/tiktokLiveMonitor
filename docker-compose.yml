@@ -5,11 +5,7 @@ services:
     build: .
     container_name: tiktok-live-monitor
     environment:
-      - DISPLAY=${DISPLAY:-:0}
-    volumes:
-      - /tmp/.X11-unix:/tmp/.X11-unix
-      - .:/app
-      - /app/node_modules
-    # Required for Electron to access GPU/Hardware if available
-    privileged: true
-    network_mode: host
+      - HOST=0.0.0.0
+      - PORT=3000
+    ports:
+      - "3000:3000"

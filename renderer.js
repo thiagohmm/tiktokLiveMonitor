@@ -1,6 +1,3 @@
-const { ipcRenderer } = require('electron');
-const Chart = require('chart.js/auto');
-
 const usernameInput = document.getElementById('username');
 const connectBtn = document.getElementById('connectBtn');
 const disconnectBtn = document.getElementById('disconnectBtn');
@@ -11,16 +8,15 @@ const pinnedCommentsTableBody = document.getElementById('pinnedCommentsTableBody
 const targetExpirationMinutesInput = document.getElementById('targetExpirationMinutes');
 const ctx = document.getElementById('messageChart').getContext('2d');
 
-let monitoredUsers = [];
 let messageCount = 0;
-let chartData = Array(60).fill(0); // Últimos 60 segundos
+let chartData = Array(60).fill(0);
 let autoRemoveTimers = {};
 let pinnedCommentTimers = {};
 
 const chart = new Chart(ctx, {
     type: 'line',
     data: {
-        labels: Array(60).fill('').map((_, i) => 60 - i + 's atrás'),
+        labels: Array(60).fill('').map((_, index) => `${60 - index}s atrás`),
         datasets: [{
             label: 'Mensagens por segundo',
             data: chartData,
@@ -49,7 +45,6 @@ const chart = new Chart(ctx, {
     }
 });
 
-// Atualizar o gráfico a cada segundo
 setInterval(() => {
     chartData.push(messageCount);
     chartData.shift();
@@ -57,51 +52,81 @@ setInterval(() => {
     chart.update();
 }, 1000);
 
-connectBtn.addEventListener('click', () => {
-    const user = usernameInput.value.trim();
-    if (user) {
-        connectBtn.disabled = true;
-        statusDiv.innerText = 'Conectando...';
-        ipcRenderer.send('connect-tiktok', user);
+connectBtn.addEventListener('click', async () => {
+    const username = usernameInput.value.trim().replace(/^@/, '');
+    if (!username) {
+        return;
+    }
+
+    setConnectingState();
+
+    try {
+        const response = await fetch('/api/connect', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ username })
+        });
+
+        if (!response.ok) {
+            const payload = await response.json();
+            throw new Error(payload.error || 'Falha ao conectar.');
+        }
+    } catch (error) {
+        applyDisconnectedState(error.message);
     }
 });
 
-disconnectBtn.addEventListener('click', () => {
-    ipcRenderer.send('disconnect-tiktok');
+disconnectBtn.addEventListener('click', async () => {
     statusDiv.innerText = 'Desconectando...';
+
+    try {
+        await fetch('/api/disconnect', { method: 'POST' });
+    } catch (error) {
+        applyDisconnectedState(error.message);
+    }
 });
 
 targetExpirationMinutesInput.addEventListener('change', () => {
     resetTargetGiftTimers();
 });
 
-ipcRenderer.on('connection-status', (event, data) => {
-    if (data.success) {
-        statusDiv.innerText = `Conectado a: ${data.username}`;
-        statusDiv.style.color = 'green';
-        connectBtn.style.display = 'none';
-        connectBtn.disabled = false; // re-enable so it's ready if we disconnect
-        disconnectBtn.style.display = 'inline-block';
-        usernameInput.disabled = true;
-    } else {
-        statusDiv.innerText = data.error === 'Desconectado pelo usuário' ? 'Desconectado' : `Erro: ${data.error}`;
-        statusDiv.style.color = data.error === 'Desconectado pelo usuário' ? '#666' : 'red';
-        connectBtn.style.display = 'inline-block';
-        connectBtn.disabled = false; // re-enable on error
-        disconnectBtn.style.display = 'none';
-        usernameInput.disabled = false;
-        
-        // Limpar as tabelas ao desconectar
-        clearTables();
-    }
-});
+function setConnectingState() {
+    connectBtn.disabled = true;
+    disconnectBtn.disabled = true;
+    statusDiv.innerText = 'Conectando...';
+    statusDiv.style.color = '#666';
+}
+
+function applyConnectedState(username) {
+    statusDiv.innerText = `Conectado a: ${username}`;
+    statusDiv.style.color = 'green';
+    connectBtn.style.display = 'none';
+    connectBtn.disabled = false;
+    disconnectBtn.style.display = 'inline-block';
+    disconnectBtn.disabled = false;
+    usernameInput.disabled = true;
+}
+
+function applyDisconnectedState(error) {
+    statusDiv.innerText = error === 'Desconectado pelo usuário' || error === 'Servidor encerrado'
+        ? 'Desconectado'
+        : `Erro: ${error}`;
+    statusDiv.style.color = error === 'Desconectado pelo usuário' || error === 'Servidor encerrado' ? '#666' : 'red';
+    connectBtn.style.display = 'inline-block';
+    connectBtn.disabled = false;
+    disconnectBtn.style.display = 'none';
+    disconnectBtn.disabled = false;
+    usernameInput.disabled = false;
+    clearTables();
+}
 
 function clearTables() {
     userTableBody.innerHTML = '';
     allGiftsTableBody.innerHTML = '';
     pinnedCommentsTableBody.innerHTML = '';
 
-    // Limpar timers de remoção automática
     for (const key in autoRemoveTimers) {
         clearTimeout(autoRemoveTimers[key]);
     }
@@ -113,53 +138,26 @@ function clearTables() {
     pinnedCommentTimers = {};
 }
 
-ipcRenderer.on('new-chat-message', () => {
-    messageCount++;
-});
+function handleConnectionStatus(data) {
+    if (data.success) {
+        applyConnectedState(data.username);
+        return;
+    }
 
-ipcRenderer.on('new-gift-user', (event, user) => {
-    addUserToList(user);
-});
-
-ipcRenderer.on('any-gift-received', (event, gift) => {
-    addAllGiftToList(gift);
-});
-
-ipcRenderer.on('pinned-comment', (event, pinnedComment) => {
-    addPinnedCommentToList(pinnedComment);
-});
-
-ipcRenderer.on('mark-user-red', (event, uniqueId) => {
-    const targetId = String(uniqueId).toLowerCase();
-    const targetRows = document.querySelectorAll('.user-row, .gift-row[data-target-gift="true"]');
-
-    targetRows.forEach(row => {
-        const rowId = String(row.getAttribute('data-id')).toLowerCase();
-        if (rowId === targetId) {
-            row.classList.add('red');
-        }
-    });
-});
+    applyDisconnectedState(data.error || 'Falha ao conectar.');
+}
 
 function addUserToList(user) {
-    const timerKey = `${user.uniqueId}-${user.giftName}`;
-    
-    // Tentar encontrar uma linha existente para este usuário e este presente específico
     const existingRow = Array.from(userTableBody.querySelectorAll('.user-row')).find(row => {
-        return String(row.getAttribute('data-id')).toLowerCase() === String(user.uniqueId).toLowerCase() && 
-               row.querySelector('.gift-name-cell').innerText === user.giftName;
+        return String(row.getAttribute('data-id')).toLowerCase() === String(user.uniqueId).toLowerCase() &&
+            row.querySelector('.gift-name-cell').innerText === user.giftName;
     });
 
     if (existingRow) {
-        // Mover para o topo
         userTableBody.prepend(existingRow);
-        
-        // Se for uma atualização que deve ser vermelha
         if (user.isRed) {
             existingRow.classList.add('red');
         }
-        
-        // Resetar o timer de remoção automática
         startAutoRemoveTimer(user.uniqueId, user.giftName, existingRow);
         return;
     }
@@ -167,7 +165,7 @@ function addUserToList(user) {
     const tr = document.createElement('tr');
     tr.className = 'user-row';
     tr.setAttribute('data-id', user.uniqueId);
-    
+
     if (user.isRed) {
         tr.classList.add('red');
     }
@@ -178,30 +176,29 @@ function addUserToList(user) {
         </td>
         <td class="gift-name-cell">${user.giftName}</td>
         <td>
-            <button class="action-btn" onclick="removeUser('${user.uniqueId}', '${user.giftName}', this)">Respondido</button>
+            <button class="action-btn" data-unique-id="${user.uniqueId}" data-gift-name="${user.giftName}">Respondido</button>
         </td>
     `;
 
+    tr.querySelector('.action-btn').addEventListener('click', event => {
+        removeUser(event.currentTarget.dataset.uniqueId, event.currentTarget.dataset.giftName, event.currentTarget);
+    });
+
     userTableBody.prepend(tr);
-    
-    // Iniciar o timer de remoção automática
     startAutoRemoveTimer(user.uniqueId, user.giftName, tr);
 }
 
 function startAutoRemoveTimer(uniqueId, giftName, element) {
     const timerKey = `${uniqueId}-${giftName}`;
-    
-    // Limpar timer anterior se existir
+
     if (autoRemoveTimers[timerKey]) {
         clearTimeout(autoRemoveTimers[timerKey]);
     }
-    
-    const expirationMs = getTargetExpirationMs();
+
     autoRemoveTimers[timerKey] = setTimeout(() => {
         element.remove();
         delete autoRemoveTimers[timerKey];
-        console.log(`Removido automaticamente por inatividade: ${uniqueId} (${giftName})`);
-    }, expirationMs);
+    }, getTargetExpirationMs());
 }
 
 function getTargetExpirationMs() {
@@ -221,14 +218,12 @@ function resetTargetGiftTimers() {
 }
 
 function addAllGiftToList(gift) {
-    // Tentar encontrar uma linha existente para este usuário e este presente
     const existingRow = Array.from(allGiftsTableBody.querySelectorAll('tr')).find(row => {
-        return row.getAttribute('data-user-id') === gift.uniqueId && 
-               row.getAttribute('data-gift-id') === String(gift.giftId);
+        return row.getAttribute('data-user-id') === gift.uniqueId &&
+            row.getAttribute('data-gift-id') === String(gift.giftId);
     });
 
     if (existingRow) {
-        // Mover para o topo
         allGiftsTableBody.prepend(existingRow);
         if (gift.isRed) {
             existingRow.classList.add('red');
@@ -254,10 +249,8 @@ function addAllGiftToList(gift) {
         <td>${gift.giftName}</td>
     `;
 
-    // Adicionar no topo para ver os mais recentes primeiro
     allGiftsTableBody.prepend(tr);
 
-    // Limitar a 50 entradas únicas para não sobrecarregar
     if (allGiftsTableBody.children.length > 50) {
         allGiftsTableBody.lastChild.remove();
     }
@@ -293,12 +286,88 @@ function addPinnedCommentToList(pinnedComment) {
     }
 }
 
-window.removeUser = function(uniqueId, giftName, btn) {
+function markUserRed(uniqueId) {
+    const targetId = String(uniqueId).toLowerCase();
+    const targetRows = document.querySelectorAll('.user-row, .gift-row[data-target-gift="true"]');
+
+    targetRows.forEach(row => {
+        const rowId = String(row.getAttribute('data-id')).toLowerCase();
+        if (rowId === targetId) {
+            row.classList.add('red');
+        }
+    });
+}
+
+function removeUser(uniqueId, giftName, button) {
     const timerKey = `${uniqueId}-${giftName}`;
     if (autoRemoveTimers[timerKey]) {
         clearTimeout(autoRemoveTimers[timerKey]);
         delete autoRemoveTimers[timerKey];
     }
-    const tr = btn.closest('.user-row');
-    tr.remove();
-};
+
+    const tr = button.closest('.user-row');
+    if (tr) {
+        tr.remove();
+    }
+}
+
+async function loadInitialState() {
+    try {
+        const response = await fetch('/api/state');
+        const payload = await response.json();
+
+        if (payload.connected && payload.username) {
+            usernameInput.value = payload.username;
+            applyConnectedState(payload.username);
+        }
+    } catch (error) {
+        statusDiv.innerText = 'Servidor indisponível';
+        statusDiv.style.color = 'red';
+    }
+}
+
+function setupEventStream() {
+    const eventSource = new EventSource('/events');
+
+    eventSource.addEventListener('server-state', event => {
+        const data = JSON.parse(event.data);
+        if (data.connected && data.username) {
+            usernameInput.value = data.username;
+            applyConnectedState(data.username);
+        } else {
+            applyDisconnectedState('Desconectado pelo usuário');
+        }
+    });
+
+    eventSource.addEventListener('connection-status', event => {
+        handleConnectionStatus(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('new-chat-message', () => {
+        messageCount++;
+    });
+
+    eventSource.addEventListener('new-gift-user', event => {
+        addUserToList(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('any-gift-received', event => {
+        addAllGiftToList(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('pinned-comment', event => {
+        addPinnedCommentToList(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('mark-user-red', event => {
+        markUserRed(JSON.parse(event.data));
+    });
+
+    eventSource.onerror = () => {
+        statusDiv.innerText = 'Reconectando ao servidor...';
+        statusDiv.style.color = '#666';
+    };
+}
+
+loadInitialState();
+setupEventStream();
