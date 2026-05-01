@@ -6,6 +6,11 @@ services:
     environment:
       HOST: "0.0.0.0"
       PORT: "3000"
+      # Overlay Docker + mmap costuma ser mais estável que --no-mmap para o GGUF
+      LLAMA_USE_MMAP: "1"
+      # Espera extra pelo /health na primeira carga (segundos entre polls ≈ 1s)
+      LLAMA_HEALTH_MAX_ATTEMPTS: "180"
+    shm_size: "512mb"
     volumes:
       # Persiste ~800MB do GGUF + binários entre reinícios
       - llm-models:/app/models

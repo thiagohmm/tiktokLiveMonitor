@@ -96,38 +96,63 @@ async function startLlamaServer() {
     const threads = String(Math.min(cap, cores));
 
     const binDir = path.dirname(binPath);
-    llamaProcess = spawn(
-        binPath,
-        [
-            '-m', modelPath,
-            '--port', LLAMA_PORT.toString(),
-            '--n-gpu-layers', '0', // Força CPU conforme solicitado
-            '--threads', threads,
-            '--alias', 'llama3',
-            '--no-mmap' // Pode ajudar em sistemas com pouca RAM
-        ],
-        { cwd: binDir, stdio: ['ignore', 'pipe', 'pipe'] }
-    );
+
+    /** Distribuições tarball colocam libggml*.so ao lado do binário */
+    const spawnEnv = { ...process.env };
+    if (process.platform === 'linux') {
+        const sep = ':';
+        spawnEnv.LD_LIBRARY_PATH = spawnEnv.LD_LIBRARY_PATH
+            ? `${binDir}${sep}${spawnEnv.LD_LIBRARY_PATH}`
+            : binDir;
+    }
+
+    const llamaArgs = [
+        '-m', modelPath,
+        '--port', LLAMA_PORT.toString(),
+        '--n-gpu-layers', '0',
+        '--threads', threads,
+        '--alias', 'llama3'
+    ];
+    // Docker/overlay: mmap costuma funcionar melhor; desktop com pouca RAM pode usar --no-mmap
+    if (process.env.LLAMA_USE_MMAP !== '1') {
+        llamaArgs.push('--no-mmap');
+    }
+
+    let stderrTail = '';
+    llamaProcess = spawn(binPath, llamaArgs, {
+        cwd: binDir,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: spawnEnv
+    });
 
     llamaProcess.stderr.on('data', (chunk) => {
-        const line = chunk.toString().trim();
-        if (/error|fatal|fail/i.test(line)) {
-            console.error('[AI] llama-server:', line.slice(0, 500));
+        const text = chunk.toString();
+        stderrTail = (stderrTail + text).slice(-8000);
+        const line = text.trim();
+        if (/error|fatal|fail|cannot load|not found|permission denied/i.test(line)) {
+            console.error('[AI] llama-server:', line.slice(0, 800));
         }
     });
 
     llamaProcess.on('error', (err) => {
         console.error(`[AI] Falha ao iniciar processo:`, err);
     });
-    llamaProcess.on('exit', (code) => {
-        if (code !== 0 && code !== null && llamaProcess) {
-            console.error(`[AI] llama-server encerrou com código ${code}`);
+    llamaProcess.on('exit', (code, signal) => {
+        if ((code !== 0 && code !== null) || signal) {
+            console.error(`[AI] llama-server encerrou (code=${code} signal=${signal})`);
+            if (stderrTail.trim()) {
+                console.error('[AI] stderr (final):\n', stderrTail.trim().slice(-4000));
+            }
         }
     });
 
+    const maxAttempts = Math.min(
+        600,
+        Math.max(30, Number(process.env.LLAMA_HEALTH_MAX_ATTEMPTS) || 90)
+    );
+
     // Aguarda o servidor responder /health (primeira carga do modelo pode ser lenta)
     let attempts = 0;
-    const maxAttempts = 90;
     
     return new Promise((resolve, reject) => {
         const check = setInterval(() => {

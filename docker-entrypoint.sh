@@ -29,6 +29,9 @@ if [ "$needs_setup" = true ]; then
     }
 fi
 
+# Volume montado às vezes perde bit de execução
+find /app/bin -type f -name llama-server -exec chmod +x {} \; 2>/dev/null || true
+
 # Sobe o llama-server antes do Node aceitar tráfego → primeira conexão já usa LLM
 echo "[docker] Pré-carregando llama-server…"
 node -e "
