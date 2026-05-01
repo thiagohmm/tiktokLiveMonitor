@@ -3,6 +3,8 @@ services:
     build: .
     ports:
       - "${PORT:-3000}:3000"
+      # llama-server (só responde depois do container subir o modelo; curl no host precisa disto)
+      - "${LLAMA_HOST_PORT:-8080}:8080"
     environment:
       HOST: "0.0.0.0"
       PORT: "3000"
