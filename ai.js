@@ -87,15 +87,25 @@ async function startLlamaServer() {
         throw new Error(`Modelo GGUF parece inválido ou vazio (${ms} bytes). Execute: npm run setup-llm`);
     }
 
-    console.log(`[AI] Iniciando llama-server em http://localhost:${LLAMA_PORT}...`);
+    const binDir = path.dirname(binPath);
+
+    /** 127.0.0.1 quebra porta publicada pelo Docker (curl no host → resposta vazia). */
+    let bindHost = process.env.LLAMA_SERVER_BIND;
+    if (!bindHost) {
+        try {
+            bindHost = fs.existsSync('/.dockerenv') ? '0.0.0.0' : '127.0.0.1';
+        } catch {
+            bindHost = '127.0.0.1';
+        }
+    }
+
+    console.log(`[AI] Iniciando llama-server em http://${bindHost}:${LLAMA_PORT}...`);
     console.log(`[AI] Bin: ${binPath}`);
     console.log(`[AI] Model: ${modelPath}`);
-    
+
     const cores = Math.max(1, (os.cpus() && os.cpus().length) || 2);
     const cap = process.platform === 'linux' && process.arch === 'arm64' ? 4 : 8;
     const threads = String(Math.min(cap, cores));
-
-    const binDir = path.dirname(binPath);
 
     /** Distribuições tarball colocam libggml*.so ao lado do binário */
     const spawnEnv = { ...process.env };
@@ -108,6 +118,7 @@ async function startLlamaServer() {
 
     const llamaArgs = [
         '-m', modelPath,
+        '--host', bindHost,
         '--port', LLAMA_PORT.toString(),
         '--n-gpu-layers', '0',
         '--threads', threads,

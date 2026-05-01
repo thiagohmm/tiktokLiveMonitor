@@ -8,6 +8,8 @@ services:
     environment:
       HOST: "0.0.0.0"
       PORT: "3000"
+      # Opcional: já detectamos /.dockerenv no código; explícito para evitar dúvida
+      LLAMA_SERVER_BIND: "0.0.0.0"
       # Overlay Docker + mmap costuma ser mais estável que --no-mmap para o GGUF
       LLAMA_USE_MMAP: "1"
       # Espera extra pelo /health na primeira carga (segundos entre polls ≈ 1s)
