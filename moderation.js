@@ -1,4 +1,5 @@
 const { completeModeration } = require('./ai');
+const { BINARY_RELIGIOUS_MODERATION_SYSTEM } = require('./moderation-prompt');
 
 /** Cache para evitar chamadas repetidas à IA */
 const aiCache = new Map();
@@ -38,7 +39,12 @@ function looksExplicitChristianProselytizing(commentLower) {
         /\bem\s+nome\s+de\s+jesus\b/, /\bgloria\s+a\s+deus\b/, /\blouvado\s+seja\b/,
         /\baleluia\b/, /\bamem\b/, /\bpaz\s+do\s+senhor\b/, /\bdeus\s+te\s+abenc\b/,
         /\bespirito\s+santo\b/, /\b(evangelho|biblia)\b/, /\bversiculo\b/,
-        /\bsalmo\b/, /\bnossa\s+senhora\b/, /\bpreciso\s+de\s+(jesus|deus)\b/
+        /\bsalmo\b/, /\bnossa\s+senhora\b/, /\bpreciso\s+de\s+(jesus|deus)\b/,
+        // Slogans evangélicos (fold já tirou acento de «só» → so)
+        /\b(jesus|cristo|deus)\s+salva\b/,
+        /\bso\s+(jesus|cristo|deus)(\s+salva)?\b/,
+        /\bunico\s+(salvador|senhor)\b.*\b(jesus|cristo)\b/,
+        /\b(jesus|cristo)\b.*\bunico\s+caminho\b/
     ];
     if (blatant.some(rx => rx.test(t))) return true;
     if (holy.test(t) && /\bseja\s+entregue\s+a\s+ele\b/.test(t)) return true;
@@ -55,6 +61,11 @@ function passesChristianModerationAiGate(commentLower) {
     const afroCtx = /\b(candombl|umbanda|macumba|orixa[s]?|feitico[s]?|terreiro|og[aã]|vodum)\b/.test(t);
 
     if (jc && afroCtx) return true;
+
+    // «Jesus salva», «só Jesus salva» — tensão de salvação (salva ≠ salvacao no fold)
+    if (/\b(jesus|cristo|deus)\s+salva\b/.test(t)) return true;
+    if (/\bso\s+(jesus|cristo|deus)(\s+salva)?\b/.test(t)) return true;
+    if (/\b(jesus|cristo|deus)\b/.test(t) && /\b(salva[cç]ao|salva)\b/.test(t)) return true;
 
     const tension = /\b(converter|salvacao|entregar|arrep|pecado|cruz|inferno|pregac|culto|pregador)\b/.test(t);
     if (jc && tension) return true;
@@ -90,54 +101,32 @@ function passesSpamScamAiGate(rawComment, commentFolded) {
     return false;
 }
 
-const MODERATION_SYSTEM = [
-    'Moderador de chat de live de CANDOMBLÉ (Orixás, axé).',
-    'Responda com UMA única palavra em MAIÚSCULAS, escolha só entre:',
-    'OK — mensagem aceitável (neutro, elogio, dúvida respeitosa, Jesus mencionado sem convite).',
-    'RELIGIAO — insultar, demonizar ou zombar de religiões de matriz africana, terreiro ou Orixás.',
-    'PROSELITISMO — convite religioso cristão ao chat (converter, aceitar Jesus/Deus, arrependimento, salvação).',
-    'SPAM — propaganda repetitiva, pedido para seguir/clicar/link genérico sem contexto da live.',
-    'GOLPE — possível fraude (PIX suspeito, “ganhe dinheiro”, esquema, dados bancários).',
-    'ODIO — insultos graves, ameaça, discriminação explícita não coberta só por RELIGIAO.',
-    'OUTRO — conteúdo claramente inadequado para o chat que não se encaixa acima.',
-    'Se mais de um se aplica, escolha o mais grave (ex.: GOLPE > SPAM).'
-].join('\n');
-
 const CATEGORY_LABELS = {
     RELIGIAO: 'Ataque a matriz africana / Orixás (IA)',
-    PROSELITISMO: 'Proselitismo cristão (IA)',
+    PROSELITISMO: 'Proselitismo ou condenação religiosa (IA)',
     SPAM: 'Spam / propaganda (IA)',
     GOLPE: 'Possível golpe ou fraude (IA)',
     ODIO: 'Ódio / insulto grave (IA)',
     OUTRO: 'Conteúdo impróprio (IA)'
 };
 
-function parseCategoryToken(raw) {
-    const folded = foldChatText(raw || '');
-    const token = folded.replace(/[^a-z]+/g, ' ').trim().split(/\s+/)[0] || '';
+/** Resposta esperada do modelo: só SIM ou NAO */
+function parseBinaryReligiousAnswer(raw) {
+    const folded = foldChatText(String(raw || '')).trim();
+    const compact = folded.replace(/\s+/g, ' ');
 
-    const aliases = {
-        ok: 'OK',
-        nao: 'OK',
-        sim: 'OUTRO',
-        religiao: 'RELIGIAO',
-        proselitismo: 'PROSELITISMO',
-        spam: 'SPAM',
-        golpe: 'GOLPE',
-        odio: 'ODIO',
-        outro: 'OUTRO'
-    };
+    if (/^nao\b/i.test(compact)) {
+        return { flagged: false, category: 'OK' };
+    }
+    if (/^sim\b/i.test(compact)) {
+        return { flagged: true, category: 'PROSELITISMO' };
+    }
 
-    const cat = aliases[token] || null;
-    if (cat) return cat;
+    const token = folded.replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/)[0] || '';
+    if (token === 'nao') return { flagged: false, category: 'OK' };
+    if (token === 'sim') return { flagged: true, category: 'PROSELITISMO' };
 
-    if (folded.includes('relig')) return 'RELIGIAO';
-    if (folded.includes('proselit')) return 'PROSELITISMO';
-    if (folded.includes('golpe') || folded.includes('fraude')) return 'GOLPE';
-    if (folded.includes('spam')) return 'SPAM';
-    if (folded.includes('odio') || folded.includes('dio')) return 'ODIO';
-
-    return 'OK';
+    return { flagged: false, category: 'OK' };
 }
 
 function recentChatBlock(chatBuffer, limit = 6) {
@@ -187,13 +176,12 @@ async function analyzeMessage(comment, uniqueId, nickname, chatBuffer) {
     try {
         const userPrompt =
             `Contexto recente (mensagens anteriores na live):\n${recentChatBlock(chatBuffer)}\n\n` +
-            `Mensagem a avaliar:\nAutor: ${JSON.stringify(nickname || uniqueId || '')}\n` +
-            `Texto: ${JSON.stringify(comment)}`;
+            `Autor do comentário: ${JSON.stringify(nickname || uniqueId || '')}\n` +
+            `Texto para analisar:\n${JSON.stringify(comment)}`;
 
-        const raw = await completeModeration(MODERATION_SYSTEM, userPrompt, 32);
-        const category = parseCategoryToken(raw);
-        const flagged = category !== 'OK';
-        const reason = flagged ? CATEGORY_LABELS[category] || CATEGORY_LABELS.OUTRO : null;
+        const raw = await completeModeration(BINARY_RELIGIOUS_MODERATION_SYSTEM, userPrompt, 16);
+        const { flagged, category } = parseBinaryReligiousAnswer(raw);
+        const reason = flagged ? CATEGORY_LABELS[category] || CATEGORY_LABELS.PROSELITISMO : null;
 
         const result = { flagged, reason, category };
 

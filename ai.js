@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
+const { BINARY_RELIGIOUS_MODERATION_SYSTEM } = require('./moderation-prompt');
 
 let llamaProcess = null;
 const LLAMA_PORT = 8080;
@@ -162,17 +163,31 @@ async function startLlamaServer() {
         Math.max(30, Number(process.env.LLAMA_HEALTH_MAX_ATTEMPTS) || 90)
     );
 
-    // Aguarda o servidor responder /health (primeira carga do modelo pode ser lenta)
+    // /health devolve 503 {"Loading model"...} até o GGUF ficar pronto (Pi pode levar vários minutos)
     let attempts = 0;
-    
+
     return new Promise((resolve, reject) => {
         const check = setInterval(() => {
             attempts++;
-            const req = http.get(`http://localhost:${LLAMA_PORT}/health`, (res) => {
+            if (attempts > maxAttempts) {
+                clearInterval(check);
+                reject(new Error(
+                    `Timeout ao aguardar o modelo carregar (${maxAttempts}s). Raspberry/memória lenta ou GGUF corrompido.`
+                ));
+                return;
+            }
+
+            const req = http.get(`http://127.0.0.1:${LLAMA_PORT}/health`, (res) => {
                 if (res.statusCode === 200) {
                     clearInterval(check);
+                    res.resume();
                     console.log(`[AI] llama-server pronto.`);
                     resolve();
+                    return;
+                }
+                res.resume();
+                if (res.statusCode === 503 && attempts % 15 === 0) {
+                    console.log('[AI] Modelo ainda carregando (HTTP 503); aguarde…');
                 }
             });
             req.on('error', () => {
@@ -260,13 +275,15 @@ async function completeModeration(systemContent, userContent, maxTokens = 24) {
 /** Compat: moderador binário SIM/NAO (usa a mesma fila). */
 async function askLlama(prompt) {
     try {
-        const text = await completeModeration(
-            'Você é um moderador de chat para uma live de Candomblé. Responda APENAS "SIM" ou "NAO".',
-            prompt,
-            10
-        );
-        const upper = text.toUpperCase();
-        return upper.includes('SIM') ? 'SIM' : 'NAO';
+        const userContent = `Texto para analisar:\n${typeof prompt === 'string' ? prompt : JSON.stringify(prompt)}`;
+        const text = await completeModeration(BINARY_RELIGIOUS_MODERATION_SYSTEM, userContent, 16);
+        const compact = String(text || '')
+            .toLowerCase()
+            .trim()
+            .replace(/\s+/g, ' ');
+        if (/^nao\b/i.test(compact)) return 'NAO';
+        if (/^sim\b/i.test(compact)) return 'SIM';
+        return 'NAO';
     } catch {
         return 'NAO';
     }
