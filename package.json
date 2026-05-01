@@ -1,15 +1,9 @@
 {
   "name": "tiktok-live-monitor",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "server.js",
   "scripts": {
-    "start": "electron .",
-    "start:web": "node server.js",
-    "build": "electron-builder",
-    "build:win": "electron-builder --win",
-    "build:linux": "electron-builder --linux",
-    "build:mac": "electron-builder --mac",
-    "build:all": "electron-builder --win --linux --mac"
+    "start": "node server.js"
   },
   "author": "",
   "license": "ISC",
@@ -18,57 +12,5 @@
     "@google/generative-ai": "^0.24.1",
     "chart.js": "^4.5.1",
     "tiktok-live-connector": "^2.1.1-beta1"
-  },
-  "devDependencies": {
-    "electron": "^41.3.0",
-    "electron-builder": "^26.8.1"
-  },
-  "build": {
-    "appId": "com.tiktok.livemonitor",
-    "productName": "TikTok Live Monitor",
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "main.js",
-      "server.js",
-      "renderer.js",
-      "index.html",
-      "package.json",
-      "node_modules/**/*"
-    ],
-    "asar": true,
-    "win": {
-      "target": [
-        {
-          "target": "portable",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ]
-    },
-    "linux": {
-      "target": [
-        {
-          "target": "AppImage",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ]
-    },
-    "mac": {
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "arm64"
-          ]
-        }
-      ]
-    }
   }
 }

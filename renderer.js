@@ -1,16 +1,5 @@
-let ipcRenderer = null;
-try {
-    if (typeof require !== 'undefined') {
-        ipcRenderer = require('electron').ipcRenderer;
-    }
-} catch {
-    ipcRenderer = null;
-}
-
-const isElectron = Boolean(ipcRenderer);
-
 function ensureBrowserChart() {
-    if (isElectron || typeof window.Chart !== 'undefined') {
+    if (typeof window.Chart !== 'undefined') {
         return Promise.resolve();
     }
     return new Promise((resolve, reject) => {
@@ -93,59 +82,41 @@ setInterval(() => {
     chart.update();
 }, 1000);
 
-if (isElectron) {
-    connectBtn.addEventListener('click', () => {
-        const user = usernameInput.value.trim().replace(/^@/, '');
-        if (!user) {
-            return;
+connectBtn.addEventListener('click', async () => {
+    const username = usernameInput.value.trim().replace(/^@/, '');
+    if (!username) {
+        return;
+    }
+
+    setConnectingState();
+
+    try {
+        const response = await fetch('/api/connect', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ username })
+        });
+
+        if (!response.ok) {
+            const payload = await response.json();
+            throw new Error(payload.error || 'Falha ao conectar.');
         }
-        connectBtn.disabled = true;
-        statusDiv.innerText = 'Conectando...';
-        statusDiv.style.color = '#666';
-        ipcRenderer.send('connect-tiktok', user);
-    });
+    } catch (error) {
+        applyDisconnectedState(error.message);
+    }
+});
 
-    disconnectBtn.addEventListener('click', () => {
-        ipcRenderer.send('disconnect-tiktok');
-        statusDiv.innerText = 'Desconectando...';
-    });
-} else {
-    connectBtn.addEventListener('click', async () => {
-        const username = usernameInput.value.trim().replace(/^@/, '');
-        if (!username) {
-            return;
-        }
+disconnectBtn.addEventListener('click', async () => {
+    statusDiv.innerText = 'Desconectando...';
 
-        setConnectingState();
-
-        try {
-            const response = await fetch('/api/connect', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ username })
-            });
-
-            if (!response.ok) {
-                const payload = await response.json();
-                throw new Error(payload.error || 'Falha ao conectar.');
-            }
-        } catch (error) {
-            applyDisconnectedState(error.message);
-        }
-    });
-
-    disconnectBtn.addEventListener('click', async () => {
-        statusDiv.innerText = 'Desconectando...';
-
-        try {
-            await fetch('/api/disconnect', { method: 'POST' });
-        } catch (error) {
-            applyDisconnectedState(error.message);
-        }
-    });
-}
+    try {
+        await fetch('/api/disconnect', { method: 'POST' });
+    } catch (error) {
+        applyDisconnectedState(error.message);
+    }
+});
 
 targetExpirationMinutesInput.addEventListener('change', () => {
     resetTargetGiftTimers();
@@ -532,79 +503,21 @@ function setupEventStream() {
     };
 }
 
-function setupElectronIpc() {
-    ipcRenderer.on('connection-status', (event, data) => {
-        if (data.success) {
-            statusDiv.innerText = `Conectado a: ${data.username}`;
-            statusDiv.style.color = 'green';
-            connectBtn.style.display = 'none';
-            connectBtn.disabled = false;
-            disconnectBtn.style.display = 'inline-block';
-            usernameInput.disabled = true;
-        } else {
-            statusDiv.innerText = data.error === 'Desconectado pelo usuário' ? 'Desconectado' : `Erro: ${data.error}`;
-            statusDiv.style.color = data.error === 'Desconectado pelo usuário' ? '#666' : 'red';
-            connectBtn.style.display = 'inline-block';
-            connectBtn.disabled = false;
-            disconnectBtn.style.display = 'none';
-            usernameInput.disabled = false;
-            clearTables();
-        }
-    });
-
-    ipcRenderer.on('new-chat-message', () => {
-        messageCount++;
-    });
-
-    ipcRenderer.on('new-gift-user', (event, user) => {
-        addUserToList(user);
-    });
-
-    ipcRenderer.on('any-gift-received', (event, gift) => {
-        addAllGiftToList(gift);
-    });
-
-    ipcRenderer.on('pinned-comment', (event, pinnedComment) => {
-        addPinnedCommentToList(pinnedComment);
-    });
-
-    ipcRenderer.on('flagged-message', (event, data) => {
-        addFlaggedMessageToList(data);
-    });
-
-    ipcRenderer.on('mark-user-red', (event, uniqueId) => {
-        markUserRed(uniqueId);
-    });
-}
-
 async function bootstrap() {
     try {
         await ensureBrowserChart();
-        const ChartLib = isElectron ? require('chart.js/auto') : window.Chart;
-        if (!ChartLib) {
+        if (!window.Chart) {
             throw new Error('Chart.js indisponível.');
         }
-        chart = createChart(ChartLib);
+        chart = createChart(window.Chart);
     } catch (e) {
         statusDiv.innerText = `Erro ao iniciar gráfico: ${e.message}`;
         statusDiv.style.color = 'red';
         return;
     }
 
-    applyInfractionsSectionTitle(false);
-
-    if (isElectron) {
-        try {
-            const cfg = await ipcRenderer.invoke('get-ui-config');
-            applyInfractionsSectionTitle(Boolean(cfg && cfg.geminiConfigured));
-        } catch {
-            applyInfractionsSectionTitle(false);
-        }
-        setupElectronIpc();
-    } else {
-        await loadInitialState();
-        setupEventStream();
-    }
+    await loadInitialState();
+    setupEventStream();
 }
 
 void bootstrap();
