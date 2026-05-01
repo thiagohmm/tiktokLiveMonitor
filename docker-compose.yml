@@ -1,12 +1,16 @@
-version: '3.8'
-
 services:
-  tiktok-monitor:
+  tiktok-live-monitor:
     build: .
-    container_name: tiktok-live-monitor
-    environment:
-      - HOST=0.0.0.0
-      - PORT=3000
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
     ports:
-      - "3000:3000"
+      - "${PORT:-3000}:3000"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3000"
+    volumes:
+      # Persiste ~800MB do GGUF + binários entre reinícios
+      - llm-models:/app/models
+      - llm-bin:/app/bin
+
+volumes:
+  llm-models:
+  llm-bin:

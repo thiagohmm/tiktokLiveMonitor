@@ -18,6 +18,10 @@ Thumbs.db
 # macOS artifacts from zip extraction
 __MACOSX/
 
+# LLM (GitHub limita arquivos >100MB; use npm run setup-llm ou Docker volume)
+models/*.gguf
+/bin/
+
 # Binary files
 *.exe
 *.dmg

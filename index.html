@@ -117,6 +117,53 @@
             white-space: normal;
             word-break: break-word;
         }
+        .flagged-message-row td {
+            padding: 12px 15px;
+            vertical-align: top;
+        }
+        .infraction-category {
+            display: inline-block;
+            font-size: 0.82em;
+            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: #ede7f6;
+            color: #4527a0;
+            white-space: nowrap;
+        }
+        .ai-led-row {
+            display: none;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 14px;
+            font-size: 0.95em;
+            font-weight: 600;
+            color: #333;
+        }
+        .ai-led-dot {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            transition: background-color 0.2s, box-shadow 0.2s;
+        }
+        .ai-led-dot-checking {
+            background-color: #94a3b8;
+            box-shadow: 0 0 6px rgba(148, 163, 184, 0.9);
+            animation: ai-led-pulse 1s ease-in-out infinite;
+        }
+        .ai-led-dot-on {
+            background-color: #22c55e;
+            box-shadow: 0 0 10px rgba(34, 197, 94, 0.65);
+        }
+        .ai-led-dot-off {
+            background-color: #dc2626;
+            box-shadow: 0 0 8px rgba(220, 38, 38, 0.45);
+        }
+        @keyframes ai-led-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.55; }
+        }
     </style>
 </head>
 <body>
@@ -128,6 +175,10 @@
             <button id="disconnectBtn" style="background-color: #555; display: none;">Desconectar</button>
         </div>
         <div id="status">Desconectado</div>
+        <div id="aiLedRow" class="ai-led-row" aria-live="polite">
+            <span id="aiLedDot" class="ai-led-dot ai-led-dot-checking"></span>
+            <span id="aiLedText">Verificando IA…</span>
+        </div>
 
         <div style="margin-bottom: 20px;">
             <canvas id="messageChart" height="150"></canvas>
@@ -178,6 +229,7 @@
                     <tr>
                         <th>Usuário</th>
                         <th>Mensagem</th>
+                        <th>Categoria</th>
                         <th>Motivo</th>
                     </tr>
                 </thead>

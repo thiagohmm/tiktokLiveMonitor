@@ -5,19 +5,27 @@
   "scripts": {
     "start": "electron .",
     "start:web": "node server.js",
+    "docker:build": "docker compose build",
+    "docker:up": "docker compose up",
     "build": "electron-builder",
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux",
     "build:mac": "electron-builder --mac",
-    "build:all": "electron-builder --win --linux --mac"
+    "build:all": "electron-builder --win --linux --mac",
+    "postinstall": "node scripts/setup-llm.js",
+    "setup-llm": "node scripts/setup-llm.js",
+    "setup-llm:linux:arm64": "node scripts/setup-llm.js linux arm64",
+    "setup-llm:linux:x64": "node scripts/setup-llm.js linux x64",
+    "setup-llm:win:x64": "node scripts/setup-llm.js win x64"
   },
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
     "chart.js": "^4.5.1",
-    "tiktok-live-connector": "^2.1.1-beta1"
+    "tiktok-live-connector": "^2.1.1-beta1",
+    "unzipper": "^0.12.3",
+    "tar": "^7.4.3"
   },
   "devDependencies": {
     "electron": "^41.3.0",
@@ -32,10 +40,16 @@
     "files": [
       "main.js",
       "server.js",
+      "ai.js",
+      "moderation.js",
       "renderer.js",
       "index.html",
       "package.json",
       "node_modules/**/*"
+    ],
+    "extraResources": [
+      "models/**/*",
+      "bin/**/*"
     ],
     "asar": true,
     "win": {
@@ -43,8 +57,7 @@
         {
           "target": "portable",
           "arch": [
-            "x64",
-            "arm64"
+            "x64"
           ]
         }
       ]

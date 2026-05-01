@@ -33,6 +33,9 @@ const flaggedMessagesTableBody = document.getElementById('flaggedMessagesTableBo
 const infractionsSectionTitle = document.getElementById('infractionsSectionTitle');
 const targetExpirationMinutesInput = document.getElementById('targetExpirationMinutes');
 const chartCanvas = document.getElementById('messageChart');
+const aiLedRow = document.getElementById('aiLedRow');
+const aiLedDot = document.getElementById('aiLedDot');
+const aiLedText = document.getElementById('aiLedText');
 
 let chart;
 let messageCount = 0;
@@ -41,11 +44,56 @@ let autoRemoveTimers = {};
 let pinnedCommentTimers = {};
 let flaggedMessageTimers = {};
 
-function applyInfractionsSectionTitle(geminiConfigured) {
+/** Rótulo curto para coluna Categoria (payload.category do servidor) */
+function infractionCategoryLabel(category) {
+    const map = {
+        RELIGIAO: 'Matriz africana',
+        PROSELITISMO: 'Proselitismo',
+        SPAM: 'Spam',
+        GOLPE: 'Golpe',
+        ODIO: 'Ódio',
+        OUTRO: 'Outro',
+        REPETICAO: 'Repetição'
+    };
+    const key = String(category || '').trim().toUpperCase();
+    if (!key) return '—';
+    return map[key] || key;
+}
+
+function applyInfractionsSectionTitle(aiConfigured) {
     if (!infractionsSectionTitle) {
         return;
     }
-    infractionsSectionTitle.textContent = geminiConfigured ? 'Infrações (Análise IA)' : 'Infrações';
+    infractionsSectionTitle.textContent = aiConfigured ? 'Infrações (Análise IA Local)' : 'Infrações';
+}
+
+function showAiLedChecking() {
+    if (!aiLedRow || !aiLedDot || !aiLedText) return;
+    aiLedRow.style.display = 'flex';
+    aiLedDot.className = 'ai-led-dot ai-led-dot-checking';
+    aiLedText.textContent = 'Verificando IA…';
+}
+
+function setAiLedActive(active) {
+    if (!aiLedRow || !aiLedDot || !aiLedText) return;
+    aiLedRow.style.display = 'flex';
+    aiLedDot.className = 'ai-led-dot ' + (active ? 'ai-led-dot-on' : 'ai-led-dot-off');
+    aiLedText.textContent = active ? 'IA ativa' : 'IA inativa';
+}
+
+function hideAiLed() {
+    if (!aiLedRow || !aiLedDot || !aiLedText) return;
+    aiLedRow.style.display = 'none';
+    aiLedDot.className = 'ai-led-dot ai-led-dot-checking';
+    aiLedText.textContent = 'Verificando IA…';
+}
+
+function runLlmProbeElectron() {
+    showAiLedChecking();
+    ipcRenderer
+        .invoke('probe-llm')
+        .then((data) => setAiLedActive(Boolean(data && data.llmActive)))
+        .catch(() => setAiLedActive(false));
 }
 
 function createChart(ChartLib) {
@@ -102,10 +150,12 @@ if (isElectron) {
         connectBtn.disabled = true;
         statusDiv.innerText = 'Conectando...';
         statusDiv.style.color = '#666';
+        runLlmProbeElectron();
         ipcRenderer.send('connect-tiktok', user);
     });
 
     disconnectBtn.addEventListener('click', () => {
+        hideAiLed();
         ipcRenderer.send('disconnect-tiktok');
         statusDiv.innerText = 'Desconectando...';
     });
@@ -117,6 +167,13 @@ if (isElectron) {
         }
 
         setConnectingState();
+        showAiLedChecking();
+        const probePromise = fetch('/api/probe-llm')
+            .then(async (r) => {
+                if (!r.ok) return { llmActive: false };
+                return r.json();
+            })
+            .catch(() => ({ llmActive: false }));
 
         try {
             const response = await fetch('/api/connect', {
@@ -134,9 +191,17 @@ if (isElectron) {
         } catch (error) {
             applyDisconnectedState(error.message);
         }
+
+        try {
+            const probeData = await probePromise;
+            setAiLedActive(Boolean(probeData.llmActive));
+        } catch {
+            setAiLedActive(false);
+        }
     });
 
     disconnectBtn.addEventListener('click', async () => {
+        hideAiLed();
         statusDiv.innerText = 'Desconectando...';
 
         try {
@@ -420,11 +485,34 @@ function addFlaggedMessageToList(data) {
     const tr = document.createElement('tr');
     tr.className = 'flagged-message-row';
 
-    tr.innerHTML = `
-        <td><span class="user-name">${data.nickname}</span></td>
-        <td class="comment-cell">${data.comment}</td>
-        <td><span style="color: #fe2c55; font-weight: bold;">${data.reason}</span></td>
-    `;
+    const tdUser = document.createElement('td');
+    const spanUser = document.createElement('span');
+    spanUser.className = 'user-name';
+    spanUser.textContent = data.nickname != null ? String(data.nickname) : '';
+    tdUser.appendChild(spanUser);
+
+    const tdMsg = document.createElement('td');
+    tdMsg.className = 'comment-cell';
+    tdMsg.textContent = data.comment != null ? String(data.comment) : '';
+
+    const tdCat = document.createElement('td');
+    const spanCat = document.createElement('span');
+    spanCat.className = 'infraction-category';
+    spanCat.textContent = infractionCategoryLabel(data.category);
+    if (data.category) spanCat.title = String(data.category);
+    tdCat.appendChild(spanCat);
+
+    const tdReason = document.createElement('td');
+    const spanReason = document.createElement('span');
+    spanReason.style.color = '#fe2c55';
+    spanReason.style.fontWeight = 'bold';
+    spanReason.textContent = data.reason != null ? String(data.reason) : '';
+    tdReason.appendChild(spanReason);
+
+    tr.appendChild(tdUser);
+    tr.appendChild(tdMsg);
+    tr.appendChild(tdCat);
+    tr.appendChild(tdReason);
 
     flaggedMessagesTableBody.prepend(tr);
 
@@ -468,8 +556,8 @@ async function loadInitialState() {
         const response = await fetch('/api/state');
         const payload = await response.json();
 
-        if (typeof payload.geminiConfigured === 'boolean') {
-            applyInfractionsSectionTitle(payload.geminiConfigured);
+        if (typeof payload.aiConfigured === 'boolean') {
+            applyInfractionsSectionTitle(payload.aiConfigured);
         }
 
         if (payload.connected && payload.username) {
@@ -487,8 +575,8 @@ function setupEventStream() {
 
     eventSource.addEventListener('server-state', event => {
         const data = JSON.parse(event.data);
-        if (typeof data.geminiConfigured === 'boolean') {
-            applyInfractionsSectionTitle(data.geminiConfigured);
+        if (typeof data.aiConfigured === 'boolean') {
+            applyInfractionsSectionTitle(data.aiConfigured);
         }
         if (data.connected && data.username) {
             usernameInput.value = data.username;

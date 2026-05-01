@@ -1,6 +1,8 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const { WebcastPushConnection } = require('tiktok-live-connector');
+const { aiConfigured, probeLlamaReady } = require('./ai');
+const { analyzeMessage: analyzeMessageModeration } = require('./moderation');
 
 let mainWindow;
 let tiktokConnection;
@@ -40,16 +42,16 @@ function getGiftRepeatCount(data) {
     return Number.isFinite(rc) && rc > 0 ? rc : 1;
 }
 
-function geminiApiKeyConfigured() {
-    const k = process.env.GEMINI_API_KEY;
-    if (!k) {
-        return false;
-    }
-    return Boolean(String(k).replace(/^["']|["']$/g, '').trim());
+function aiConfiguredLocal() {
+    return true;
 }
 
 ipcMain.handle('get-ui-config', () => ({
-    geminiConfigured: geminiApiKeyConfigured()
+    geminiConfigured: aiConfigured()
+}));
+
+ipcMain.handle('probe-llm', async () => ({
+    llmActive: await probeLlamaReady()
 }));
 
 function getTargetGiftLabel(giftName) {
@@ -313,6 +315,24 @@ ipcMain.on('connect-tiktok', (event, username) => {
             comment: data.comment,
             timestamp: Date.now()
         };
+
+        // Realiza análise de moderação (Regex + IA Local)
+        analyzeMessageModeration(data.comment, data.uniqueId, data.nickname, chatBuffer)
+            .then(result => {
+                if (result.flagged) {
+                    mainWindow.webContents.send('flagged-message', {
+                        uniqueId: data.uniqueId,
+                        nickname: data.nickname,
+                        comment: data.comment,
+                        reason: result.reason,
+                        category: result.category || null
+                    });
+                }
+            })
+            .catch(err => {
+                console.error('[AI] Erro na moderação:', err.message);
+            });
+
         chatBuffer.push(msg);
         if (chatBuffer.length > 500) {
             chatBuffer.shift();

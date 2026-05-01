@@ -1,9 +1,22 @@
 #!/bin/bash
 
-# Script to build TikTok Live Monitor for multiple platforms
-# Targets: Windows (x64, arm64), Linux (x64, arm64), Mac (arm64)
+# Script to build TikTok Live Monitor for a specific platform
+# Usage: ./build.sh <os> <arch>
+# Example: ./build.sh win x64
+# Example: ./build.sh mac arm64
 
-echo "🚀 Starting multi-platform build process..."
+OS=$1
+ARCH=$2
+
+if [ -z "$OS" ] || [ -z "$ARCH" ]; then
+    echo "❌ Usage: ./build.sh <os> <arch>"
+    echo "   OS: win | mac | linux"
+    echo "   Arch: x64 | arm64 (Pi/Raspberry 64-bit = linux arm64; Windows ARM Surface = win arm64 via npm run setup-llm -- win arm64)"
+    echo "   Modo só navegador (qualquer SO com Node): HOST=0.0.0.0 npm run start:web"
+    exit 1
+fi
+
+echo "🚀 Preparing build for $OS ($ARCH)..."
 
 # Ensure dependencies are installed
 if [ ! -d "node_modules" ]; then
@@ -11,29 +24,23 @@ if [ ! -d "node_modules" ]; then
     npm install
 fi
 
-# Function to run build
-build_platform() {
-    PLATFORM=$1
-    echo "🛠 Building for $PLATFORM..."
-    npm run "build:$PLATFORM"
-    if [ $? -eq 0 ]; then
-        echo "✅ $PLATFORM build successful!"
-    else
-        echo "❌ $PLATFORM build failed."
-        if [ "$PLATFORM" == "mac" ]; then
-            echo "ℹ️  Note: macOS builds usually require a macOS host."
-        fi
-    fi
-}
+# Run LLM setup for the target platform
+echo "🤖 Setting up LLM for $OS ($ARCH)..."
+npm run setup-llm -- "$OS" "$ARCH"
 
-# Build Windows
-build_platform "win"
+if [ $? -ne 0 ]; then
+    echo "❌ LLM setup failed."
+    exit 1
+fi
 
-# Build Linux
-build_platform "linux"
+# Run build
+echo "🛠 Building for $OS $ARCH..."
+# electron-builder costuma exigir build nativo (ex.: Linux ARM no próprio Linux ARM).
+npx electron-builder --"$OS" --"$ARCH"
 
-# Build Mac
-# Note: This might fail on Linux/Windows without specialized tools like remote build server or osxcross
-build_platform "mac"
-
-echo "🏁 Build process finished! Check the 'dist' folder for artifacts."
+if [ $? -eq 0 ]; then
+    echo "✅ Build successful! Check the 'dist' folder."
+else
+    echo "❌ Build failed."
+    echo "   Dica: gere o instalável no mesmo SO/arquitetura alvo, ou use CI. Para Raspberry/navegador: só Node + npm run start:web."
+fi
