@@ -1,7 +1,7 @@
 # Interface web + IA local (llama-server). Electron não roda aqui — use o navegador na porta 3000.
-# Noble (24.04): glibc ≥ 2.38 — os artefatos ubuntu-arm64/ubuntu-x64 do llama.cpp (b8999+) pedem isso.
-# Bookworm (Debian 12) tem glibc 2.36 e falha no Raspberry/arm64 com GLIBC_2.38 not found.
-FROM node:22-noble-slim
+# Os artefatos ubuntu-* do llama.cpp (b8999+) pedem glibc ≥ 2.38 + libstdc++ recente.
+# Bookworm-slim (glibc 2.36) quebra no arm64; não existe node:*-noble-slim oficial — usar trixie-slim.
+FROM node:22-trixie-slim
 
 # OpenMP + libs C++; slim não inclui tudo por padrão
 RUN apt-get update \
