@@ -382,12 +382,13 @@ ipcMain.on('connect-tiktok', (event, username) => {
              // Pode ser um aviso de fixação
         }
     });
+});
 
-    ipcMain.on('disconnect-tiktok', (event) => {
-        if (tiktokConnection) {
-            tiktokConnection.disconnect();
-            tiktokConnection = null;
-            event.reply('connection-status', { success: false, error: 'Desconectado pelo usuário' });
-        }
-    });
+ipcMain.on('disconnect-tiktok', (event) => {
+    if (tiktokConnection) {
+        tiktokConnection.removeAllListeners();
+        tiktokConnection.disconnect();
+        tiktokConnection = null;
+    }
+    event.reply('connection-status', { success: false, error: 'Desconectado pelo usuário' });
 });
