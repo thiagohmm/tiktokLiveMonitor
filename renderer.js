@@ -1,3 +1,27 @@
+let ipcRenderer = null;
+try {
+    if (typeof require !== 'undefined') {
+        ipcRenderer = require('electron').ipcRenderer;
+    }
+} catch {
+    ipcRenderer = null;
+}
+
+const isElectron = Boolean(ipcRenderer);
+
+function ensureBrowserChart() {
+    if (isElectron || typeof window.Chart !== 'undefined') {
+        return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = `${window.location.origin}/vendor/chart.js`;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error('Não foi possível carregar Chart.js.'));
+        document.head.appendChild(script);
+    });
+}
+
 const usernameInput = document.getElementById('username');
 const connectBtn = document.getElementById('connectBtn');
 const disconnectBtn = document.getElementById('disconnectBtn');
@@ -5,88 +29,123 @@ const statusDiv = document.getElementById('status');
 const userTableBody = document.getElementById('userTableBody');
 const allGiftsTableBody = document.getElementById('allGiftsTableBody');
 const pinnedCommentsTableBody = document.getElementById('pinnedCommentsTableBody');
+const flaggedMessagesTableBody = document.getElementById('flaggedMessagesTableBody');
+const infractionsSectionTitle = document.getElementById('infractionsSectionTitle');
 const targetExpirationMinutesInput = document.getElementById('targetExpirationMinutes');
-const ctx = document.getElementById('messageChart').getContext('2d');
+const chartCanvas = document.getElementById('messageChart');
 
+let chart;
 let messageCount = 0;
 let chartData = Array(60).fill(0);
 let autoRemoveTimers = {};
 let pinnedCommentTimers = {};
+let flaggedMessageTimers = {};
 
-const chart = new Chart(ctx, {
-    type: 'line',
-    data: {
-        labels: Array(60).fill('').map((_, index) => `${60 - index}s atrás`),
-        datasets: [{
-            label: 'Mensagens por segundo',
-            data: chartData,
-            borderColor: '#fe2c55',
-            backgroundColor: 'rgba(254, 44, 85, 0.1)',
-            fill: true,
-            tension: 0.4
-        }]
-    },
-    options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        scales: {
-            y: {
-                beginAtZero: true,
-                ticks: { stepSize: 1 }
-            },
-            x: {
-                display: false
-            }
-        },
-        plugins: {
-            legend: { display: false }
-        },
-        animation: false
+function applyInfractionsSectionTitle(geminiConfigured) {
+    if (!infractionsSectionTitle) {
+        return;
     }
-});
+    infractionsSectionTitle.textContent = geminiConfigured ? 'Infrações (Análise IA)' : 'Infrações';
+}
+
+function createChart(ChartLib) {
+    const ctx = chartCanvas.getContext('2d');
+    return new ChartLib(ctx, {
+        type: 'line',
+        data: {
+            labels: Array(60).fill('').map((_, index) => `${60 - index}s atrás`),
+            datasets: [{
+                label: 'Mensagens por segundo',
+                data: chartData,
+                borderColor: '#fe2c55',
+                backgroundColor: 'rgba(254, 44, 85, 0.1)',
+                fill: true,
+                tension: 0.4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: { stepSize: 1 }
+                },
+                x: {
+                    display: false
+                }
+            },
+            plugins: {
+                legend: { display: false }
+            },
+            animation: false
+        }
+    });
+}
 
 setInterval(() => {
+    if (!chart) {
+        return;
+    }
     chartData.push(messageCount);
     chartData.shift();
     messageCount = 0;
     chart.update();
 }, 1000);
 
-connectBtn.addEventListener('click', async () => {
-    const username = usernameInput.value.trim().replace(/^@/, '');
-    if (!username) {
-        return;
-    }
-
-    setConnectingState();
-
-    try {
-        const response = await fetch('/api/connect', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ username })
-        });
-
-        if (!response.ok) {
-            const payload = await response.json();
-            throw new Error(payload.error || 'Falha ao conectar.');
+if (isElectron) {
+    connectBtn.addEventListener('click', () => {
+        const user = usernameInput.value.trim().replace(/^@/, '');
+        if (!user) {
+            return;
         }
-    } catch (error) {
-        applyDisconnectedState(error.message);
-    }
-});
+        connectBtn.disabled = true;
+        statusDiv.innerText = 'Conectando...';
+        statusDiv.style.color = '#666';
+        ipcRenderer.send('connect-tiktok', user);
+    });
 
-disconnectBtn.addEventListener('click', async () => {
-    statusDiv.innerText = 'Desconectando...';
+    disconnectBtn.addEventListener('click', () => {
+        ipcRenderer.send('disconnect-tiktok');
+        statusDiv.innerText = 'Desconectando...';
+    });
+} else {
+    connectBtn.addEventListener('click', async () => {
+        const username = usernameInput.value.trim().replace(/^@/, '');
+        if (!username) {
+            return;
+        }
 
-    try {
-        await fetch('/api/disconnect', { method: 'POST' });
-    } catch (error) {
-        applyDisconnectedState(error.message);
-    }
-});
+        setConnectingState();
+
+        try {
+            const response = await fetch('/api/connect', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ username })
+            });
+
+            if (!response.ok) {
+                const payload = await response.json();
+                throw new Error(payload.error || 'Falha ao conectar.');
+            }
+        } catch (error) {
+            applyDisconnectedState(error.message);
+        }
+    });
+
+    disconnectBtn.addEventListener('click', async () => {
+        statusDiv.innerText = 'Desconectando...';
+
+        try {
+            await fetch('/api/disconnect', { method: 'POST' });
+        } catch (error) {
+            applyDisconnectedState(error.message);
+        }
+    });
+}
 
 targetExpirationMinutesInput.addEventListener('change', () => {
     resetTargetGiftTimers();
@@ -126,6 +185,9 @@ function clearTables() {
     userTableBody.innerHTML = '';
     allGiftsTableBody.innerHTML = '';
     pinnedCommentsTableBody.innerHTML = '';
+    if (flaggedMessagesTableBody) {
+        flaggedMessagesTableBody.innerHTML = '';
+    }
 
     for (const key in autoRemoveTimers) {
         clearTimeout(autoRemoveTimers[key]);
@@ -136,6 +198,11 @@ function clearTables() {
         clearTimeout(pinnedCommentTimers[key]);
     }
     pinnedCommentTimers = {};
+
+    for (const key in flaggedMessageTimers) {
+        clearTimeout(flaggedMessageTimers[key]);
+    }
+    flaggedMessageTimers = {};
 }
 
 function handleConnectionStatus(data) {
@@ -217,17 +284,75 @@ function resetTargetGiftTimers() {
     });
 }
 
-function addAllGiftToList(gift) {
-    const existingRow = Array.from(allGiftsTableBody.querySelectorAll('tr')).find(row => {
-        return row.getAttribute('data-user-id') === gift.uniqueId &&
-            row.getAttribute('data-gift-id') === String(gift.giftId);
+function normalizeUserIdForGift(uniqueId) {
+    return String(uniqueId || '').toLowerCase();
+}
+
+function normalizedGiftNameInTable(row) {
+    return (row.querySelector('.gift-name-cell')?.innerText || '').trim().toLowerCase();
+}
+
+function normalizedGiftNameFromPayload(gift) {
+    return String(gift.giftName || '').trim().toLowerCase();
+}
+
+function findAllGiftsRowForGift(gift) {
+    const uid = normalizeUserIdForGift(gift.uniqueId);
+    const name = normalizedGiftNameFromPayload(gift);
+    return Array.from(allGiftsTableBody.querySelectorAll('tr')).find(row => {
+        if (normalizeUserIdForGift(row.getAttribute('data-user-id')) !== uid) {
+            return false;
+        }
+        return normalizedGiftNameInTable(row) === name;
     });
+}
+
+function getGiftCountFromTableRow(row) {
+    const cell = row.querySelector('.gift-count-cell');
+    if (!cell) {
+        return 0;
+    }
+    const n = parseInt(String(cell.textContent).trim(), 10);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+function shouldSkipIntermediateStreakGift(gift) {
+    return Number(gift.giftType) === 1 && gift.repeatEnd === false;
+}
+
+function reorderAllGiftsTableByCount() {
+    const rows = Array.from(allGiftsTableBody.children);
+    rows.sort((a, b) => (Number(b.getAttribute('data-count')) || 0) - (Number(a.getAttribute('data-count')) || 0));
+    rows.forEach(row => allGiftsTableBody.appendChild(row));
+}
+
+function trimAllGiftsTable(maxRows) {
+    while (allGiftsTableBody.children.length > maxRows) {
+        allGiftsTableBody.lastElementChild.remove();
+    }
+}
+
+function addAllGiftToList(gift) {
+    if (shouldSkipIntermediateStreakGift(gift)) {
+        return;
+    }
+
+    const quantity = Math.max(1, Number(gift.repeatCount) || 1);
+    const existingRow = findAllGiftsRowForGift(gift);
 
     if (existingRow) {
-        allGiftsTableBody.prepend(existingRow);
+        const current = getGiftCountFromTableRow(existingRow);
+        const next = current + quantity;
+        existingRow.setAttribute('data-count', String(next));
+        const countCell = existingRow.querySelector('.gift-count-cell');
+        if (countCell) {
+            countCell.textContent = String(next);
+        }
         if (gift.isRed) {
             existingRow.classList.add('red');
         }
+        reorderAllGiftsTableByCount();
+        trimAllGiftsTable(50);
         return;
     }
 
@@ -235,7 +360,9 @@ function addAllGiftToList(gift) {
     tr.className = 'gift-row';
     tr.setAttribute('data-id', gift.uniqueId);
     tr.setAttribute('data-user-id', gift.uniqueId);
-    tr.setAttribute('data-gift-id', gift.giftId);
+    tr.setAttribute('data-gift-id', gift.giftId != null && gift.giftId !== '' ? String(gift.giftId) : '');
+    tr.setAttribute('data-gift-name', gift.giftName || '');
+    tr.setAttribute('data-count', String(quantity));
     tr.setAttribute('data-target-gift', gift.isTargetGift ? 'true' : 'false');
 
     if (gift.isRed) {
@@ -246,14 +373,13 @@ function addAllGiftToList(gift) {
         <td>
             <span class="user-name">${gift.nickname}</span>
         </td>
-        <td>${gift.giftName}</td>
+        <td class="gift-name-cell">${gift.giftName}</td>
+        <td class="gift-count-cell">${quantity}</td>
     `;
 
-    allGiftsTableBody.prepend(tr);
-
-    if (allGiftsTableBody.children.length > 50) {
-        allGiftsTableBody.lastChild.remove();
-    }
+    allGiftsTableBody.appendChild(tr);
+    reorderAllGiftsTableByCount();
+    trimAllGiftsTable(50);
 }
 
 function addPinnedCommentToList(pinnedComment) {
@@ -283,6 +409,32 @@ function addPinnedCommentToList(pinnedComment) {
 
     if (pinnedCommentsTableBody.children.length > 50) {
         pinnedCommentsTableBody.lastChild.remove();
+    }
+}
+
+function addFlaggedMessageToList(data) {
+    if (!flaggedMessagesTableBody) {
+        return;
+    }
+    const timerKey = `flagged-${Date.now()}-${Math.random()}`;
+    const tr = document.createElement('tr');
+    tr.className = 'flagged-message-row';
+
+    tr.innerHTML = `
+        <td><span class="user-name">${data.nickname}</span></td>
+        <td class="comment-cell">${data.comment}</td>
+        <td><span style="color: #fe2c55; font-weight: bold;">${data.reason}</span></td>
+    `;
+
+    flaggedMessagesTableBody.prepend(tr);
+
+    flaggedMessageTimers[timerKey] = setTimeout(() => {
+        tr.remove();
+        delete flaggedMessageTimers[timerKey];
+    }, 30 * 1000);
+
+    if (flaggedMessagesTableBody.children.length > 50) {
+        flaggedMessagesTableBody.lastChild.remove();
     }
 }
 
@@ -316,6 +468,10 @@ async function loadInitialState() {
         const response = await fetch('/api/state');
         const payload = await response.json();
 
+        if (typeof payload.geminiConfigured === 'boolean') {
+            applyInfractionsSectionTitle(payload.geminiConfigured);
+        }
+
         if (payload.connected && payload.username) {
             usernameInput.value = payload.username;
             applyConnectedState(payload.username);
@@ -331,6 +487,9 @@ function setupEventStream() {
 
     eventSource.addEventListener('server-state', event => {
         const data = JSON.parse(event.data);
+        if (typeof data.geminiConfigured === 'boolean') {
+            applyInfractionsSectionTitle(data.geminiConfigured);
+        }
         if (data.connected && data.username) {
             usernameInput.value = data.username;
             applyConnectedState(data.username);
@@ -359,6 +518,10 @@ function setupEventStream() {
         addPinnedCommentToList(JSON.parse(event.data));
     });
 
+    eventSource.addEventListener('flagged-message', event => {
+        addFlaggedMessageToList(JSON.parse(event.data));
+    });
+
     eventSource.addEventListener('mark-user-red', event => {
         markUserRed(JSON.parse(event.data));
     });
@@ -369,5 +532,79 @@ function setupEventStream() {
     };
 }
 
-loadInitialState();
-setupEventStream();
+function setupElectronIpc() {
+    ipcRenderer.on('connection-status', (event, data) => {
+        if (data.success) {
+            statusDiv.innerText = `Conectado a: ${data.username}`;
+            statusDiv.style.color = 'green';
+            connectBtn.style.display = 'none';
+            connectBtn.disabled = false;
+            disconnectBtn.style.display = 'inline-block';
+            usernameInput.disabled = true;
+        } else {
+            statusDiv.innerText = data.error === 'Desconectado pelo usuário' ? 'Desconectado' : `Erro: ${data.error}`;
+            statusDiv.style.color = data.error === 'Desconectado pelo usuário' ? '#666' : 'red';
+            connectBtn.style.display = 'inline-block';
+            connectBtn.disabled = false;
+            disconnectBtn.style.display = 'none';
+            usernameInput.disabled = false;
+            clearTables();
+        }
+    });
+
+    ipcRenderer.on('new-chat-message', () => {
+        messageCount++;
+    });
+
+    ipcRenderer.on('new-gift-user', (event, user) => {
+        addUserToList(user);
+    });
+
+    ipcRenderer.on('any-gift-received', (event, gift) => {
+        addAllGiftToList(gift);
+    });
+
+    ipcRenderer.on('pinned-comment', (event, pinnedComment) => {
+        addPinnedCommentToList(pinnedComment);
+    });
+
+    ipcRenderer.on('flagged-message', (event, data) => {
+        addFlaggedMessageToList(data);
+    });
+
+    ipcRenderer.on('mark-user-red', (event, uniqueId) => {
+        markUserRed(uniqueId);
+    });
+}
+
+async function bootstrap() {
+    try {
+        await ensureBrowserChart();
+        const ChartLib = isElectron ? require('chart.js/auto') : window.Chart;
+        if (!ChartLib) {
+            throw new Error('Chart.js indisponível.');
+        }
+        chart = createChart(ChartLib);
+    } catch (e) {
+        statusDiv.innerText = `Erro ao iniciar gráfico: ${e.message}`;
+        statusDiv.style.color = 'red';
+        return;
+    }
+
+    applyInfractionsSectionTitle(false);
+
+    if (isElectron) {
+        try {
+            const cfg = await ipcRenderer.invoke('get-ui-config');
+            applyInfractionsSectionTitle(Boolean(cfg && cfg.geminiConfigured));
+        } catch {
+            applyInfractionsSectionTitle(false);
+        }
+        setupElectronIpc();
+    } else {
+        await loadInitialState();
+        setupEventStream();
+    }
+}
+
+void bootstrap();

@@ -23,6 +23,35 @@ function isTargetGift(giftName) {
         compactGiftName.includes('tinydiny');
 }
 
+function getGiftTypeFromPayload(data) {
+    return data.giftType ?? data.giftDetails?.giftType;
+}
+
+function isGiftCountingSettlement(data) {
+    const giftType = getGiftTypeFromPayload(data);
+    if (Number(giftType) === 1 && data.repeatEnd === false) {
+        return false;
+    }
+    return true;
+}
+
+function getGiftRepeatCount(data) {
+    const rc = Number(data.repeatCount);
+    return Number.isFinite(rc) && rc > 0 ? rc : 1;
+}
+
+function geminiApiKeyConfigured() {
+    const k = process.env.GEMINI_API_KEY;
+    if (!k) {
+        return false;
+    }
+    return Boolean(String(k).replace(/^["']|["']$/g, '').trim());
+}
+
+ipcMain.handle('get-ui-config', () => ({
+    geminiConfigured: geminiApiKeyConfigured()
+}));
+
 function getTargetGiftLabel(giftName) {
     const normalizedGiftName = String(giftName || '').toLowerCase();
     const compactGiftName = normalizedGiftName.replace(/[^a-z0-9]/g, '');
@@ -298,19 +327,28 @@ ipcMain.on('connect-tiktok', (event, username) => {
         const targetGift = isTargetGift(data.giftName);
         const isPinnedUser = pinnedCommentUsers.has(uniqueId);
 
+        if (!isGiftCountingSettlement(data)) {
+            return;
+        }
+
         console.log('\n🎁 PRESENTE RECEBIDO:');
         console.log(`👤 Usuário: ${data.uniqueId}`);
         console.log(`🎁 Presente: ${data.giftName} (ID: ${data.giftId})`);
         console.log(`🎯 Alvo: ${targetGift ? 'Sim' : 'Não'}`);
         console.log(`⭐ Prioritário: ${isPinnedUser ? 'Sim' : 'Não'}`);
         console.log('----------------------------\n');
-        
-        // Enviar todos os presentes para a nova tabela
+
+        const giftType = getGiftTypeFromPayload(data);
+        const repeatQty = getGiftRepeatCount(data);
+
         mainWindow.webContents.send('any-gift-received', {
             uniqueId: data.uniqueId,
             nickname: data.nickname,
             giftName: data.giftName,
             giftId: data.giftId,
+            giftType,
+            repeatCount: repeatQty,
+            repeatEnd: data.repeatEnd,
             isTargetGift: targetGift,
             isRed: targetGift && isPinnedUser
         });
