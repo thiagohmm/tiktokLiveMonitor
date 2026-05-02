@@ -101,6 +101,37 @@ function passesSpamScamAiGate(rawComment, commentFolded) {
     return false;
 }
 
+/** Ofensas / provocações comuns em live BR — disparam análise mesmo sem segunda pessoa explícita */
+function passesRegionalSlurAiGate(commentFolded) {
+    const t = commentFolded || '';
+    return /\b(testud[oa]|marmoteir[oa]|enganad[oa])\b/.test(t);
+}
+
+/** Gate para insultos/ameaças — modelo é local, podemos mandar mais casos suspeitos para a IA */
+function passesPersonalAttackAiGate(commentFolded) {
+    const t = commentFolded || '';
+    if (passesRegionalSlurAiGate(t)) return true;
+
+    const directed = /\b(voc[eê]|voce\b|\bvc\b|\bce\b|tu\s+t[eá]|pra\s+voce\b|pra\s+voc[eê])\b/.test(t);
+    const insultCore =
+        /\b(idiota|imbecil|burr[oa]|estupid[oa]|nojent[oa]|noj[o]|lixo|palha[cç][oa]|ridicul[oa]|inutil|fracassad[oa])\b/.test(t);
+    const strongSlur =
+        /\b(filho\s+da\s+puta|filho\s+de\s+puta|fdp\b|vsf\b|vtnc\b|vai\s+(tomar\s+no\s+cu|pro\s+inferno|a\s+merda)|se\s+fod(e|eu)|pau\s+no\s+cu|cuz[aã]o|escrot[oa])\b/.test(
+            t
+        );
+    const threatShut =
+        /\b(morre\b|apaga(\s+a\s+live)?|some(\s+daqui)?|cal[aá]\s+(a\s+)?boca|para\s+de\s+falar|cala\s+boca|te\s+arrodo|te\s+quebro)\b/.test(
+            t
+        );
+    const familyAttack =
+        /\b(sua\s+m[aã]e|teu\s+pai|tua\s+familia)\b/.test(t) &&
+        /\b(puta|viad[o]|burr[o]?)\b/.test(t);
+
+    if (strongSlur || threatShut || familyAttack) return true;
+    if (directed && insultCore) return true;
+    return false;
+}
+
 const CATEGORY_LABELS = {
     RELIGIAO: 'Ataque a matriz africana / Orixás (IA)',
     PROSELITISMO: 'Proselitismo ou condenação religiosa (IA)',
@@ -110,26 +141,42 @@ const CATEGORY_LABELS = {
     OUTRO: 'Conteúdo impróprio (IA)'
 };
 
-/** Resposta esperada do modelo: só SIM ou NAO */
-function parseBinaryReligiousAnswer(raw) {
+function normalizeModerationKeyword(raw) {
     const folded = foldChatText(String(raw || '')).trim();
-    const compact = folded.replace(/\s+/g, ' ');
+    return folded.replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+}
 
-    if (/^nao\b/i.test(compact)) {
+/** Resposta esperada: NAO ou SIM_<CATEGORIA> (compat: SIM sozinho → PROSELITISMO) */
+function parseBinaryReligiousAnswer(raw) {
+    const key = normalizeModerationKeyword(raw);
+
+    if (!key || key.startsWith('nao')) {
         return { flagged: false, category: 'OK' };
     }
+
+    const prefixMap = [
+        ['sim_odio', 'ODIO'],
+        ['sim_proselitismo', 'PROSELITISMO'],
+        ['sim_religiao', 'RELIGIAO'],
+        ['sim_spam', 'SPAM'],
+        ['sim_golpe', 'GOLPE'],
+        ['sim_outro', 'OUTRO']
+    ];
+    for (const [prefix, category] of prefixMap) {
+        if (key === prefix || key.startsWith(prefix)) {
+            return { flagged: true, category };
+        }
+    }
+
+    const compact = foldChatText(String(raw || '')).trim().replace(/\s+/g, ' ');
     if (/^sim\b/i.test(compact)) {
         return { flagged: true, category: 'PROSELITISMO' };
     }
 
-    const token = folded.replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/)[0] || '';
-    if (token === 'nao') return { flagged: false, category: 'OK' };
-    if (token === 'sim') return { flagged: true, category: 'PROSELITISMO' };
-
     return { flagged: false, category: 'OK' };
 }
 
-function recentChatBlock(chatBuffer, limit = 6) {
+function recentChatBlock(chatBuffer, limit = 14) {
     if (!Array.isArray(chatBuffer) || chatBuffer.length === 0) {
         return '(nenhuma mensagem anterior no buffer)';
     }
@@ -155,10 +202,11 @@ async function analyzeMessage(comment, uniqueId, nickname, chatBuffer) {
         return { flagged: true, reason: 'Proselitismo cristão (filtro)', category: 'PROSELITISMO' };
     }
 
-    // 3. Gate da IA (religião/proselitismo OU suspeita spam/golpe)
+    // 3. Gate da IA (religião/proselitismo, spam/golpe OU suspeita de ataque pessoal)
     const christianGate = passesChristianModerationAiGate(commentLower);
     const spamGate = passesSpamScamAiGate(comment, folded);
-    if (!christianGate && !spamGate) {
+    const personalGate = passesPersonalAttackAiGate(folded);
+    if (!christianGate && !spamGate && !personalGate) {
         return { flagged: false };
     }
 
@@ -179,9 +227,9 @@ async function analyzeMessage(comment, uniqueId, nickname, chatBuffer) {
             `Autor do comentário: ${JSON.stringify(nickname || uniqueId || '')}\n` +
             `Texto para analisar:\n${JSON.stringify(comment)}`;
 
-        const raw = await completeModeration(BINARY_RELIGIOUS_MODERATION_SYSTEM, userPrompt, 32);
+        const raw = await completeModeration(BINARY_RELIGIOUS_MODERATION_SYSTEM, userPrompt, 48);
         const { flagged, category } = parseBinaryReligiousAnswer(raw);
-        const reason = flagged ? CATEGORY_LABELS[category] || CATEGORY_LABELS.PROSELITISMO : null;
+        const reason = flagged ? CATEGORY_LABELS[category] || CATEGORY_LABELS.OUTRO : null;
 
         const result = { flagged, reason, category };
 

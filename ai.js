@@ -300,7 +300,7 @@ async function askLlama(prompt) {
             .trim()
             .replace(/\s+/g, ' ');
         if (/^nao\b/i.test(compact)) return 'NAO';
-        if (/^sim\b/i.test(compact)) return 'SIM';
+        if (/^sim[_\s]/i.test(compact) || /^sim\b/i.test(compact)) return 'SIM';
         return 'NAO';
     } catch {
         return 'NAO';
