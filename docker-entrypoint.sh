@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-MODEL="/app/models/gemma-2-2b-it-Q4_K_M.gguf"
+MODEL="/app/models/google_gemma-4-E2B-it-Q4_K_M.gguf"
 
 ARCH="$(uname -m)"
 case "$ARCH" in

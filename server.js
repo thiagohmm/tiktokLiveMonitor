@@ -14,7 +14,7 @@ function aiConfigured() {
     return true;
 }
 
-console.log(`[AI] LLM local (Gemma 2 2B IT GGUF) configurado.`);
+console.log(`[AI] LLM local (Gemma 4 E2B IT GGUF) configurado.`);
 
 let tiktokConnection = null;
 let currentUsername = null;
