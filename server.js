@@ -14,7 +14,7 @@ function aiConfigured() {
     return true;
 }
 
-console.log(`[AI] Llama-3.2 Local configurado.`);
+console.log(`[AI] LLM local (Gemma 2 2B IT GGUF) configurado.`);
 
 let tiktokConnection = null;
 let currentUsername = null;

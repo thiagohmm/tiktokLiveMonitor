@@ -5,8 +5,7 @@ const { execSync } = require('child_process');
 const unzipper = require('unzipper');
 const tar = require('tar');
 
-const MODEL_URL =
-    'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf';
+const { GGUF_FILENAME, DOWNLOAD_URL } = require('../llm-model');
 
 /** Mesma versão em todas as plataformas (ubuntu-arm64 só existe a partir de builds recentes). */
 const LLAMA_CPP_RELEASE_TAG = 'b8999';
@@ -188,8 +187,8 @@ async function setup() {
     if (!fs.existsSync(MODELS_DIR)) fs.mkdirSync(MODELS_DIR, { recursive: true });
     if (!fs.existsSync(BIN_DIR)) fs.mkdirSync(BIN_DIR, { recursive: true });
 
-    const modelDest = path.join(MODELS_DIR, 'Llama-3.2-1B-Instruct-Q4_K_M.gguf');
-    await downloadFile(MODEL_URL, modelDest);
+    const modelDest = path.join(MODELS_DIR, GGUF_FILENAME);
+    await downloadFile(DOWNLOAD_URL, modelDest);
 
     let artifact;
     try {

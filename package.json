@@ -42,6 +42,7 @@
       "main.js",
       "server.js",
       "ai.js",
+      "llm-model.js",
       "moderation.js",
       "moderation-prompt.js",
       "renderer.js",

@@ -5,7 +5,7 @@
  * Uso:
  *   npm run chat-llm -- "Só Jesus salva"          (default: moderação religiosa SIM/NAO)
  *   npm run chat-llm -- -s "Seu system" -- "…"   (modo assistente genérico)
- *   LLAMA_PORT=8080 npm run chat-llm -- --max-tokens 50 -- "teste"
+ *   LLAMA_PORT=8080 npm run chat-llm -- --max-tokens 50 -- "teste"   (-- não vai no user)
  *   echo "Olá" | npm run chat-llm --
  *
  * Env: LLAMA_HOST (default 127.0.0.1), LLAMA_PORT (default 8080)
@@ -51,6 +51,10 @@ function parseArgs(argv) {
         }
         if (a === '--help' || a === '-h') {
             return { help: true };
+        }
+        /* fim de opções estilo GNU; senão "--" virava texto do user (ex.: resposta "-- Vcs estão...") */
+        if (a === '--') {
+            continue;
         }
         rest.push(a);
     }
@@ -142,6 +146,8 @@ Opções:
       --json            Imprime JSON completo da API
       --no-wait         Não espera /health == 200 antes do POST
   -h, --help            Esta ajuda
+
+  Um "--" sozinho entre flags e a mensagem é ignorado (não entra no texto a classificar).
 
 Variáveis de ambiente:
   LLAMA_HOST   (default: 127.0.0.1)

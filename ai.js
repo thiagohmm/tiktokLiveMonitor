@@ -4,6 +4,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const { BINARY_RELIGIOUS_MODERATION_SYSTEM } = require('./moderation-prompt');
+const { GGUF_FILENAME } = require('./llm-model');
 
 let llamaProcess = null;
 const LLAMA_PORT = 8080;
@@ -42,7 +43,7 @@ function getPaths() {
     const archDir = path.join(baseDir, 'bin', platform, arch);
 
     const binPath = resolveLlamaServerPath(archDir, binName);
-    const modelPath = path.join(baseDir, 'models', 'Llama-3.2-1B-Instruct-Q4_K_M.gguf');
+    const modelPath = path.join(baseDir, 'models', GGUF_FILENAME);
 
     return { binPath, modelPath };
 }
@@ -81,7 +82,7 @@ async function startLlamaServer() {
         throw new Error(`Binário do llama-server não encontrado em: ${binPath}. Execute 'npm install' ou 'npm run setup-llm'.`);
     }
     if (!fs.existsSync(modelPath)) {
-        throw new Error(`Modelo Llama não encontrado em: ${modelPath}. Execute 'npm install' ou 'npm run setup-llm'.`);
+        throw new Error(`Modelo GGUF não encontrado em: ${modelPath}. Execute 'npm install' ou 'npm run setup-llm'.`);
     }
     const ms = fs.statSync(modelPath).size;
     if (ms < 4096) {
@@ -122,8 +123,7 @@ async function startLlamaServer() {
         '--host', bindHost,
         '--port', LLAMA_PORT.toString(),
         '--n-gpu-layers', '0',
-        '--threads', threads,
-        '--alias', 'llama3'
+        '--threads', threads
     ];
     // Docker/overlay: mmap costuma funcionar melhor; desktop com pouca RAM pode usar --no-mmap
     if (process.env.LLAMA_USE_MMAP !== '1') {
