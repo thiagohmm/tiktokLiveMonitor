@@ -179,7 +179,7 @@ async function analyzeMessage(comment, uniqueId, nickname, chatBuffer) {
             `Autor do comentário: ${JSON.stringify(nickname || uniqueId || '')}\n` +
             `Texto para analisar:\n${JSON.stringify(comment)}`;
 
-        const raw = await completeModeration(BINARY_RELIGIOUS_MODERATION_SYSTEM, userPrompt, 16);
+        const raw = await completeModeration(BINARY_RELIGIOUS_MODERATION_SYSTEM, userPrompt, 32);
         const { flagged, category } = parseBinaryReligiousAnswer(raw);
         const reason = flagged ? CATEGORY_LABELS[category] || CATEGORY_LABELS.PROSELITISMO : null;
 

@@ -13,6 +13,7 @@
 
 const http = require('http');
 const { BINARY_RELIGIOUS_MODERATION_SYSTEM } = require('../moderation-prompt');
+const { mergeChatCompletionBody, assistantTextFromChatResponse } = require('../ai');
 
 const host = process.env.LLAMA_HOST || '127.0.0.1';
 const port = Number(process.env.LLAMA_PORT) || 8080;
@@ -62,7 +63,7 @@ function parseArgs(argv) {
     const user = rest.join(' ').trim();
 
     if (maxTokens == null || Number.isNaN(maxTokens)) {
-        maxTokens = systemExplicit ? 256 : 16;
+        maxTokens = systemExplicit ? 256 : 32;
     }
     if (temperature == null || Number.isNaN(temperature)) {
         temperature = systemExplicit ? 0.7 : 0.1;
@@ -141,13 +142,16 @@ Uso:
 
 Opções:
   -s, --system TEXT    Prompt de sistema (default: moderação religiosa SIM/NAO, igual ao app)
-      --max-tokens N    Limite de tokens (default: 16 com moderação, 256 com -s)
+      --max-tokens N    Limite de tokens (default: 32 com moderação, 256 com -s)
   -t, --temperature N Temperatura (default: 0.1 com moderação, 0.7 com -s)
       --json            Imprime JSON completo da API
       --no-wait         Não espera /health == 200 antes do POST
   -h, --help            Esta ajuda
 
   Um "--" sozinho entre flags e a mensagem é ignorado (não entra no texto a classificar).
+
+  Gemma 4 / modelos com thinking: o script envia enable_thinking:false; ainda assim use
+  --max-tokens 32 (ou mais) se a saída vier vazia com limite muito baixo.
 
 Variáveis de ambiente:
   LLAMA_HOST   (default: 127.0.0.1)
@@ -175,17 +179,17 @@ Variáveis de ambiente:
         ? userText
         : `Texto para analisar:\n${JSON.stringify(userText)}`;
 
-    const payload = {
+    const payload = mergeChatCompletionBody({
         messages: [
             { role: 'system', content: opts.system },
             { role: 'user', content: userContent }
         ],
         temperature: opts.temperature,
         max_tokens: opts.maxTokens
-    };
+    });
 
     const data = JSON.stringify(payload);
-    process.stderr.write(`[chat-llm] POST /v1/chat/completions …\n`);
+    process.stderr.write(`[chat-llm] POST /v1/chat/completions (inferência pode demorar no CPU)…\n`);
 
     const { statusCode, body } = await httpRequest(
         {
@@ -219,9 +223,12 @@ Variáveis de ambiente:
         process.exit(1);
     }
 
-    const text = json.choices?.[0]?.message?.content;
-    if (typeof text !== 'string') {
-        console.error('Resposta sem choices[0].message.content:', JSON.stringify(json, null, 2).slice(0, 3000));
+    const text = assistantTextFromChatResponse(json);
+    if (text == null) {
+        console.error(
+            'Resposta vazia (content + reasoning). Com Gemma 4 / thinking, use --max-tokens 32 ou mais. Corpo:',
+            JSON.stringify(json, null, 2).slice(0, 3000)
+        );
         process.exit(1);
     }
 

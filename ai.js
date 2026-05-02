@@ -200,8 +200,26 @@ async function startLlamaServer() {
     });
 }
 
+/** Gemma 4 / modelos com thinking: sem isso, max_tokens baixo esgota no reasoning e content fica vazio. */
+function mergeChatCompletionBody(bodyObj) {
+    return {
+        stream: false,
+        chat_template_kwargs: { enable_thinking: false },
+        ...bodyObj
+    };
+}
+
+function assistantTextFromChatResponse(json) {
+    const msg = json.choices?.[0]?.message;
+    if (!msg || typeof msg !== 'object') return null;
+    const c = typeof msg.content === 'string' ? msg.content : '';
+    const r = typeof msg.reasoning_content === 'string' ? msg.reasoning_content : '';
+    const out = (c.trim() || r.trim()) ? (c.trim() || r.trim()) : null;
+    return out;
+}
+
 function postChatCompletion(bodyObj) {
-    const data = JSON.stringify(bodyObj);
+    const data = JSON.stringify(mergeChatCompletionBody(bodyObj));
 
     return new Promise((resolve, reject) => {
         const req = http.request({
@@ -220,9 +238,9 @@ function postChatCompletion(bodyObj) {
             res.on('end', () => {
                 try {
                     const json = JSON.parse(responseData);
-                    const text = json.choices?.[0]?.message?.content;
-                    if (typeof text !== 'string') {
-                        reject(new Error('Resposta sem content'));
+                    const text = assistantTextFromChatResponse(json);
+                    if (text == null) {
+                        reject(new Error('Resposta sem content (pense em aumentar max_tokens ou desativar thinking no servidor)'));
                         return;
                     }
                     resolve(text.trim());
@@ -245,7 +263,7 @@ function postChatCompletion(bodyObj) {
 /**
  * Uma inferência por vez (fila). Retorna o texto da assistente (trimmed).
  */
-async function completeModeration(systemContent, userContent, maxTokens = 24) {
+async function completeModeration(systemContent, userContent, maxTokens = 32) {
     return enqueueLlama(async () => {
         try {
             await startLlamaServer();
@@ -276,7 +294,7 @@ async function completeModeration(systemContent, userContent, maxTokens = 24) {
 async function askLlama(prompt) {
     try {
         const userContent = `Texto para analisar:\n${typeof prompt === 'string' ? prompt : JSON.stringify(prompt)}`;
-        const text = await completeModeration(BINARY_RELIGIOUS_MODERATION_SYSTEM, userContent, 16);
+        const text = await completeModeration(BINARY_RELIGIOUS_MODERATION_SYSTEM, userContent, 32);
         const compact = String(text || '')
             .toLowerCase()
             .trim()
@@ -317,4 +335,12 @@ async function probeLlamaReady() {
     }
 }
 
-module.exports = { askLlama, completeModeration, stopLlamaServer, aiConfigured, probeLlamaReady };
+module.exports = {
+    askLlama,
+    completeModeration,
+    stopLlamaServer,
+    aiConfigured,
+    probeLlamaReady,
+    mergeChatCompletionBody,
+    assistantTextFromChatResponse
+};
