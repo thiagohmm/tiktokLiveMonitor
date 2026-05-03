@@ -24,6 +24,30 @@ let processedPinnedMessages = new Set();
 let repeatAlertedSequences = new Set();
 const sseClients = new Set();
 
+function createTikTokConnection(username) {
+    return new WebcastPushConnection(username, {
+        logFetchFallbackErrors: true
+    });
+}
+
+function formatTikTokConnectionError(error) {
+    const message = String(error?.message || error || 'Falha desconhecida ao conectar.');
+
+    if (message.includes("isn't online")) {
+        return 'Esse usuário não está ao vivo agora. Abra uma live ativa e tente novamente.';
+    }
+
+    if (message.includes('ENOTFOUND') || message.includes('EAI_AGAIN')) {
+        return 'Falha de DNS/rede ao acessar TikTok/Euler. Verifique internet, VPN, proxy ou bloqueio de DNS.';
+    }
+
+    if (message.includes('SIGN SERVER') || message.includes('sign server') || message.includes('Euler')) {
+        return `Falha no serviço de assinatura usado pela conexão do TikTok: ${message}`;
+    }
+
+    return message;
+}
+
 function repeatSequenceKey(senderKey, commentLower) {
     return JSON.stringify([senderKey, commentLower]);
 }
@@ -344,7 +368,7 @@ async function connectToTiktok(username) {
 
     resetLiveState();
     currentUsername = username;
-    tiktokConnection = new WebcastPushConnection(username);
+    tiktokConnection = createTikTokConnection(username);
 
     tiktokConnection.on('chat', data => {
         const messageData = {
@@ -424,7 +448,7 @@ async function connectToTiktok(username) {
         tiktokConnection = null;
         currentUsername = null;
         resetLiveState();
-        emitStatus(false, { error: error.message });
+        emitStatus(false, { error: formatTikTokConnectionError(error) });
         throw error;
     }
 }
@@ -481,7 +505,7 @@ async function handleApiRequest(request, response, pathname) {
             await connectToTiktok(username);
             sendJson(response, 200, { success: true, username });
         } catch (error) {
-            sendJson(response, 500, { error: error.message });
+            sendJson(response, 500, { error: formatTikTokConnectionError(error) });
         }
         return true;
     }

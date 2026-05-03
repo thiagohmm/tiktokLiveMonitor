@@ -26,6 +26,8 @@ const usernameInput = document.getElementById('username');
 const connectBtn = document.getElementById('connectBtn');
 const disconnectBtn = document.getElementById('disconnectBtn');
 const listenBtn = document.getElementById('listenBtn');
+const botLoginBtn = document.getElementById('botLoginBtn');
+const botStatusDiv = document.getElementById('botStatus');
 const statusDiv = document.getElementById('status');
 const userTableBody = document.getElementById('userTableBody');
 const allGiftsTableBody = document.getElementById('allGiftsTableBody');
@@ -451,6 +453,23 @@ setInterval(() => {
 targetGiftHistoryBtn.addEventListener('click', () => openHistoryModal('target-gifts'));
 pinnedCommentHistoryBtn.addEventListener('click', () => openHistoryModal('pinned-comments'));
 listenBtn.addEventListener('click', () => openHistoryModal('listen'));
+
+if (isElectron) {
+    botLoginBtn.style.display = 'inline-block';
+    botLoginBtn.addEventListener('click', () => {
+        ipcRenderer.send('open-bot-window');
+    });
+
+    ipcRenderer.on('bot-status', (event, data) => {
+        if (!botStatusDiv) return;
+        botStatusDiv.style.display = 'block';
+        botStatusDiv.textContent = `Bot: ${data.text}`;
+        botStatusDiv.style.color = data.active ? '#22c55e' : '#666';
+    });
+} else {
+    botLoginBtn.style.display = 'none';
+}
+
 historyModalCloseBtn.addEventListener('click', closeHistoryModal);
 historyModalBackdrop.addEventListener('click', event => {
     if (event.target === historyModalBackdrop) {
