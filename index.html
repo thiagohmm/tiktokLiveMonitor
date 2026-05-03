@@ -48,6 +48,13 @@
         button:hover {
             opacity: 0.9;
         }
+        .secondary-btn {
+            background-color: #555;
+        }
+        .small-btn {
+            padding: 7px 12px;
+            font-size: 0.85em;
+        }
         #status {
             margin-bottom: 20px;
             font-size: 0.9em;
@@ -103,6 +110,11 @@
             align-items: center;
             justify-content: space-between;
             gap: 12px;
+        }
+        .section-title-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
         .expiration-control {
             display: flex;
@@ -164,6 +176,116 @@
             0%, 100% { opacity: 1; }
             50% { opacity: 0.55; }
         }
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            z-index: 20;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.45);
+        }
+        .modal-backdrop.is-open {
+            display: flex;
+        }
+        .modal {
+            width: min(640px, 100%);
+            max-height: min(680px, 90vh);
+            display: flex;
+            flex-direction: column;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 16px 40px rgba(0,0,0,0.25);
+            overflow: hidden;
+        }
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 16px 20px;
+            border-bottom: 1px solid #eee;
+        }
+        .modal-header h2 {
+            margin: 0;
+            font-size: 1.1em;
+        }
+        .modal-close {
+            width: 36px;
+            height: 36px;
+            padding: 0;
+            background-color: #555;
+            font-size: 1.2em;
+            line-height: 1;
+        }
+        .modal-body {
+            overflow-y: auto;
+            padding: 18px 20px 20px;
+        }
+        .modal-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 14px;
+        }
+        .modal-item {
+            padding: 12px;
+            border: 1px solid #eee;
+            border-radius: 6px;
+            background: #fff;
+        }
+        .modal-item strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+        .modal-empty {
+            color: #666;
+            margin: 0;
+        }
+        .listen-form {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+        .listen-form input {
+            min-width: 0;
+        }
+        .listen-user-panel {
+            max-height: 220px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 14px;
+            padding: 10px;
+            border: 1px solid #eee;
+            border-radius: 6px;
+            background: #fafafa;
+        }
+        .listen-user-option {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 9px 10px;
+            border: 1px solid #eee;
+            background: white;
+            color: #222;
+            text-align: left;
+        }
+        .listen-user-option strong,
+        .listen-user-option span {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .listen-user-option span {
+            flex-shrink: 0;
+            color: #666;
+            font-weight: normal;
+        }
     </style>
 </head>
 <body>
@@ -173,6 +295,7 @@
             <input type="text" id="username" placeholder="Digite o @username da live...">
             <button id="connectBtn">Conectar</button>
             <button id="disconnectBtn" style="background-color: #555; display: none;">Desconectar</button>
+            <button id="listenBtn" class="secondary-btn" type="button">Escuta</button>
         </div>
         <div id="status">Desconectado</div>
         <div id="aiLedRow" class="ai-led-row" aria-live="polite">
@@ -186,11 +309,14 @@
 
         <div class="section-title">
             <h3>Presentes Alvos (Tiny Dyny/Perfume)</h3>
-            <label class="expiration-control">
-                Expirar em
-                <input type="number" id="targetExpirationMinutes" min="1" step="1" value="4">
-                min
-            </label>
+            <div class="section-title-actions">
+                <button id="targetGiftHistoryBtn" class="small-btn" type="button">Últimos 15</button>
+                <label class="expiration-control">
+                    Expirar em
+                    <input type="number" id="targetExpirationMinutes" min="1" step="1" value="4">
+                    min
+                </label>
+            </div>
         </div>
         <div class="table-container">
             <table>
@@ -207,7 +333,10 @@
             </table>
         </div>
 
-        <h3>Comentários Fixados</h3>
+        <div class="section-title">
+            <h3>Comentários Fixados</h3>
+            <button id="pinnedCommentHistoryBtn" class="small-btn" type="button">Últimos 15</button>
+        </div>
         <div class="table-container">
             <table>
                 <thead>
@@ -253,6 +382,16 @@
                     <!-- Todos os presentes aparecerão aqui -->
                 </tbody>
             </table>
+        </div>
+
+        <div id="historyModalBackdrop" class="modal-backdrop" aria-hidden="true">
+            <div class="modal" role="dialog" aria-modal="true" aria-labelledby="historyModalTitle">
+                <div class="modal-header">
+                    <h2 id="historyModalTitle">Últimos 15</h2>
+                    <button id="historyModalCloseBtn" class="modal-close" type="button" aria-label="Fechar">×</button>
+                </div>
+                <div id="historyModalBody" class="modal-body"></div>
+            </div>
         </div>
     </div>
 

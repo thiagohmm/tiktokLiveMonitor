@@ -25,6 +25,7 @@ function ensureBrowserChart() {
 const usernameInput = document.getElementById('username');
 const connectBtn = document.getElementById('connectBtn');
 const disconnectBtn = document.getElementById('disconnectBtn');
+const listenBtn = document.getElementById('listenBtn');
 const statusDiv = document.getElementById('status');
 const userTableBody = document.getElementById('userTableBody');
 const allGiftsTableBody = document.getElementById('allGiftsTableBody');
@@ -36,6 +37,12 @@ const chartCanvas = document.getElementById('messageChart');
 const aiLedRow = document.getElementById('aiLedRow');
 const aiLedDot = document.getElementById('aiLedDot');
 const aiLedText = document.getElementById('aiLedText');
+const targetGiftHistoryBtn = document.getElementById('targetGiftHistoryBtn');
+const pinnedCommentHistoryBtn = document.getElementById('pinnedCommentHistoryBtn');
+const historyModalBackdrop = document.getElementById('historyModalBackdrop');
+const historyModalTitle = document.getElementById('historyModalTitle');
+const historyModalBody = document.getElementById('historyModalBody');
+const historyModalCloseBtn = document.getElementById('historyModalCloseBtn');
 
 let chart;
 let messageCount = 0;
@@ -43,6 +50,306 @@ let chartData = Array(60).fill(0);
 let autoRemoveTimers = {};
 let pinnedCommentTimers = {};
 let flaggedMessageTimers = {};
+let targetGiftHistory = [];
+let pinnedCommentHistory = [];
+let listenedMessages = [];
+let listenedUserId = '';
+let listenDraftValue = '';
+let liveUsers = new Map();
+let activeModalType = null;
+
+function normalizeListenUser(value) {
+    return String(value || '').trim().replace(/^@+/, '').toLowerCase();
+}
+
+function rememberLiveUser(data) {
+    if (!data) {
+        return;
+    }
+
+    const uniqueId = String(data.uniqueId || '').trim().replace(/^@+/, '');
+    const nickname = String(data.nickname || uniqueId || '').trim();
+    const key = normalizeListenUser(uniqueId || nickname);
+
+    if (!key) {
+        return;
+    }
+
+    const previous = liveUsers.get(key) || {};
+    liveUsers.set(key, {
+        uniqueId: uniqueId || previous.uniqueId || '',
+        nickname: nickname || previous.nickname || uniqueId || 'Nao identificado',
+        lastSeen: Date.now()
+    });
+
+    if (activeModalType === 'listen') {
+        renderListenModal({ preserveFocus: true });
+    }
+}
+
+function getLiveUserMatches(query) {
+    const normalizedQuery = normalizeListenUser(query);
+    return Array.from(liveUsers.values())
+        .filter(user => {
+            if (!normalizedQuery) {
+                return true;
+            }
+
+            return normalizeListenUser(user.uniqueId).includes(normalizedQuery) ||
+                normalizeListenUser(user.nickname).includes(normalizedQuery);
+        })
+        .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0))
+        .slice(0, 50);
+}
+
+function trimHistory(items) {
+    if (items.length > 15) {
+        items.length = 15;
+    }
+}
+
+function appendEmptyState(parent) {
+    const p = document.createElement('p');
+    p.className = 'modal-empty';
+    p.textContent = 'Nenhum registro ainda.';
+    parent.appendChild(p);
+}
+
+function createModalList(items, renderItem) {
+    const list = document.createElement('div');
+    list.className = 'modal-list';
+
+    if (!items.length) {
+        appendEmptyState(list);
+        return list;
+    }
+
+    items.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'modal-item';
+        renderItem(row, item);
+        list.appendChild(row);
+    });
+
+    return list;
+}
+
+function renderUserLine(row, nickname, uniqueId) {
+    const strong = document.createElement('strong');
+    const userText = nickname || uniqueId || 'Nao identificado';
+    strong.textContent = uniqueId ? `${userText} (@${uniqueId})` : userText;
+    row.appendChild(strong);
+}
+
+function renderGiftHistory() {
+    historyModalTitle.textContent = 'Últimos 15 Presentes Alvos';
+    historyModalBody.replaceChildren(createModalList(targetGiftHistory, (row, item) => {
+        renderUserLine(row, item.nickname, item.uniqueId);
+        const gift = document.createElement('span');
+        gift.textContent = item.giftName || 'Presente Alvo';
+        row.appendChild(gift);
+    }));
+}
+
+function renderPinnedCommentHistory() {
+    historyModalTitle.textContent = 'Últimos 15 Comentários Fixados';
+    historyModalBody.replaceChildren(createModalList(pinnedCommentHistory, (row, item) => {
+        renderUserLine(row, item.nickname, item.uniqueId);
+        const comment = document.createElement('span');
+        comment.textContent = item.comment || '[sem texto identificado]';
+        row.appendChild(comment);
+    }));
+}
+
+function setListenedUser(value) {
+    const nextUserId = normalizeListenUser(value);
+    if (nextUserId !== listenedUserId) {
+        listenedMessages = [];
+    }
+    listenedUserId = nextUserId;
+}
+
+function renderLiveUserSelector(input) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'listen-user-panel';
+
+    const users = getLiveUserMatches(input.value);
+    if (!liveUsers.size) {
+        const empty = document.createElement('p');
+        empty.className = 'modal-empty';
+        empty.textContent = 'Nenhum usuário visto na live ainda.';
+        wrapper.appendChild(empty);
+        return wrapper;
+    }
+
+    if (!users.length) {
+        const empty = document.createElement('p');
+        empty.className = 'modal-empty';
+        empty.textContent = 'Nenhum usuário encontrado.';
+        wrapper.appendChild(empty);
+        return wrapper;
+    }
+
+    users.forEach(user => {
+        const button = document.createElement('button');
+        button.className = 'listen-user-option';
+        button.type = 'button';
+
+        const name = document.createElement('strong');
+        name.textContent = user.nickname || user.uniqueId || 'Nao identificado';
+        button.appendChild(name);
+
+        if (user.uniqueId) {
+            const handle = document.createElement('span');
+            handle.textContent = `@${user.uniqueId}`;
+            button.appendChild(handle);
+        }
+
+        button.addEventListener('click', () => {
+            listenDraftValue = user.uniqueId ? `@${user.uniqueId}` : user.nickname;
+            setListenedUser(listenDraftValue);
+            renderListenModal({ preserveFocus: true });
+        });
+
+        wrapper.appendChild(button);
+    });
+
+    return wrapper;
+}
+
+function renderListenModal(options = {}) {
+    historyModalTitle.textContent = 'Escuta';
+    historyModalBody.replaceChildren();
+
+    const form = document.createElement('form');
+    form.className = 'listen-form';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = '@usuario';
+    input.autocomplete = 'off';
+    input.value = listenDraftValue;
+    input.addEventListener('input', () => {
+        listenDraftValue = input.value;
+        renderListenModal({ preserveFocus: true });
+    });
+
+    const button = document.createElement('button');
+    button.type = 'submit';
+    button.textContent = 'Escutar';
+
+    form.appendChild(input);
+    form.appendChild(button);
+    form.addEventListener('submit', event => {
+        event.preventDefault();
+        setListenedUser(input.value);
+        listenDraftValue = listenedUserId ? `@${listenedUserId}` : '';
+        renderListenModal();
+    });
+
+    historyModalBody.appendChild(form);
+    historyModalBody.appendChild(renderLiveUserSelector(input));
+    historyModalBody.appendChild(createModalList(listenedMessages, (row, item) => {
+        renderUserLine(row, item.nickname, item.uniqueId);
+        const comment = document.createElement('span');
+        comment.textContent = item.comment || '';
+        row.appendChild(comment);
+    }));
+
+    if (options.preserveFocus) {
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+    }
+}
+
+function renderActiveModal() {
+    if (activeModalType === 'target-gifts') {
+        renderGiftHistory();
+    } else if (activeModalType === 'pinned-comments') {
+        renderPinnedCommentHistory();
+    } else if (activeModalType === 'listen') {
+        renderListenModal();
+    }
+}
+
+function openHistoryModal(type) {
+    activeModalType = type;
+    if (type === 'listen') {
+        listenDraftValue = listenedUserId ? `@${listenedUserId}` : '';
+    }
+    renderActiveModal();
+    historyModalBackdrop.classList.add('is-open');
+    historyModalBackdrop.setAttribute('aria-hidden', 'false');
+}
+
+function closeHistoryModal() {
+    historyModalBackdrop.classList.remove('is-open');
+    historyModalBackdrop.setAttribute('aria-hidden', 'true');
+    activeModalType = null;
+}
+
+function addTargetGiftToHistory(user) {
+    targetGiftHistory.unshift({
+        uniqueId: user.uniqueId || '',
+        nickname: user.nickname || user.uniqueId || 'Nao identificado',
+        giftName: user.giftName || 'Presente Alvo',
+        timestamp: user.timestamp || Date.now()
+    });
+    trimHistory(targetGiftHistory);
+    if (activeModalType === 'target-gifts') {
+        renderGiftHistory();
+    }
+}
+
+function addPinnedCommentToHistory(pinnedComment) {
+    pinnedCommentHistory.unshift({
+        uniqueId: pinnedComment.uniqueId || '',
+        nickname: pinnedComment.nickname || pinnedComment.uniqueId || 'Nao identificado',
+        comment: pinnedComment.comment || '[sem texto identificado]',
+        timestamp: pinnedComment.timestamp || Date.now()
+    });
+    trimHistory(pinnedCommentHistory);
+    if (activeModalType === 'pinned-comments') {
+        renderPinnedCommentHistory();
+    }
+}
+
+function handleListenedMessage(data) {
+    if (!listenedUserId || !data) {
+        return;
+    }
+
+    if (normalizeListenUser(data.uniqueId) !== listenedUserId) {
+        return;
+    }
+
+    listenedMessages.unshift({
+        uniqueId: data.uniqueId || '',
+        nickname: data.nickname || data.uniqueId || 'Nao identificado',
+        comment: data.comment || '',
+        timestamp: data.timestamp || Date.now()
+    });
+    trimHistory(listenedMessages);
+    if (activeModalType === 'listen') {
+        renderListenModal();
+    }
+}
+
+function handleNewChatMessage(data) {
+    rememberLiveUser(data);
+    messageCount++;
+    handleListenedMessage(data);
+}
+
+function clearHistories() {
+    targetGiftHistory = [];
+    pinnedCommentHistory = [];
+    listenedMessages = [];
+    listenedUserId = '';
+    listenDraftValue = '';
+    liveUsers.clear();
+    renderActiveModal();
+}
 
 /** Rótulo curto para coluna Categoria (payload.category do servidor) */
 function infractionCategoryLabel(category) {
@@ -140,6 +447,21 @@ setInterval(() => {
     messageCount = 0;
     chart.update();
 }, 1000);
+
+targetGiftHistoryBtn.addEventListener('click', () => openHistoryModal('target-gifts'));
+pinnedCommentHistoryBtn.addEventListener('click', () => openHistoryModal('pinned-comments'));
+listenBtn.addEventListener('click', () => openHistoryModal('listen'));
+historyModalCloseBtn.addEventListener('click', closeHistoryModal);
+historyModalBackdrop.addEventListener('click', event => {
+    if (event.target === historyModalBackdrop) {
+        closeHistoryModal();
+    }
+});
+document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && activeModalType) {
+        closeHistoryModal();
+    }
+});
 
 if (isElectron) {
     connectBtn.addEventListener('click', () => {
@@ -268,6 +590,7 @@ function clearTables() {
         clearTimeout(flaggedMessageTimers[key]);
     }
     flaggedMessageTimers = {};
+    clearHistories();
 }
 
 function handleConnectionStatus(data) {
@@ -280,6 +603,9 @@ function handleConnectionStatus(data) {
 }
 
 function addUserToList(user) {
+    rememberLiveUser(user);
+    addTargetGiftToHistory(user);
+
     const existingRow = Array.from(userTableBody.querySelectorAll('.user-row')).find(row => {
         return String(row.getAttribute('data-id')).toLowerCase() === String(user.uniqueId).toLowerCase() &&
             row.querySelector('.gift-name-cell').innerText === user.giftName;
@@ -402,6 +728,8 @@ function addAllGiftToList(gift) {
         return;
     }
 
+    rememberLiveUser(gift);
+
     const quantity = Math.max(1, Number(gift.repeatCount) || 1);
     const existingRow = findAllGiftsRowForGift(gift);
 
@@ -448,6 +776,9 @@ function addAllGiftToList(gift) {
 }
 
 function addPinnedCommentToList(pinnedComment) {
+    rememberLiveUser(pinnedComment);
+    addPinnedCommentToHistory(pinnedComment);
+
     const timerKey = `${pinnedComment.pinId || pinnedComment.timestamp || Date.now()}-${Math.random()}`;
     const tr = document.createElement('tr');
     tr.className = 'pinned-comment-row';
@@ -590,8 +921,12 @@ function setupEventStream() {
         handleConnectionStatus(JSON.parse(event.data));
     });
 
-    eventSource.addEventListener('new-chat-message', () => {
-        messageCount++;
+    eventSource.addEventListener('new-chat-message', event => {
+        handleNewChatMessage(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('live-user-connected', event => {
+        rememberLiveUser(JSON.parse(event.data));
     });
 
     eventSource.addEventListener('new-gift-user', event => {
@@ -640,8 +975,12 @@ function setupElectronIpc() {
         }
     });
 
-    ipcRenderer.on('new-chat-message', () => {
-        messageCount++;
+    ipcRenderer.on('new-chat-message', (event, data) => {
+        handleNewChatMessage(data);
+    });
+
+    ipcRenderer.on('live-user-connected', (event, data) => {
+        rememberLiveUser(data);
     });
 
     ipcRenderer.on('new-gift-user', (event, user) => {

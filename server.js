@@ -364,7 +364,15 @@ async function connectToTiktok(username) {
             chatBuffer.shift();
         }
 
-        emitEvent('new-chat-message', { timestamp: Date.now() });
+        emitEvent('new-chat-message', messageData);
+    });
+
+    tiktokConnection.on('member', data => {
+        emitEvent('live-user-connected', {
+            uniqueId: data.uniqueId,
+            nickname: data.nickname,
+            timestamp: Date.now()
+        });
     });
 
     tiktokConnection.on('gift', data => {

@@ -295,6 +295,7 @@ ipcMain.on('connect-tiktok', (event, username) => {
         tiktokConnection.disconnect();
     }
 
+    chatBuffer = [];
     pinnedCommentUsers.clear();
     processedPinnedMessages.clear();
     tiktokConnection = new WebcastPushConnection(username);
@@ -338,7 +339,15 @@ ipcMain.on('connect-tiktok', (event, username) => {
             chatBuffer.shift();
         }
         // Notificar renderer para o gráfico
-        mainWindow.webContents.send('new-chat-message');
+        mainWindow.webContents.send('new-chat-message', msg);
+    });
+
+    tiktokConnection.on('member', (data) => {
+        mainWindow.webContents.send('live-user-connected', {
+            uniqueId: data.uniqueId,
+            nickname: data.nickname,
+            timestamp: Date.now()
+        });
     });
 
     // Monitorar presentes (Gifts)
@@ -410,5 +419,8 @@ ipcMain.on('disconnect-tiktok', (event) => {
         tiktokConnection.disconnect();
         tiktokConnection = null;
     }
+    chatBuffer = [];
+    pinnedCommentUsers.clear();
+    processedPinnedMessages.clear();
     event.reply('connection-status', { success: false, error: 'Desconectado pelo usuário' });
 });
