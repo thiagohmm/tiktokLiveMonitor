@@ -55,7 +55,7 @@
     "extraResources": [
       "models/**/*",
       "bin/**/*",
-      "scripts/send-tiktok-chat.py",
+      "scripts/**/*",
       "requirements-python.txt"
     ],
     "asar": true,

@@ -14,6 +14,10 @@ services:
       LLAMA_USE_MMAP: "1"
       # Espera extra pelo /health na primeira carga (segundos entre polls ≈ 1s)
       LLAMA_HEALTH_MAX_ATTEMPTS: "180"
+      # Envio automático de aviso no chat via scripts/send-tiktok-chat.py
+      TIKTOKLIVE_PYTHON_CHAT: "${TIKTOKLIVE_PYTHON_CHAT:-0}"
+      TIKTOK_SESSION_ID: "${TIKTOK_SESSION_ID:-}"
+      TIKTOK_TT_TARGET_IDC: "${TIKTOK_TT_TARGET_IDC:-}"
     shm_size: "512mb"
     volumes:
       # Persiste ~800MB do GGUF + binários entre reinícios

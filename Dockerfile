@@ -7,6 +7,8 @@ FROM node:22-trixie-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        python3 \
+        python3-venv \
         libgomp1 \
         libstdc++6 \
         libatomic1 \
@@ -15,17 +17,22 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY package*.json ./
+COPY requirements-python.txt ./
 COPY scripts/setup-llm.js scripts/setup-llm.js
 
 RUN npm ci --omit=dev --ignore-scripts
+RUN python3 -m venv /opt/tiktoklive-venv \
+    && /opt/tiktoklive-venv/bin/pip install --no-cache-dir -r requirements-python.txt
 
 COPY server.js ai.js llm-model.js moderation.js moderation-prompt.js index.html renderer.js ./
+COPY scripts scripts
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 RUN mkdir -p models bin
 
+ENV PATH=/opt/tiktoklive-venv/bin:$PATH
 ENV HOST=0.0.0.0
 ENV PORT=3000
 
