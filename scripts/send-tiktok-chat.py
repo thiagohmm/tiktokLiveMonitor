@@ -97,17 +97,26 @@ async def send_chat(args):
             status_code = response.status_code
         elif hasattr(response, "status"):
             status_code = response.status
+        elif hasattr(response, "get"):
+             status_code = response.get("status_code", -1)
 
         if status_code != 0:
             error_msg = f"TikTok retornou erro (status_code={status_code})"
             if status_msg:
                 error_msg += f": {status_msg}"
             
-            # Se falhou, vamos imprimir o dump da resposta para debug
+            # Tentar extrair mais detalhes se for um objeto complexo
+            resp_info = str(response)
+            try:
+                if hasattr(response, "__dict__"):
+                    resp_info = str(response.__dict__)
+            except:
+                pass
+
             return {
                 "ok": False,
                 "error": error_msg,
-                "response_raw": str(response),
+                "response_raw": resp_info,
                 "response_type": str(type(response))
             }
 

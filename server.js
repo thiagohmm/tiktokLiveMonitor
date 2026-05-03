@@ -92,7 +92,7 @@ function getBotCookies() {
 }
 
 function pythonChatSenderEnabled() {
-    return process.env.TIKTOKLIVE_PYTHON_CHAT === '1';
+    return Boolean(getBotCookies().sessionId);
 }
 
 function pythonExecutable() {
@@ -636,10 +636,10 @@ async function handleApiRequest(request, response, pathname) {
 
     if (request.method === 'GET' && pathname === '/api/bot-status') {
         const cookies = getBotCookies();
-        const active = Boolean(cookies.sessionId);
+        const active = pythonChatSenderEnabled();
         sendJson(response, 200, {
             active,
-            text: active ? 'Ativo (Configurado)' : 'Inativo (Sem SessionID)'
+            text: active ? 'Ativo (Configurado)' : 'Inativo (Sem sessionid)'
         });
         return true;
     }

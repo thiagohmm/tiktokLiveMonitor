@@ -80,6 +80,7 @@ function formatTikTokConnectionError(error) {
 }
 
 function setBotStatus(active, text) {
+    const wasActive = botActive;
     botActive = active;
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('bot-status', { active, text });
@@ -100,7 +101,9 @@ function refreshBotStatusFromUrl() {
     }
 
     if (url.includes('tiktok.com')) {
-        setBotStatus(false, 'Logado / Navegando');
+        setBotStatus(false, 'Bot Inativo (Navegando)');
+    } else {
+        setBotStatus(false, 'Bot Inativo (Fora do TikTok)');
     }
     return false;
 }
@@ -127,7 +130,9 @@ async function getBotTikTokCookies() {
         const cookieStore = botWindow.webContents.session.cookies;
         const cookies = [
             ...await cookieStore.get({ url: 'https://www.tiktok.com' }),
-            ...await cookieStore.get({ url: 'https://webcast.tiktok.com' })
+            ...await cookieStore.get({ url: 'https://webcast.tiktok.com' }),
+            ...await cookieStore.get({ domain: '.tiktok.com' }),
+            ...await cookieStore.get({ domain: 'tiktok.com' })
         ];
         const byName = new Map(cookies.map(cookie => [cookie.name, cookie.value]));
 
@@ -228,27 +233,60 @@ function runPythonChatSender(username, text, cookies, force = false) {
     });
 }
 
-ipcMain.handle('get-ui-config', () => ({
-    geminiConfigured: aiConfigured()
-}));
+function botLiveUrl(username = currentUsername) {
+    return username ? `https://www.tiktok.com/@${username}/live` : 'https://www.tiktok.com/login';
+}
 
-ipcMain.handle('probe-llm', async () => ({
-    llmActive: await probeLlamaReady()
-}));
+function waitForBotWindowLoad() {
+    if (!botWindow || botWindow.isDestroyed()) {
+        return Promise.resolve();
+    }
 
-ipcMain.on('open-bot-window', (event) => {
-    if (botWindow) {
-        if (botWindow.isVisible()) {
-            botWindow.hide();
-        } else {
+    if (!botWindow.webContents.isLoading()) {
+        return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+        const done = () => {
+            botWindow?.webContents.removeListener('did-finish-load', done);
+            botWindow?.webContents.removeListener('did-fail-load', done);
+            resolve();
+        };
+        botWindow.webContents.once('did-finish-load', done);
+        botWindow.webContents.once('did-fail-load', done);
+    });
+}
+
+async function loadBotLiveUrlIfNeeded() {
+    if (!botWindow || botWindow.isDestroyed() || !currentUsername) {
+        return;
+    }
+
+    const targetUrl = botLiveUrl();
+    const currentUrl = botWindow.webContents.getURL();
+    if (currentUrl === targetUrl || currentUrl.includes(`/@${currentUsername}/live`)) {
+        await waitForBotWindowLoad();
+        return;
+    }
+
+    await botWindow.loadURL(targetUrl).catch((error) => {
+        console.log('[Bot] Falha ao carregar live na janela do bot:', error?.message || error);
+    });
+}
+
+async function ensureBotWindow({ show = false } = {}) {
+    if (botWindow && !botWindow.isDestroyed()) {
+        if (show) {
             botWindow.show();
         }
-        return;
+        await loadBotLiveUrlIfNeeded();
+        return botWindow;
     }
 
     botWindow = new BrowserWindow({
         width: 1200,
         height: 800,
+        show,
         title: 'Bot Login - TikTok',
         webPreferences: {
             nodeIntegration: false,
@@ -256,24 +294,24 @@ ipcMain.on('open-bot-window', (event) => {
         }
     });
 
-    if (currentUsername) {
-        botWindow.loadURL(`https://www.tiktok.com/@${currentUsername}/live`);
-    } else {
-        botWindow.loadURL('https://www.tiktok.com/login');
-    }
+    botWindow.webContents.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
     botWindow.on('close', (e) => {
         // Se a janela principal ainda existe, apenas oculta
         if (mainWindow && !mainWindow.isDestroyed()) {
             e.preventDefault();
             botWindow.hide();
-            setBotStatus(botActive, botActive ? 'Ativo (Oculto)' : 'Logado (Oculto)');
+            setBotStatus(botActive, botActive ? 'Ativo (Oculto)' : 'Inativo (Oculto)');
         }
     });
 
     botWindow.on('closed', () => {
         botWindow = null;
         setBotStatus(false, 'Inativo (Janela Fechada)');
+    });
+
+    botWindow.webContents.on('did-start-loading', () => {
+        setBotStatus(false, 'Carregando...');
     });
 
     botWindow.webContents.on('did-finish-load', () => {
@@ -283,6 +321,34 @@ ipcMain.on('open-bot-window', (event) => {
     botWindow.webContents.on('did-navigate-in-page', () => {
         refreshBotStatusFromUrl();
     });
+
+    await botWindow.loadURL(botLiveUrl()).catch((error) => {
+        console.log('[Bot] Falha ao abrir janela do bot:', error?.message || error);
+    });
+
+    return botWindow;
+}
+
+ipcMain.handle('get-ui-config', () => ({
+    geminiConfigured: aiConfigured()
+}));
+
+ipcMain.handle('probe-llm', async () => ({
+    llmActive: await probeLlamaReady()
+}));
+
+ipcMain.on('open-bot-window', async (event) => {
+    if (botWindow) {
+        if (botWindow.isVisible()) {
+            botWindow.hide();
+        } else {
+            botWindow.show();
+            await loadBotLiveUrlIfNeeded();
+        }
+        return;
+    }
+
+    await ensureBotWindow({ show: true });
 });
 
 async function sendBotMessage(text) {
@@ -290,6 +356,7 @@ async function sendBotMessage(text) {
 
     let pythonSkipped = false;
     try {
+        await ensureBotWindow({ show: false });
         const cookies = await getBotTikTokCookies();
         const pythonResult = await runPythonChatSender(currentUsername, text, cookies);
 
@@ -308,8 +375,8 @@ async function sendBotMessage(text) {
     }
 
     if (!botWindow || botWindow.isDestroyed()) {
-        setBotStatus(false, 'Inativo');
-        console.log('[Bot] Mensagem não enviada: janela do bot não está aberta.');
+        setBotStatus(false, 'Inativo (Janela indisponível)');
+        console.log('[Bot] Mensagem não enviada: não foi possível abrir a janela do bot.');
         return false;
     }
 
@@ -361,6 +428,9 @@ async function sendBotMessage(text) {
                 '[class*="CommentInput"] [contenteditable="true"]',
                 '[class*="ChatInput"]',
                 '[class*="CommentInput"]',
+                '[class*="ChatMessageInput"]',
+                '[class*="InputArea"]',
+                '.tiktok-1p6ia4n-DivChatInputContainer',
                 '.tiktok-1p6ia4n-DivChatInputContainer [contenteditable="true"]',
                 'textarea',
                 'input[type="text"]',
@@ -371,6 +441,22 @@ async function sendBotMessage(text) {
 
             const findInDocument = (root) => {
                 const results = [];
+                if (!root) return results;
+                
+                // Se o próprio root for o que procuramos
+                if (root.nodeType === Node.ELEMENT_NODE) {
+                    const matchesSelector = selectors.some(s => {
+                        try { return root.matches(s); } catch(e) { return false; }
+                    });
+                    if (matchesSelector || root.isContentEditable || root.getAttribute('role') === 'textbox') {
+                        if (isVisible(root)) {
+                            if (root.isContentEditable || root.matches(editableSelector)) {
+                                results.push(root);
+                            }
+                        }
+                    }
+                }
+
                 const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null, false);
                 let node = walker.currentNode;
                 while (node) {
@@ -406,7 +492,14 @@ async function sendBotMessage(text) {
                 return results;
             };
 
-            let candidates = findInDocument(document);
+            // Tentar encontrar o input por até 3 segundos
+            let candidates = [];
+            for (let i = 0; i < 30; i++) {
+                candidates = findInDocument(document);
+                if (candidates.length > 0) break;
+                await sleep(100);
+            }
+
             candidates = [...new Set(candidates)];
             candidates.sort((a, b) => {
                 const rectA = a.getBoundingClientRect();
@@ -428,15 +521,29 @@ async function sendBotMessage(text) {
                               bodyText.includes('interaja com outras pessoas') || 
                               bodyText.includes('Fazer login para comentar') || 
                               bodyText.includes('Faça login para') ||
-                              bodyText.includes('Log in to comment');
+                              bodyText.includes('Log in to comment') ||
+                              bodyText.includes('Entre para comentar') ||
+                              bodyText.includes('Conecte-se para') ||
+                              bodyText.includes('Sign in to');
+                
+                const isErrorPage = bodyText.includes('não está disponível') || 
+                                   bodyText.includes('not available') ||
+                                   bodyText.includes('Something went wrong');
                 
                 return {
                     ok: false,
-                    reason: isGuest ? 'Usuário não logado no Bot' : 'Input não encontrado',
+                    reason: isGuest ? 'Usuário não logado no Bot' : (isErrorPage ? 'Página da Live não disponível' : 'Input não encontrado'),
                     url: location.href,
                     title: document.title,
                     editableCount: document.querySelectorAll(editableSelector).length,
-                    htmlSample: bodyText.slice(0, 500),
+                    allEditableFound: Array.from(document.querySelectorAll(editableSelector)).map(el => ({
+                        tag: el.tagName,
+                        className: el.className,
+                        visible: isVisible(el),
+                        rect: el.getBoundingClientRect(),
+                        placeholder: el.placeholder || el.getAttribute('placeholder') || ''
+                    })),
+                    htmlSample: bodyText.slice(0, 1000),
                     candidatesFound: candidates.length
                 };
             }
@@ -996,7 +1103,7 @@ ipcMain.on('disconnect-tiktok', (event) => {
     if (botWindow) {
         botWindow.destroy();
         botWindow = null;
-        botActive = false;
+        setBotStatus(false, 'Inativo');
     }
 
     chatBuffer = [];
