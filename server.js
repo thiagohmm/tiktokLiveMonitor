@@ -82,6 +82,15 @@ function readRequestBody(request) {
     });
 }
 
+let botCookies = {
+    sessionId: process.env.TIKTOK_SESSION_ID || '',
+    ttTargetIdc: process.env.TIKTOK_TT_TARGET_IDC || ''
+};
+
+function getBotCookies() {
+    return botCookies;
+}
+
 function pythonChatSenderEnabled() {
     return process.env.TIKTOKLIVE_PYTHON_CHAT === '1';
 }
@@ -91,10 +100,7 @@ function pythonExecutable() {
 }
 
 function getEnvTikTokCookies() {
-    return {
-        sessionId: process.env.TIKTOK_SESSION_ID || '',
-        ttTargetIdc: process.env.TIKTOK_TT_TARGET_IDC || ''
-    };
+    return getBotCookies();
 }
 
 function getCurrentRoomId() {
@@ -625,6 +631,29 @@ async function handleApiRequest(request, response, pathname) {
     if (request.method === 'GET' && pathname === '/api/probe-llm') {
         const llmActive = await probeLlamaReady();
         sendJson(response, 200, { llmActive });
+        return true;
+    }
+
+    if (request.method === 'GET' && pathname === '/api/bot-status') {
+        const cookies = getBotCookies();
+        const active = Boolean(cookies.sessionId);
+        sendJson(response, 200, {
+            active,
+            text: active ? 'Ativo (Configurado)' : 'Inativo (Sem SessionID)'
+        });
+        return true;
+    }
+
+    if (request.method === 'POST' && pathname === '/api/bot-config') {
+        try {
+            const body = await readRequestBody(request);
+            if (body.sessionId !== undefined) botCookies.sessionId = String(body.sessionId || '').trim();
+            if (body.ttTargetIdc !== undefined) botCookies.ttTargetIdc = String(body.ttTargetIdc || '').trim();
+
+            sendJson(response, 200, { success: true });
+        } catch (error) {
+            sendJson(response, 400, { error: 'Dados inválidos.' });
+        }
         return true;
     }
 
