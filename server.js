@@ -23,6 +23,8 @@ let chatBuffer = [];
 let pinnedCommentUsers = new Set();
 let processedPinnedMessages = new Set();
 let repeatAlertedSequences = new Set();
+const userOffenses = new Map();
+const userMutedUntil = new Map();
 const sseClients = new Set();
 
 function createTikTokConnection(username) {
@@ -92,7 +94,7 @@ function getBotCookies() {
 }
 
 function pythonChatSenderEnabled() {
-    return Boolean(getBotCookies().sessionId);
+    return process.env.TIKTOKLIVE_PYTHON_CHAT !== '0';
 }
 
 function pythonExecutable() {
@@ -118,7 +120,7 @@ function getCurrentRoomId() {
 function runPythonChatSender(username, text, cookies, force = false) {
     return new Promise((resolve) => {
         if (!force && !pythonChatSenderEnabled()) {
-            resolve({ ok: false, skipped: true, reason: 'TIKTOKLIVE_PYTHON_CHAT não está ativo.' });
+            resolve({ ok: false, skipped: true, reason: 'Recurso de chat/silenciar desativado (TIKTOKLIVE_PYTHON_CHAT=0).' });
             return;
         }
 
@@ -128,7 +130,7 @@ function runPythonChatSender(username, text, cookies, force = false) {
         }
 
         if (!cookies.sessionId) {
-            resolve({ ok: false, reason: 'TIKTOK_SESSION_ID não está definido.' });
+            resolve({ ok: false, reason: 'Cookie sessionid não encontrado. Por favor, configure clicando em "Login do Bot".' });
             return;
         }
 
@@ -200,6 +202,124 @@ function runPythonChatSender(username, text, cookies, force = false) {
             });
         });
     });
+}
+
+function runPythonMuteUser(username, targetUserId, cookies, duration = 60) {
+    return new Promise((resolve) => {
+        if (!pythonChatSenderEnabled()) {
+            resolve({ ok: false, skipped: true, reason: 'Recurso de chat/silenciar desativado (TIKTOKLIVE_PYTHON_CHAT=0).' });
+            return;
+        }
+
+        if (!username || !targetUserId) {
+            resolve({ ok: false, reason: 'Dados insuficientes para silenciar.' });
+            return;
+        }
+
+        if (!cookies.sessionId) {
+            resolve({ ok: false, reason: 'Cookie sessionid não encontrado. Por favor, configure clicando em "Login do Bot".' });
+            return;
+        }
+
+        const scriptPath = path.join(ROOT_DIR, 'scripts', 'mute-tiktok-user.py');
+        const args = [
+            scriptPath,
+            '--username', username,
+            '--target-user-id', targetUserId,
+            '--session-id', cookies.sessionId,
+            '--duration', String(duration)
+        ];
+
+        const roomId = getCurrentRoomId();
+        if (roomId) {
+            args.push('--room-id', roomId);
+        }
+
+        if (cookies.ttTargetIdc) {
+            args.push('--tt-target-idc', cookies.ttTargetIdc);
+        }
+
+        const env = {
+            ...process.env,
+            PYTHONUNBUFFERED: '1',
+            WHITELIST_AUTHENTICATED_SESSION_ID_HOST: 'tiktok.eulerstream.com'
+        };
+
+        const child = spawn(pythonExecutable(), args, {
+            cwd: ROOT_DIR,
+            env,
+            stdio: ['ignore', 'pipe', 'pipe']
+        });
+
+        let stdout = '';
+        let stderr = '';
+
+        child.stdout.on('data', chunk => {
+            stdout += chunk.toString();
+        });
+
+        child.stderr.on('data', chunk => {
+            stderr += chunk.toString();
+        });
+
+        child.on('error', error => {
+            resolve({ ok: false, reason: error.message });
+        });
+
+        child.on('close', code => {
+            const output = stdout.trim();
+            let payload = null;
+
+            if (output) {
+                try {
+                    payload = JSON.parse(output.split('\n').pop());
+                } catch {
+                    payload = null;
+                }
+            }
+
+            if (code === 0 && payload?.ok) {
+                resolve({ ok: true, method: 'python', response: payload.response || null });
+                return;
+            }
+
+            const detail = payload?.details || payload?.response || null;
+            const detailText = detail ? ` ${JSON.stringify(detail)}` : '';
+            resolve({
+                ok: false,
+                reason: `${payload?.error || stderr.trim() || output || `Python saiu com código ${code}.`}${detailText}`
+            });
+        });
+    });
+}
+
+async function muteUser(data, username) {
+    const targetUserId = data.userId || data.uniqueId;
+    const nickname = data.nickname || data.uniqueId;
+    
+    console.log(`[Bot] Tentando silenciar usuário ${nickname} (${targetUserId}) por 60s...`);
+    const result = await runPythonMuteUser(username, targetUserId, getEnvTikTokCookies(), 60);
+
+    if (result.ok) {
+        console.log(`[Bot] SUCESSO: Usuário ${nickname} silenciado.`);
+        emitEvent('mute-status', {
+            success: true,
+            uniqueId: data.uniqueId,
+            nickname: nickname,
+            message: `Usuário ${nickname} silenciado com sucesso!`
+        });
+        return true;
+    }
+
+    const errorMsg = result.reason || result.error || 'Erro desconhecido';
+    console.error(`[Bot] ERRO ao silenciar ${nickname}:`, errorMsg);
+    emitEvent('mute-status', {
+        success: false,
+        uniqueId: data.uniqueId,
+        nickname: nickname,
+        message: `Falha ao silenciar ${nickname}: ${errorMsg}`
+    });
+    return false;
 }
 
 async function sendBotMessage(text) {
@@ -482,17 +602,44 @@ async function analyzeMessage(data) {
     const seqKey = repeatSequenceKey(senderKey, commentLower);
 
     if (isRepeat) {
+        const isCurrentlyMuted = userMutedUntil.has(senderKey) && userMutedUntil.get(senderKey) > now;
+        if (isCurrentlyMuted) return;
+
         if (!repeatAlertedSequences.has(seqKey)) {
             repeatAlertedSequences.add(seqKey);
+            const offenses = (userOffenses.get(senderKey) || 0) + 1;
+            userOffenses.set(senderKey, offenses);
+
             emitEvent('flagged-message', {
                 uniqueId,
                 nickname,
                 comment,
-                reason: 'Mensagem repetida',
+                reason: offenses === 1 ? 'Mensagem repetida' : 'Mensagem repetida (Reincidente)',
                 category: 'REPETICAO'
             });
 
-            void sendRepeatWarning(data);
+            if (offenses === 1) {
+                void sendRepeatWarning(data);
+            } else {
+                userMutedUntil.set(senderKey, now + 60000);
+                void muteUser(data, currentUsername);
+            }
+        } else {
+            const offenses = (userOffenses.get(senderKey) || 0) + 1;
+            userOffenses.set(senderKey, offenses);
+
+            if (offenses >= 2) {
+                userMutedUntil.set(senderKey, now + 60000);
+                void muteUser(data, currentUsername);
+
+                emitEvent('flagged-message', {
+                    uniqueId,
+                    nickname,
+                    comment,
+                    reason: 'Mensagem repetida (Silenciando)',
+                    category: 'REPETICAO'
+                });
+            }
         }
         return;
     }
@@ -635,11 +782,15 @@ async function handleApiRequest(request, response, pathname) {
     }
 
     if (request.method === 'GET' && pathname === '/api/bot-status') {
-        const cookies = getBotCookies();
-        const active = pythonChatSenderEnabled();
+        const enabled = pythonChatSenderEnabled();
+        const hasSession = Boolean(getBotCookies().sessionId);
+        const active = enabled && hasSession;
+
         sendJson(response, 200, {
             active,
-            text: active ? 'Ativo (Configurado)' : 'Inativo (Sem sessionid)'
+            text: active 
+                ? 'Ativo (Configurado)' 
+                : (!enabled ? 'Desativado (TIKTOKLIVE_PYTHON_CHAT=0)' : 'Inativo (Sem sessionid)')
         });
         return true;
     }

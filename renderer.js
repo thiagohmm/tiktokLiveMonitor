@@ -33,6 +33,7 @@ const userTableBody = document.getElementById('userTableBody');
 const allGiftsTableBody = document.getElementById('allGiftsTableBody');
 const pinnedCommentsTableBody = document.getElementById('pinnedCommentsTableBody');
 const flaggedMessagesTableBody = document.getElementById('flaggedMessagesTableBody');
+const toastContainer = document.getElementById('toastContainer');
 const infractionsSectionTitle = document.getElementById('infractionsSectionTitle');
 const targetExpirationMinutesInput = document.getElementById('targetExpirationMinutes');
 const chartCanvas = document.getElementById('messageChart');
@@ -108,6 +109,23 @@ function trimHistory(items) {
     if (items.length > 15) {
         items.length = 15;
     }
+}
+
+function showToast(message, type = 'success', duration = 4000) {
+    if (!toastContainer) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.textContent = message;
+
+    toastContainer.appendChild(toast);
+
+    setTimeout(() => {
+        toast.style.animation = 'toast-out 0.3s ease-in forwards';
+        toast.addEventListener('animationend', () => {
+            toast.remove();
+        });
+    }, duration);
 }
 
 function appendEmptyState(parent) {
@@ -1081,6 +1099,11 @@ function setupEventStream() {
         addFlaggedMessageToList(JSON.parse(event.data));
     });
 
+    eventSource.addEventListener('mute-status', event => {
+        const data = JSON.parse(event.data);
+        showToast(data.message, data.success ? 'success' : 'error');
+    });
+
     eventSource.addEventListener('mark-user-red', event => {
         markUserRed(JSON.parse(event.data));
     });
@@ -1133,6 +1156,10 @@ function setupElectronIpc() {
 
     ipcRenderer.on('flagged-message', (event, data) => {
         addFlaggedMessageToList(data);
+    });
+
+    ipcRenderer.on('mute-status', (event, data) => {
+        showToast(data.message, data.success ? 'success' : 'error');
     });
 
     ipcRenderer.on('mark-user-red', (event, uniqueId) => {
