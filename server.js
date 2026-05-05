@@ -10,7 +10,7 @@ const {
     setSettings, 
     getSettings,
     forceCheck
-} = require('./main');
+} = require('./monitor');
 const { getRecentModerations, clearHistory, deleteModeration, addFeedback } = require('./database');
 const { probeLlamaReady, aiConfigured } = require('./ai');
 

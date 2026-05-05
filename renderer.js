@@ -1180,6 +1180,7 @@ async function bootstrap() {
         try {
             const cfg = await ipcRenderer.invoke('get-ui-config');
             applyInfractionsSectionTitle(Boolean(cfg && cfg.geminiConfigured));
+            runLlmProbeElectron();
         } catch {
             applyInfractionsSectionTitle(false);
         }
