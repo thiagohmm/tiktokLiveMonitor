@@ -117,13 +117,24 @@ function getGiftRepeatCount(data) {
 }
 
 function getUserFromObject(data) {
-    if (!data) return { uniqueId: null, nickname: null };
+    if (!data) return { uniqueId: null, nickname: null, isFollower: null };
 
     const user = data.user || data.member || data.sender || data.author || data.owner || {};
     const uniqueId = data.uniqueId || user.uniqueId || user.secUid || user.id || null;
     const nickname = data.nickname || user.nickname || user.displayName || uniqueId || null;
 
-    return { uniqueId, nickname };
+    let isFollower = null;
+    if (user.followInfo && typeof user.followInfo.followStatus === 'number') {
+        isFollower = user.followInfo.followStatus >= 1;
+    } else if (data.followInfo && typeof data.followInfo.followStatus === 'number') {
+        isFollower = data.followInfo.followStatus >= 1;
+    } else if (data.isFollower !== undefined) {
+        isFollower = Boolean(data.isFollower);
+    } else if (user.isFollower !== undefined) {
+        isFollower = Boolean(user.isFollower);
+    }
+
+    return { uniqueId, nickname, isFollower };
 }
 
 function textFromDisplayText(displayText) {
@@ -203,7 +214,7 @@ function getPinnedUser(data, content) {
 
     const mentionMatch = content && content.match(/@([a-zA-Z0-9._]+)/);
     if (mentionMatch) {
-        return { uniqueId: mentionMatch[1].toLowerCase(), nickname: mentionMatch[1] };
+        return { uniqueId: mentionMatch[1].toLowerCase(), nickname: mentionMatch[1], isFollower: null };
     }
 
     if (content) {
@@ -214,11 +225,11 @@ function getPinnedUser(data, content) {
         });
 
         if (sender) {
-            return { uniqueId: sender.uniqueId, nickname: sender.nickname };
+            return { uniqueId: sender.uniqueId, nickname: sender.nickname, isFollower: sender.isFollower };
         }
     }
 
-    return { uniqueId: null, nickname: null };
+    return { uniqueId: null, nickname: null, isFollower: null };
 }
 
 function getPinnedMessageKey(data) {
@@ -254,10 +265,16 @@ function emitStatus(success, extra = {}) {
 }
 
 function logPinnedComment(content, user, data) {
-    console.log('\n[PINNED COMMENT]');
-    console.log(`Author: ${user.nickname || user.uniqueId || 'Nao identificado'}`);
-    console.log(`Message: ${content || '[sem texto identificado]'}`);
-    console.log(`Method: ${data.method || 'desconhecido'} | Action: ${data.action ?? 'desconhecida'} | Pin ID: ${data.pinId || 'n/a'}`);
+    console.log('\n📌 COMENTÁRIO FIXADO:');
+    if (user.uniqueId) {
+        const followStr = user.isFollower === true ? ' (Seguidor)' : (user.isFollower === false ? ' (Não Segue)' : '');
+        console.log(`👤 Autor: ${user.nickname || user.uniqueId}${followStr} (@${user.uniqueId})`);
+    } else {
+        console.log('👤 Autor: Não identificado');
+    }
+    console.log(`💬 Mensagem: ${content || '[sem texto identificado]'}`);
+    console.log(`📎 Método: ${data.method || 'desconhecido'} | Ação: ${data.action ?? 'desconhecida'} | Pin ID: ${data.pinId || 'n/a'}`);
+    console.log('----------------------------\n');
 }
 
 function handlePinnedMessage(data) {
@@ -281,12 +298,15 @@ function handlePinnedMessage(data) {
     const pinnedUser = getPinnedUser(data, content);
     logPinnedComment(content, pinnedUser, data);
 
-    let isFollower = null;
-    const sourceUser = data.chatMessage?.user || data.pinMessage?.user || data.user || data;
-    if (sourceUser?.followInfo && typeof sourceUser.followInfo.followStatus === 'number') {
-        isFollower = sourceUser.followInfo.followStatus >= 1;
-    } else if (data.chatMessage?.isFollower !== undefined) {
-        isFollower = Boolean(data.chatMessage.isFollower);
+    let isFollower = pinnedUser.isFollower;
+
+    // Se ainda nulo, tenta buscar no buffer pelo uniqueId do autor identificado
+    if (isFollower === null && pinnedUser.uniqueId) {
+        const targetId = normalizeId(pinnedUser.uniqueId);
+        const lastKnown = chatBuffer.slice().reverse().find(m => normalizeId(m.uniqueId) === targetId);
+        if (lastKnown && lastKnown.isFollower !== undefined) {
+            isFollower = lastKnown.isFollower;
+        }
     }
 
     emitEvent('pinned-comment', {
@@ -346,15 +366,7 @@ async function analyzeMessage(data) {
     if (isRepeat) {
         if (!repeatAlertedSequences.has(seqKey)) {
             repeatAlertedSequences.add(seqKey);
-            emitEvent('flagged-message', {
-                uniqueId,
-                nickname,
-                comment,
-                reason: 'Mensagem repetida',
-                category: 'REPETICAO'
-            });
-
-            // sendRepeatWarning removido a pedido do usuário
+            // Removido a pedido do usuário: não alertar mensagem repetida como flag
         }
         return;
     }
@@ -384,11 +396,16 @@ async function connectToTiktok(username) {
     tiktokConnection = createTikTokConnection(username);
 
     tiktokConnection.on('chat', data => {
+        const user = getUserFromObject(data);
+        const isFollower = user.isFollower;
+
+
         const messageData = {
             uniqueId: data.uniqueId,
             nickname: data.nickname,
             comment: data.comment,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            isFollower: isFollower
         };
 
         void analyzeMessage(messageData).catch(err => {
