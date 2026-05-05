@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const { WebcastPushConnection } = require('tiktok-live-connector');
 const { aiConfigured, probeLlamaReady } = require('./ai');
 const { analyzeMessage: analyzeMessageModeration } = require('./moderation');
+const { addFeedback } = require('./database');
 
 let mainWindow;
 let tiktokConnection;
@@ -418,7 +419,7 @@ ipcMain.on('connect-tiktok', (event, username) => {
 
             // Realiza análise de moderação (Regex + IA Local) apenas se não for repetida
             // para evitar "falsos positivos" ou ruído excessivo.
-            analyzeMessageModeration(comment, data.uniqueId, data.nickname, chatBuffer)
+            analyzeMessageModeration(comment, data.uniqueId, data.nickname, chatBuffer, currentUsername || 'unknown')
                 .then(result => {
                     if (result.flagged) {
                         mainWindow.webContents.send('flagged-message', {
@@ -512,6 +513,15 @@ ipcMain.on('connect-tiktok', (event, username) => {
              // Pode ser um aviso de fixação
         }
     });
+});
+
+ipcMain.on('send-feedback', async (event, data) => {
+    try {
+        const { comment, category, expected } = data;
+        await addFeedback(comment, category, expected || 'NAO');
+    } catch (error) {
+        console.error('[Database] Erro ao salvar feedback via IPC:', error.message);
+    }
 });
 
 ipcMain.on('disconnect-tiktok', (event) => {

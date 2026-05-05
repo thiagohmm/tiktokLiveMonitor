@@ -3,22 +3,33 @@ services:
     build: .
     ports:
       - "${PORT:-3000}:3000"
-      # llama-server (só responde depois do container subir o modelo; curl no host precisa disto)
       - "${LLAMA_HOST_PORT:-8080}:8080"
     environment:
       HOST: "0.0.0.0"
       PORT: "3000"
-      # Opcional: já detectamos /.dockerenv no código; explícito para evitar dúvida
       LLAMA_SERVER_BIND: "0.0.0.0"
-      # Overlay Docker + mmap costuma ser mais estável que --no-mmap para o GGUF
       LLAMA_USE_MMAP: "1"
-      # Espera extra pelo /health na primeira carga (segundos entre polls ≈ 1s)
       LLAMA_HEALTH_MAX_ATTEMPTS: "180"
     shm_size: "512mb"
     volumes:
-      # Persiste ~800MB do GGUF + binários entre reinícios
       - llm-models:/app/models
       - llm-bin:/app/bin
+
+  ai-worker:
+    build: .
+    command: node worker.js
+    environment:
+      MASTER_URL: "http://tiktok-live-monitor:3000"
+      WORKER_PORT: "8081"
+      # O hostname no Docker é o ID do container ou o nome do serviço se for fixo. 
+      # Usaremos o IP interno ou deixaremos o Master resolver se estiver na mesma rede.
+      WORKER_HOST: "ai-worker" 
+    shm_size: "512mb"
+    volumes:
+      - llm-models:/app/models
+      - llm-bin:/app/bin
+    depends_on:
+      - tiktok-live-monitor
 
 volumes:
   llm-models:

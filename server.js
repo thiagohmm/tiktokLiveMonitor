@@ -5,8 +5,8 @@ const { spawn } = require('child_process');
 const { URL } = require('url');
 const { WebcastPushConnection } = require('tiktok-live-connector');
 const { analyzeMessage: analyzeMessageModeration, clearModerationCache } = require('./moderation');
-const { probeLlamaReady } = require('./ai');
-const { addFalsePositive } = require('./database');
+const { probeLlamaReady, registerWorker } = require('./ai');
+const { addFalsePositive, addFeedback, cleanupOldAnomalies } = require('./database');
 
 const HOST = process.env.HOST || '0.0.0.0';
 const PORT = Number(process.env.PORT) || 3000;
@@ -549,12 +549,12 @@ async function handleApiRequest(request, response, pathname) {
     if (request.method === 'POST' && pathname === '/api/feedback') {
         try {
             const body = await readRequestBody(request);
-            const { comment, category } = body;
+            const { comment, category, expected } = body;
             if (!comment || !category) {
                 sendJson(response, 400, { error: 'Comment e category são obrigatórios.' });
                 return true;
             }
-            await addFalsePositive(comment, category);
+            await addFeedback(comment, category, expected || 'NAO');
             sendJson(response, 200, { success: true });
         } catch (error) {
             sendJson(response, 500, { error: error.message });
@@ -647,3 +647,14 @@ function shutdownServer() {
 
 process.on('SIGTERM', shutdownServer);
 process.on('SIGINT', shutdownServer);
+rver);
+process.on('SIGINT', shutdownServer);
+llConnections();
+    }
+
+    setTimeout(() => process.exit(0), 2000);
+}
+
+process.on('SIGTERM', shutdownServer);
+process.on('SIGINT', shutdownServer);
+wnServer);

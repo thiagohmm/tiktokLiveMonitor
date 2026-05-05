@@ -380,10 +380,10 @@ function clearHistories() {
 function infractionCategoryLabel(category) {
     const map = {
         RELIGIAO: 'Matriz africana',
-        PROSELITISMO: 'Proselitismo',
+        PROSELITISMO: 'Proselitismo Cristão',
         SPAM: 'Spam',
         GOLPE: 'Golpe',
-        ODIO: 'Ódio',
+        ODIO: 'Ataque Pessoal',
         OUTRO: 'Outro',
         REPETICAO: 'Repetição'
     };
@@ -891,7 +891,7 @@ function addFlaggedMessageToList(data) {
     }
     const timerKey = `flagged-${Date.now()}-${Math.random()}`;
     const tr = document.createElement('tr');
-    tr.className = 'flagged-message-row';
+    tr.className = 'flagged-message-row blink-row';
 
     const tdUser = document.createElement('td');
     const spanUser = document.createElement('span');
@@ -922,35 +922,79 @@ function addFlaggedMessageToList(data) {
     spanReason.textContent = data.reason != null ? String(data.reason) : '';
     tdReason.appendChild(spanReason);
 
-    // Botão Falso Positivo (Aprendizado IA)
-    const btnFeedback = document.createElement('button');
-    btnFeedback.className = 'action-btn small-btn';
-    btnFeedback.style.marginLeft = '10px';
-    btnFeedback.style.backgroundColor = '#666';
-    btnFeedback.textContent = 'Falso Positivo';
-    btnFeedback.onclick = async () => {
+    // Botoes de Feedback (Aprendizado IA)
+    const btnContainer = document.createElement('div');
+    btnContainer.style.marginTop = '8px';
+    btnContainer.style.display = 'flex';
+    btnContainer.style.gap = '5px';
+
+    const sendFeedback = async (expected, btnOk, btnNao) => {
         try {
+            if (isElectron && ipcRenderer) {
+                ipcRenderer.send('send-feedback', {
+                    comment: data.comment,
+                    category: data.category,
+                    expected: expected
+                });
+                // Simula sucesso imediato no UI
+                tr.classList.remove('blink-row');
+                tr.style.opacity = '0.7';
+                tr.style.backgroundColor = expected === 'NAO' ? '#e8f5e9' : '#fff3e0';
+                btnOk.disabled = true;
+                btnNao.disabled = true;
+                btnOk.textContent = expected !== 'NAO' ? 'Confirmado' : 'Confirmar';
+                btnNao.textContent = expected === 'NAO' ? 'Enviado' : 'Falso Positivo';
+                
+                if (flaggedMessageTimers[timerKey]) {
+                    clearTimeout(flaggedMessageTimers[timerKey]);
+                    flaggedMessageTimers[timerKey] = setTimeout(() => tr.remove(), 10000);
+                }
+                return;
+            }
+
             const resp = await fetch('/api/feedback', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ comment: data.comment, category: data.category })
+                body: JSON.stringify({ 
+                    comment: data.comment, 
+                    category: data.category,
+                    expected: expected 
+                })
             });
             if (resp.ok) {
-                tr.style.opacity = '0.5';
-                tr.style.backgroundColor = '#e8f5e9';
-                btnFeedback.disabled = true;
-                btnFeedback.textContent = 'Enviado';
+                tr.classList.remove('blink-row');
+                tr.style.opacity = '0.7';
+                tr.style.backgroundColor = expected === 'NAO' ? '#e8f5e9' : '#fff3e0';
+                btnOk.disabled = true;
+                btnNao.disabled = true;
+                btnOk.textContent = expected !== 'NAO' ? 'Confirmado' : 'Confirmar';
+                btnNao.textContent = expected === 'NAO' ? 'Enviado' : 'Falso Positivo';
+                
                 if (flaggedMessageTimers[timerKey]) {
                     clearTimeout(flaggedMessageTimers[timerKey]);
-                    // Estende o tempo para o usuário ver que foi enviado
-                    flaggedMessageTimers[timerKey] = setTimeout(() => tr.remove(), 5000);
+                    flaggedMessageTimers[timerKey] = setTimeout(() => tr.remove(), 10000);
                 }
             }
         } catch (e) {
             console.error('Erro ao enviar feedback:', e);
         }
     };
-    tdReason.appendChild(btnFeedback);
+
+    const btnConfirm = document.createElement('button');
+    btnConfirm.className = 'action-btn small-btn';
+    btnConfirm.textContent = 'Confirmar';
+    
+    const btnFalsePositive = document.createElement('button');
+    btnFalsePositive.className = 'action-btn small-btn';
+    btnFalsePositive.style.backgroundColor = '#666';
+    btnFalsePositive.textContent = 'Falso Positivo';
+
+    btnConfirm.onclick = () => sendFeedback(`SIM_${data.category || 'OUTRO'}`, btnConfirm, btnFalsePositive);
+    btnFalsePositive.onclick = () => sendFeedback('NAO', btnConfirm, btnFalsePositive);
+
+    btnContainer.appendChild(btnConfirm);
+    btnContainer.appendChild(btnFalsePositive);
+    tdReason.appendChild(btnContainer);
 
     tr.appendChild(tdUser);
     tr.appendChild(tdMsg);
@@ -962,7 +1006,7 @@ function addFlaggedMessageToList(data) {
     flaggedMessageTimers[timerKey] = setTimeout(() => {
         tr.remove();
         delete flaggedMessageTimers[timerKey];
-    }, 30 * 1000);
+    }, 60 * 1000); // Aumentado para 60s para dar tempo do usuario ver e clicar
 
     if (flaggedMessagesTableBody.children.length > 50) {
         flaggedMessagesTableBody.lastChild.remove();

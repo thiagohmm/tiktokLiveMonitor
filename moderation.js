@@ -6,7 +6,7 @@ const aiCache = new Map();
 const AI_CACHE_MAX = 150;
 
 let aiModerationCooldownUntil = 0;
-const AI_MODERATION_COOLDOWN_MS = 120_000;
+const AI_MODERATION_COOLDOWN_MS = 30_000;
 
 function foldChatText(text) {
     return String(text || '')
@@ -132,12 +132,15 @@ function passesPersonalAttackAiGate(commentFolded) {
     return false;
 }
 
+const { logAnomaly } = require('./database');
+
 const CATEGORY_LABELS = {
-    RELIGIAO: 'Ataque a matriz africana / Orixás (IA)',
-    PROSELITISMO: 'Proselitismo ou condenação religiosa (IA)',
+    RELIGIAO: 'Matriz Africana',
+    PROSELITISMO: 'Proselitismo Cristão',
     SPAM: 'Spam / propaganda (IA)',
     GOLPE: 'Possível golpe ou fraude (IA)',
     ODIO: 'Ódio / insulto grave (IA)',
+    PERGUNTA: 'Pergunta / Dúvida (IA)',
     OUTRO: 'Conteúdo impróprio (IA)'
 };
 
@@ -160,11 +163,13 @@ function parseBinaryReligiousAnswer(raw) {
         ['sim_religiao', 'RELIGIAO'],
         ['sim_spam', 'SPAM'],
         ['sim_golpe', 'GOLPE'],
+        ['sim_pergunta', 'PERGUNTA'],
         ['sim_outro', 'OUTRO']
     ];
     for (const [prefix, category] of prefixMap) {
         if (key === prefix || key.startsWith(prefix)) {
-            return { flagged: true, category };
+            // PERGUNTA não deve ser considerada infração/anomalia conforme pedido do usuário
+            return { flagged: category !== 'PERGUNTA', category };
         }
     }
 
@@ -186,68 +191,65 @@ function recentChatBlock(chatBuffer, limit = 14) {
         .join('\n');
 }
 
-async function analyzeMessage(comment, uniqueId, nickname, chatBuffer) {
+async function analyzeMessage(comment, uniqueId, nickname, chatBuffer, liveName = 'unknown') {
     const commentLower = comment.trim().toLowerCase();
-    
-    // 1. Verificação de Repetição (opcional, pode ser movida para aqui se quiser)
-    // Para simplificar, focaremos no conteúdo ofensivo
-    
     const folded = foldChatText(commentLower);
 
-    // 2. Filtros de Regex (Rápido)
+    // 1. Filtros de Regex (Rápido) - Mantemos para agilizar flag óbvia, mas o log passará pela IA
     if (looksObviousAttackOnAfroBrazilianReligion(commentLower)) {
-        return { flagged: true, reason: 'Ataque a matriz africana / Orixás (filtro)', category: 'RELIGIAO' };
+        const res = { flagged: true, reason: 'Ataque a matriz africana / Orixás (filtro)', category: 'RELIGIAO' };
+        void logAnomaly(liveName, comment, true, res.category, uniqueId).catch(() => {});
+        return res;
     }
 
-    // 2.1 AI Gates (Pré-filtros para evitar chamadas desnecessárias à IA)
-    const isSuspicious =
-        looksExplicitChristianProselytizing(commentLower) ||
-        passesChristianModerationAiGate(commentLower) ||
-        passesSpamScamAiGate(comment, folded) ||
-        passesPersonalAttackAiGate(folded);
-
-    if (!isSuspicious) {
-        return { flagged: false };
-    }
-
-    // 3. Gate da IA (Perguntas não passam pela IA)
-    if (comment.includes('?')) {
-        return { flagged: false };
-    }
-
+    // 2. IA Gate (Removido o isSuspicious para que TODAS passem pela classificação de anomalias via IA)
+    // No entanto, ainda evitamos perguntas ou cooldowns graves se o servidor estiver caído.
     if (Date.now() < aiModerationCooldownUntil) {
         return { flagged: false };
     }
 
-    // 4. Cache da IA (mensagem normalizada; contexto não entra na chave para hit-rate)
+    // 3. Cache da IA (mensagem normalizada)
     const aiCacheKey = folded.slice(0, 500);
+    let result;
+    
     if (aiCache.has(aiCacheKey)) {
-        return aiCache.get(aiCacheKey);
+        result = aiCache.get(aiCacheKey);
+    } else {
+        // 4. Chamada à IA Local (Pool distribuído no ai.js)
+        try {
+            const systemPrompt = await getModerationSystemPrompt();
+            const userPrompt =
+                `Contexto recente (mensagens anteriores na live):\n${recentChatBlock(chatBuffer)}\n\n` +
+                `Autor do comentário: ${JSON.stringify(nickname || uniqueId || '')}\n` +
+                `Texto para analisar (ignore menções @nome no início): ${JSON.stringify(comment)}`;
+
+            const raw = await completeModeration(systemPrompt, userPrompt, 48);
+            const { flagged, category } = parseBinaryReligiousAnswer(raw);
+            const reason = flagged ? CATEGORY_LABELS[category] || CATEGORY_LABELS.OUTRO : null;
+
+            result = { flagged, reason, category };
+            
+            if (flagged) {
+                console.log(`[AI] ⚠️ CONTEÚDO FLAGADO: [${category}] - "${comment}"`);
+            } else {
+                console.log(`[AI] ✅ Conteúdo liberado: "${comment.substring(0, 50)}${comment.length > 50 ? '...' : ''}"`);
+            }
+
+            aiCache.set(aiCacheKey, result);
+            if (aiCache.size > AI_CACHE_MAX) aiCache.delete(aiCache.keys().next().value);
+        } catch (error) {
+            aiModerationCooldownUntil = Date.now() + AI_MODERATION_COOLDOWN_MS;
+            console.warn('[AI] Moderação local pausada (falha no cluster):', error.message);
+            return { flagged: false };
+        }
     }
 
-    // 5. Chamada à IA Local (fila serial em ai.js)
-    try {
-        const systemPrompt = await getModerationSystemPrompt();
-        const userPrompt =
-            `Contexto recente (mensagens anteriores na live):\n${recentChatBlock(chatBuffer)}\n\n` +
-            `Autor do comentário: ${JSON.stringify(nickname || uniqueId || '')}\n` +
-            `Texto para analisar (ignore menções @nome no início): ${JSON.stringify(comment)}`;
+    // 5. Salva no banco de dados de anomalias (requisito do usuário)
+    void logAnomaly(liveName, comment, result.flagged, result.category, uniqueId).catch(err => {
+        console.error('[Database] Erro ao logar anomalia:', err.message);
+    });
 
-        const raw = await completeModeration(systemPrompt, userPrompt, 48);
-        const { flagged, category } = parseBinaryReligiousAnswer(raw);
-        const reason = flagged ? CATEGORY_LABELS[category] || CATEGORY_LABELS.OUTRO : null;
-
-        const result = { flagged, reason, category };
-
-        aiCache.set(aiCacheKey, result);
-        if (aiCache.size > AI_CACHE_MAX) aiCache.delete(aiCache.keys().next().value);
-
-        return result;
-    } catch (error) {
-        aiModerationCooldownUntil = Date.now() + AI_MODERATION_COOLDOWN_MS;
-        console.warn('[AI] Moderação local pausada:', error.message);
-        return { flagged: false };
-    }
+    return result;
 }
 
 function clearModerationCache() {

@@ -1,4 +1,4 @@
-const { addFalsePositive, getRecentFalsePositives } = require('./database');
+const { addFalsePositive, getRecentFeedbacks } = require('./database');
 const { getModerationSystemPrompt } = require('./moderation-prompt');
 
 async function test() {
@@ -11,7 +11,7 @@ async function test() {
     await addFalsePositive(comment, category);
 
     // 2. Verificar no banco
-    const recent = await getRecentFalsePositives(1);
+    const recent = await getRecentFeedbacks(1);
     console.log('Recuperado do banco:', recent[0]);
 
     if (recent[0].comment === comment) {
