@@ -11,33 +11,48 @@ const {
     getSettings,
     forceCheck
 } = require('./main');
-const { getRecentModerations, clearHistory, deleteModeration } = require('./database');
-const { probeLlamaReady } = require('./ai');
+const { getRecentModerations, clearHistory, deleteModeration, addFeedback } = require('./database');
+const { probeLlamaReady, aiConfigured } = require('./ai');
 
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
-const HOST = process.env.HOST || 'localhost';
+const HOST = process.env.HOST || '0.0.0.0'; // Garante escuta em todas interfaces no Docker
 
 app.use(express.json());
 app.use(express.static(__dirname));
 
+// Rota para o Chart.js (UMD build para o navegador)
+app.get('/vendor/chart.js', (req, res) => {
+    res.sendFile(path.join(__dirname, 'node_modules', 'chart.js', 'dist', 'chart.umd.js'));
+});
+
 // SSE: Server-Sent Events para atualizar a UI em tempo real
 const sseClients = new Set();
 
-app.get('/api/events', (req, res) => {
+app.get('/events', (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
+
+    // Enviar estado inicial para o cliente que acabou de conectar
+    const state = getState();
+    const initialState = {
+        ...state,
+        aiConfigured: aiConfigured()
+    };
+    res.write(`event: server-state\ndata: ${JSON.stringify(initialState)}\n\n`);
 
     sseClients.add(res);
     req.on('close', () => sseClients.delete(res));
 });
 
 function broadcast(type, data) {
-    const payload = JSON.stringify({ type, data });
+    const payload = JSON.stringify(data);
     for (const client of sseClients) {
+        // SSE format: event: type\ndata: payload\n\n
+        client.write(`event: ${type}\n`);
         client.write(`data: ${payload}\n\n`);
     }
 }
@@ -57,7 +72,7 @@ app.get('/api/history', async (req, res) => {
     }
 });
 
-app.post('/api/start', async (req, res) => {
+app.post('/api/connect', async (req, res) => {
     const { username } = req.body;
     if (!username) return res.status(400).json({ error: 'Username is required' });
     
@@ -69,7 +84,7 @@ app.post('/api/start', async (req, res) => {
     }
 });
 
-app.post('/api/stop', (req, res) => {
+app.post('/api/disconnect', (req, res) => {
     stopMonitoring();
     res.json({ success: true });
 });
@@ -106,12 +121,22 @@ app.post('/api/force-check', async (req, res) => {
     }
 });
 
-app.get('/api/ai-status', async (req, res) => {
+app.post('/api/feedback', async (req, res) => {
+    const { comment, category, expected } = req.body;
+    try {
+        await addFeedback(comment, category, expected);
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/probe-llm', async (req, res) => {
     try {
         const ready = await probeLlamaReady();
-        res.json({ ready });
+        res.json({ llmActive: ready });
     } catch (err) {
-        res.json({ ready: false, error: err.message });
+        res.json({ llmActive: false, error: err.message });
     }
 });
 

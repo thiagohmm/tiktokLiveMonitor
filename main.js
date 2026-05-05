@@ -64,30 +64,39 @@ async function startMonitoring(username) {
     tiktokConnection = new WebcastPushConnection(username);
 
     tiktokConnection.on('chat', async (data) => {
-        emit('chat', data);
+        emit('new-chat-message', data);
+        
         if (settings.moderationEnabled) {
             const result = await analyzeMessageModeration(data.comment, data.uniqueId);
             if (result.flagged) {
-                emit('moderation-alert', { ...result, uniqueId: data.uniqueId, comment: data.comment });
+                emit('flagged-message', { ...result, uniqueId: data.uniqueId, comment: data.comment, nickname: data.nickname });
             }
         }
     });
 
     tiktokConnection.on('gift', (data) => {
+        // Emitir para todos os presentes
+        emit('any-gift-received', data);
+
+        // Emitir apenas para presentes alvos
         if (isTargetGift(data.giftName) && isGiftCountingSettlement(data)) {
-            emit('gift', data);
+            emit('new-gift-user', data);
         }
     });
 
+    tiktokConnection.on('member', (data) => {
+        emit('live-user-connected', data);
+    });
+
     tiktokConnection.on('error', (err) => {
-        emit('error', err.message);
+        emit('connection-status', { success: false, error: err.message });
     });
 
     try {
         await tiktokConnection.connect();
-        emit('connected', { username });
+        emit('connection-status', { success: true, username });
     } catch (err) {
-        emit('error', `Falha ao conectar: ${err.message}`);
+        emit('connection-status', { success: false, error: `Falha ao conectar: ${err.message}` });
         throw err;
     }
 }
@@ -96,7 +105,7 @@ function stopMonitoring() {
     if (tiktokConnection) {
         tiktokConnection.disconnect();
         tiktokConnection = null;
-        emit('disconnected', { username: currentUsername });
+        emit('connection-status', { success: false, error: 'Desconectado pelo usuário' });
     }
 }
 
