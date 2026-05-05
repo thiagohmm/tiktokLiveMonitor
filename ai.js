@@ -269,7 +269,10 @@ process.on('SIGTERM', stopLlamaServer);
 process.on('exit', stopLlamaServer);
 
 async function probeLlamaReady() {
-    if (!aiWorker) await spawnLocalWorker(BASE_PORT);
+    if (!aiWorker) {
+        await spawnLocalWorker(BASE_PORT);
+    }
+    if (!aiWorker) return false;
     const healthy = await aiWorker.checkHealth();
     console.log(`[AI-Status] Verificação de saúde: ${healthy ? 'OK' : 'FALHA'}`);
     return healthy;
