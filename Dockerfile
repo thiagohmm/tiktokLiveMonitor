@@ -23,7 +23,7 @@ COPY package*.json ./
 ENV SKIP_POSTINSTALL=1
 RUN npm ci --omit=dev
 
-COPY server.js ai.js llm-model.js moderation.js moderation-prompt.js database.js index.html renderer.js ./
+COPY server.js main.js ai.js llm-model.js moderation.js moderation-prompt.js database.js index.html renderer.js ./
 COPY scripts/ ./scripts/
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
