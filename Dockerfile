@@ -19,7 +19,7 @@ COPY scripts/setup-llm.js scripts/setup-llm.js
 
 RUN npm ci --omit=dev --ignore-scripts
 
-COPY server.js ai.js llm-model.js moderation.js moderation-prompt.js index.html renderer.js ./
+COPY server.js ai.js llm-model.js moderation.js moderation-prompt.js database.js index.html renderer.js ./
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
