@@ -24,9 +24,10 @@
   "description": "",
   "dependencies": {
     "chart.js": "^4.5.1",
+    "sqlite3": "^6.0.1",
+    "tar": "^7.4.3",
     "tiktok-live-connector": "^2.1.1-beta1",
-    "unzipper": "^0.12.3",
-    "tar": "^7.4.3"
+    "unzipper": "^0.12.3"
   },
   "devDependencies": {
     "electron": "^41.3.0",
