@@ -26,8 +26,6 @@ const usernameInput = document.getElementById('username');
 const connectBtn = document.getElementById('connectBtn');
 const disconnectBtn = document.getElementById('disconnectBtn');
 const listenBtn = document.getElementById('listenBtn');
-const botLoginBtn = document.getElementById('botLoginBtn');
-const botStatusDiv = document.getElementById('botStatus');
 const statusDiv = document.getElementById('status');
 const userTableBody = document.getElementById('userTableBody');
 const allGiftsTableBody = document.getElementById('allGiftsTableBody');
@@ -49,6 +47,8 @@ const historyModalCloseBtn = document.getElementById('historyModalCloseBtn');
 let chart;
 let messageCount = 0;
 let chartData = Array(60).fill(0);
+let giftCount = 0;
+let giftChartData = Array(60).fill(0);
 let autoRemoveTimers = {};
 let pinnedCommentTimers = {};
 let flaggedMessageTimers = {};
@@ -271,121 +271,7 @@ function renderActiveModal() {
         renderPinnedCommentHistory();
     } else if (activeModalType === 'listen') {
         renderListenModal();
-    } else if (activeModalType === 'bot-config') {
-        renderBotConfigModal();
     }
-}
-
-async function updateBotStatusBrowser() {
-    if (isElectron) return;
-    try {
-        const res = await fetch('/api/bot-status');
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!botStatusDiv) return;
-        botStatusDiv.style.display = 'block';
-        botStatusDiv.textContent = `Bot: ${data.text}`;
-        botStatusDiv.style.color = data.active ? '#22c55e' : '#666';
-    } catch (e) {}
-}
-
-function renderBotConfigModal() {
-    historyModalTitle.textContent = 'Configuração do Bot';
-    historyModalBody.replaceChildren();
-
-    const container = document.createElement('div');
-    container.style.display = 'flex';
-    container.style.flexDirection = 'column';
-    container.style.gap = '14px';
-
-    const help = document.createElement('p');
-    help.style.fontSize = '0.92em';
-    help.style.color = '#555';
-    help.style.margin = '0 0 4px 0';
-    help.textContent = 'No Docker/Navegador, o login automático não é possível. Insira os cookies da sua conta manualmente.';
-    container.appendChild(help);
-
-    const tiktokLink = document.createElement('button');
-    tiktokLink.className = 'secondary-btn small-btn';
-    tiktokLink.textContent = '1. Abrir TikTok para Login';
-    tiktokLink.style.alignSelf = 'flex-start';
-    tiktokLink.onclick = () => window.open('https://www.tiktok.com', '_blank');
-    container.appendChild(tiktokLink);
-
-    const form = document.createElement('div');
-    form.style.display = 'flex';
-    form.style.flexDirection = 'column';
-    form.style.gap = '10px';
-    form.style.padding = '12px';
-    form.style.background = '#f9f9f9';
-    form.style.borderRadius = '6px';
-    form.style.border = '1px solid #eee';
-
-    const sessionLabel = document.createElement('label');
-    sessionLabel.textContent = '2. Cookie sessionid:';
-    sessionLabel.style.fontWeight = 'bold';
-    sessionLabel.style.fontSize = '0.85em';
-    form.appendChild(sessionLabel);
-
-    const sessionInput = document.createElement('input');
-    sessionInput.type = 'text';
-    sessionInput.placeholder = 'Cole o valor do cookie sessionid aqui...';
-    sessionInput.style.padding = '10px';
-    sessionInput.style.border = '1px solid #ccc';
-    sessionInput.style.borderRadius = '4px';
-    form.appendChild(sessionInput);
-
-    const idcLabel = document.createElement('label');
-    idcLabel.textContent = '3. Cookie tt-target-idc (opcional):';
-    idcLabel.style.fontWeight = 'bold';
-    idcLabel.style.fontSize = '0.85em';
-    form.appendChild(idcLabel);
-
-    const idcInput = document.createElement('input');
-    idcInput.type = 'text';
-    idcInput.placeholder = 'Ex: useast2a';
-    idcInput.style.padding = '10px';
-    idcInput.style.border = '1px solid #ccc';
-    idcInput.style.borderRadius = '4px';
-    form.appendChild(idcInput);
-
-    const saveBtn = document.createElement('button');
-    saveBtn.textContent = 'Salvar e Ativar Bot';
-    saveBtn.style.marginTop = '6px';
-    saveBtn.onclick = async () => {
-        const sid = sessionInput.value.trim();
-        if (!sid) {
-            alert('Por favor, insira o sessionid.');
-            return;
-        }
-        saveBtn.disabled = true;
-        saveBtn.textContent = 'Salvando...';
-        try {
-            const res = await fetch('/api/bot-config', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    sessionId: sid,
-                    ttTargetIdc: idcInput.value.trim()
-                })
-            });
-            if (res.ok) {
-                closeHistoryModal();
-                updateBotStatusBrowser();
-            } else {
-                alert('Erro ao salvar configuração no servidor.');
-            }
-        } catch (e) {
-            alert('Falha de conexão com o servidor.');
-        } finally {
-            saveBtn.disabled = false;
-            saveBtn.textContent = 'Salvar e Ativar Bot';
-        }
-    };
-    form.appendChild(saveBtn);
-
-    container.appendChild(form);
-    historyModalBody.appendChild(container);
 }
 
 function openHistoryModal(type) {
@@ -525,14 +411,24 @@ function createChart(ChartLib) {
         type: 'line',
         data: {
             labels: Array(60).fill('').map((_, index) => `${60 - index}s atrás`),
-            datasets: [{
-                label: 'Mensagens por segundo',
-                data: chartData,
-                borderColor: '#fe2c55',
-                backgroundColor: 'rgba(254, 44, 85, 0.1)',
-                fill: true,
-                tension: 0.4
-            }]
+            datasets: [
+                {
+                    label: 'Mensagens/s',
+                    data: chartData,
+                    borderColor: '#fe2c55',
+                    backgroundColor: 'rgba(254, 44, 85, 0.1)',
+                    fill: true,
+                    tension: 0.4
+                },
+                {
+                    label: 'Presentes/s',
+                    data: giftChartData,
+                    borderColor: '#22c55e',
+                    backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                    fill: true,
+                    tension: 0.4
+                }
+            ]
         },
         options: {
             responsive: true,
@@ -547,7 +443,7 @@ function createChart(ChartLib) {
                 }
             },
             plugins: {
-                legend: { display: false }
+                legend: { display: true, position: 'top' }
             },
             animation: false
         }
@@ -561,31 +457,17 @@ setInterval(() => {
     chartData.push(messageCount);
     chartData.shift();
     messageCount = 0;
+
+    giftChartData.push(giftCount);
+    giftChartData.shift();
+    giftCount = 0;
+
     chart.update();
 }, 1000);
 
 targetGiftHistoryBtn.addEventListener('click', () => openHistoryModal('target-gifts'));
 pinnedCommentHistoryBtn.addEventListener('click', () => openHistoryModal('pinned-comments'));
 listenBtn.addEventListener('click', () => openHistoryModal('listen'));
-
-botLoginBtn.style.display = 'inline-block';
-
-if (isElectron) {
-    botLoginBtn.addEventListener('click', () => {
-        ipcRenderer.send('open-bot-window');
-    });
-
-    ipcRenderer.on('bot-status', (event, data) => {
-        if (!botStatusDiv) return;
-        botStatusDiv.style.display = 'block';
-        botStatusDiv.textContent = `Bot: ${data.text}`;
-        botStatusDiv.style.color = data.active ? '#22c55e' : '#666';
-    });
-} else {
-    botLoginBtn.addEventListener('click', () => {
-        openHistoryModal('bot-config');
-    });
-}
 
 historyModalCloseBtn.addEventListener('click', closeHistoryModal);
 historyModalBackdrop.addEventListener('click', event => {
@@ -864,6 +746,7 @@ function addAllGiftToList(gift) {
         return;
     }
 
+    giftCount++;
     rememberLiveUser(gift);
 
     const quantity = Math.max(1, Number(gift.repeatCount) || 1);
@@ -923,7 +806,15 @@ function addPinnedCommentToList(pinnedComment) {
     const userTd = document.createElement('td');
     const userSpan = document.createElement('span');
     userSpan.className = 'user-name';
-    userSpan.innerText = pinnedComment.nickname || pinnedComment.uniqueId || 'Nao identificado';
+
+    let displayName = pinnedComment.nickname || pinnedComment.uniqueId || 'Nao identificado';
+    if (pinnedComment.isFollower === true) {
+        displayName += ' (Seguidor)';
+    } else if (pinnedComment.isFollower === false) {
+        displayName += ' (Não Segue)';
+    }
+
+    userSpan.innerText = displayName;
     userTd.appendChild(userSpan);
 
     const commentTd = document.createElement('td');
@@ -1167,7 +1058,6 @@ async function bootstrap() {
     } else {
         await loadInitialState();
         setupEventStream();
-        updateBotStatusBrowser();
     }
 }
 

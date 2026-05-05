@@ -4,7 +4,6 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "start:python-chat": "TIKTOKLIVE_PYTHON_CHAT=1 WHITELIST_AUTHENTICATED_SESSION_ID_HOST=tiktok.eulerstream.com electron .",
     "start:web": "node server.js",
     "docker:build": "docker compose build",
     "docker:up": "docker compose up",
@@ -18,8 +17,7 @@
     "setup-llm:linux:arm64": "node scripts/setup-llm.js linux arm64",
     "setup-llm:linux:x64": "node scripts/setup-llm.js linux x64",
     "setup-llm:win:x64": "node scripts/setup-llm.js win x64",
-    "chat-llm": "node scripts/chat-llm.js",
-    "setup-python": "python3 -m pip install -r requirements-python.txt"
+    "chat-llm": "node scripts/chat-llm.js"
   },
   "author": "",
   "license": "ISC",

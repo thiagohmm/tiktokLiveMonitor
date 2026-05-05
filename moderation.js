@@ -202,11 +202,8 @@ async function analyzeMessage(comment, uniqueId, nickname, chatBuffer) {
         return { flagged: true, reason: 'Proselitismo cristão (filtro)', category: 'PROSELITISMO' };
     }
 
-    // 3. Gate da IA (religião/proselitismo, spam/golpe OU suspeita de ataque pessoal)
-    const christianGate = passesChristianModerationAiGate(commentLower);
-    const spamGate = passesSpamScamAiGate(comment, folded);
-    const personalGate = passesPersonalAttackAiGate(folded);
-    if (!christianGate && !spamGate && !personalGate) {
+    // 3. Gate da IA (Perguntas não passam pela IA)
+    if (comment.includes('?')) {
         return { flagged: false };
     }
 
@@ -225,7 +222,7 @@ async function analyzeMessage(comment, uniqueId, nickname, chatBuffer) {
         const userPrompt =
             `Contexto recente (mensagens anteriores na live):\n${recentChatBlock(chatBuffer)}\n\n` +
             `Autor do comentário: ${JSON.stringify(nickname || uniqueId || '')}\n` +
-            `Texto para analisar:\n${JSON.stringify(comment)}`;
+            `Texto para analisar (ignore menções @nome no início): ${JSON.stringify(comment)}`;
 
         const raw = await completeModeration(BINARY_RELIGIOUS_MODERATION_SYSTEM, userPrompt, 48);
         const { flagged, category } = parseBinaryReligiousAnswer(raw);

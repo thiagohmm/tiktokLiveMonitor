@@ -82,154 +82,6 @@ function readRequestBody(request) {
     });
 }
 
-let botCookies = {
-    sessionId: process.env.TIKTOK_SESSION_ID || '',
-    ttTargetIdc: process.env.TIKTOK_TT_TARGET_IDC || ''
-};
-
-function getBotCookies() {
-    return botCookies;
-}
-
-function pythonChatSenderEnabled() {
-    return Boolean(getBotCookies().sessionId);
-}
-
-function pythonExecutable() {
-    return process.env.PYTHON || process.env.PYTHON_BIN || 'python3';
-}
-
-function getEnvTikTokCookies() {
-    return getBotCookies();
-}
-
-function getCurrentRoomId() {
-    if (!tiktokConnection) {
-        return null;
-    }
-
-    if (typeof tiktokConnection.getRoomId === 'function') {
-        return tiktokConnection.getRoomId();
-    }
-
-    return tiktokConnection.roomId || null;
-}
-
-function runPythonChatSender(username, text, cookies, force = false) {
-    return new Promise((resolve) => {
-        if (!force && !pythonChatSenderEnabled()) {
-            resolve({ ok: false, skipped: true, reason: 'TIKTOKLIVE_PYTHON_CHAT não está ativo.' });
-            return;
-        }
-
-        if (!username) {
-            resolve({ ok: false, reason: 'Live atual não identificada.' });
-            return;
-        }
-
-        if (!cookies.sessionId) {
-            resolve({ ok: false, reason: 'TIKTOK_SESSION_ID não está definido.' });
-            return;
-        }
-
-        const scriptPath = path.join(ROOT_DIR, 'scripts', 'send-tiktok-chat.py');
-        const args = [
-            scriptPath,
-            '--username', username,
-            '--message', text,
-            '--session-id', cookies.sessionId
-        ];
-
-        const roomId = getCurrentRoomId();
-        if (roomId) {
-            args.push('--room-id', roomId);
-        }
-
-        if (cookies.ttTargetIdc) {
-            args.push('--tt-target-idc', cookies.ttTargetIdc);
-        }
-
-        const env = {
-            ...process.env,
-            PYTHONUNBUFFERED: '1',
-            WHITELIST_AUTHENTICATED_SESSION_ID_HOST: 'tiktok.eulerstream.com'
-        };
-
-        const child = spawn(pythonExecutable(), args, {
-            cwd: ROOT_DIR,
-            env,
-            stdio: ['ignore', 'pipe', 'pipe']
-        });
-
-        let stdout = '';
-        let stderr = '';
-
-        child.stdout.on('data', chunk => {
-            stdout += chunk.toString();
-        });
-
-        child.stderr.on('data', chunk => {
-            stderr += chunk.toString();
-        });
-
-        child.on('error', error => {
-            resolve({ ok: false, reason: error.message });
-        });
-
-        child.on('close', code => {
-            const output = stdout.trim();
-            let payload = null;
-
-            if (output) {
-                try {
-                    payload = JSON.parse(output.split('\n').pop());
-                } catch {
-                    payload = null;
-                }
-            }
-
-            if (code === 0 && payload?.ok) {
-                resolve({ ok: true, method: 'python', response: payload.response || null });
-                return;
-            }
-
-            resolve({
-                ok: false,
-                skipped: !force && !pythonChatSenderEnabled(),
-                reason: payload?.error || stderr.trim() || output || `Python saiu com código ${code}.`
-            });
-        });
-    });
-}
-
-async function sendBotMessage(text) {
-    const result = await runPythonChatSender(currentUsername, text, getEnvTikTokCookies());
-
-    if (result.ok) {
-        console.log('[Bot] Mensagem enviada via TikTokLive Python. Response:', result.response);
-        return true;
-    }
-
-    if (!result.skipped) {
-        console.log('[Bot] Mensagem não enviada via Python:', result.reason || result.error || 'Erro desconhecido');
-    }
-
-    return false;
-}
-
-async function sendRepeatWarning(data) {
-    const mention = data.uniqueId || data.nickname;
-    const prefix = mention ? `@${mention}` : String(data.nickname || 'Atenção');
-    const sent = await sendBotMessage(`${prefix} Por favor, evite enviar mensagens repetidas na live!`);
-
-    if (!sent && pythonChatSenderEnabled()) {
-        console.log('[Bot] Aviso de repetição não enviado.', {
-            user: data.uniqueId || data.nickname || null,
-            hasSessionId: Boolean(process.env.TIKTOK_SESSION_ID)
-        });
-    }
-}
-
 function normalizeId(value) {
     return String(value || '').toLowerCase();
 }
@@ -428,12 +280,21 @@ function handlePinnedMessage(data) {
     const pinnedUser = getPinnedUser(data, content);
     logPinnedComment(content, pinnedUser, data);
 
+    let isFollower = null;
+    const sourceUser = data.chatMessage?.user || data.pinMessage?.user || data.user || data;
+    if (sourceUser?.followInfo && typeof sourceUser.followInfo.followStatus === 'number') {
+        isFollower = sourceUser.followInfo.followStatus >= 1;
+    } else if (data.chatMessage?.isFollower !== undefined) {
+        isFollower = Boolean(data.chatMessage.isFollower);
+    }
+
     emitEvent('pinned-comment', {
         uniqueId: pinnedUser.uniqueId,
         nickname: pinnedUser.nickname || pinnedUser.uniqueId || 'Nao identificado',
         comment: content || '[sem texto identificado]',
         pinId: data.pinId || data.msgId || null,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        isFollower: isFollower
     });
 
     if (pinnedUser.uniqueId) {
@@ -492,7 +353,7 @@ async function analyzeMessage(data) {
                 category: 'REPETICAO'
             });
 
-            void sendRepeatWarning(data);
+            // sendRepeatWarning removido a pedido do usuário
         }
         return;
     }
@@ -631,29 +492,6 @@ async function handleApiRequest(request, response, pathname) {
     if (request.method === 'GET' && pathname === '/api/probe-llm') {
         const llmActive = await probeLlamaReady();
         sendJson(response, 200, { llmActive });
-        return true;
-    }
-
-    if (request.method === 'GET' && pathname === '/api/bot-status') {
-        const cookies = getBotCookies();
-        const active = pythonChatSenderEnabled();
-        sendJson(response, 200, {
-            active,
-            text: active ? 'Ativo (Configurado)' : 'Inativo (Sem sessionid)'
-        });
-        return true;
-    }
-
-    if (request.method === 'POST' && pathname === '/api/bot-config') {
-        try {
-            const body = await readRequestBody(request);
-            if (body.sessionId !== undefined) botCookies.sessionId = String(body.sessionId || '').trim();
-            if (body.ttTargetIdc !== undefined) botCookies.ttTargetIdc = String(body.ttTargetIdc || '').trim();
-
-            sendJson(response, 200, { success: true });
-        } catch (error) {
-            sendJson(response, 400, { error: 'Dados inválidos.' });
-        }
         return true;
     }
 
