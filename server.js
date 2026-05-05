@@ -6,6 +6,7 @@ const { URL } = require('url');
 const { WebcastPushConnection } = require('tiktok-live-connector');
 const { analyzeMessage: analyzeMessageModeration, clearModerationCache } = require('./moderation');
 const { probeLlamaReady } = require('./ai');
+const { addFalsePositive } = require('./database');
 
 const HOST = process.env.HOST || '0.0.0.0';
 const PORT = Number(process.env.PORT) || 3000;
@@ -525,6 +526,22 @@ async function handleApiRequest(request, response, pathname) {
     if (request.method === 'POST' && pathname === '/api/disconnect') {
         disconnectCurrentConnection();
         sendJson(response, 200, { success: true });
+        return true;
+    }
+
+    if (request.method === 'POST' && pathname === '/api/feedback') {
+        try {
+            const body = await readRequestBody(request);
+            const { comment, category } = body;
+            if (!comment || !category) {
+                sendJson(response, 400, { error: 'Comment e category são obrigatórios.' });
+                return true;
+            }
+            await addFalsePositive(comment, category);
+            sendJson(response, 200, { success: true });
+        } catch (error) {
+            sendJson(response, 500, { error: error.message });
+        }
         return true;
     }
 

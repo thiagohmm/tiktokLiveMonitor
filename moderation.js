@@ -1,5 +1,5 @@
 const { completeModeration } = require('./ai');
-const { BINARY_RELIGIOUS_MODERATION_SYSTEM } = require('./moderation-prompt');
+const { BINARY_RELIGIOUS_MODERATION_SYSTEM, getModerationSystemPrompt } = require('./moderation-prompt');
 
 /** Cache para evitar chamadas repetidas à IA */
 const aiCache = new Map();
@@ -198,8 +198,16 @@ async function analyzeMessage(comment, uniqueId, nickname, chatBuffer) {
     if (looksObviousAttackOnAfroBrazilianReligion(commentLower)) {
         return { flagged: true, reason: 'Ataque a matriz africana / Orixás (filtro)', category: 'RELIGIAO' };
     }
-    if (looksExplicitChristianProselytizing(commentLower)) {
-        return { flagged: true, reason: 'Proselitismo cristão (filtro)', category: 'PROSELITISMO' };
+
+    // 2.1 AI Gates (Pré-filtros para evitar chamadas desnecessárias à IA)
+    const isSuspicious =
+        looksExplicitChristianProselytizing(commentLower) ||
+        passesChristianModerationAiGate(commentLower) ||
+        passesSpamScamAiGate(comment, folded) ||
+        passesPersonalAttackAiGate(folded);
+
+    if (!isSuspicious) {
+        return { flagged: false };
     }
 
     // 3. Gate da IA (Perguntas não passam pela IA)
@@ -219,12 +227,13 @@ async function analyzeMessage(comment, uniqueId, nickname, chatBuffer) {
 
     // 5. Chamada à IA Local (fila serial em ai.js)
     try {
+        const systemPrompt = await getModerationSystemPrompt();
         const userPrompt =
             `Contexto recente (mensagens anteriores na live):\n${recentChatBlock(chatBuffer)}\n\n` +
             `Autor do comentário: ${JSON.stringify(nickname || uniqueId || '')}\n` +
             `Texto para analisar (ignore menções @nome no início): ${JSON.stringify(comment)}`;
 
-        const raw = await completeModeration(BINARY_RELIGIOUS_MODERATION_SYSTEM, userPrompt, 48);
+        const raw = await completeModeration(systemPrompt, userPrompt, 48);
         const { flagged, category } = parseBinaryReligiousAnswer(raw);
         const reason = flagged ? CATEGORY_LABELS[category] || CATEGORY_LABELS.OUTRO : null;
 

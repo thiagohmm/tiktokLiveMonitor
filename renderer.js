@@ -867,6 +867,36 @@ function addFlaggedMessageToList(data) {
     spanReason.textContent = data.reason != null ? String(data.reason) : '';
     tdReason.appendChild(spanReason);
 
+    // Botão Falso Positivo (Aprendizado IA)
+    const btnFeedback = document.createElement('button');
+    btnFeedback.className = 'action-btn small-btn';
+    btnFeedback.style.marginLeft = '10px';
+    btnFeedback.style.backgroundColor = '#666';
+    btnFeedback.textContent = 'Falso Positivo';
+    btnFeedback.onclick = async () => {
+        try {
+            const resp = await fetch('/api/feedback', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ comment: data.comment, category: data.category })
+            });
+            if (resp.ok) {
+                tr.style.opacity = '0.5';
+                tr.style.backgroundColor = '#e8f5e9';
+                btnFeedback.disabled = true;
+                btnFeedback.textContent = 'Enviado';
+                if (flaggedMessageTimers[timerKey]) {
+                    clearTimeout(flaggedMessageTimers[timerKey]);
+                    // Estende o tempo para o usuário ver que foi enviado
+                    flaggedMessageTimers[timerKey] = setTimeout(() => tr.remove(), 5000);
+                }
+            }
+        } catch (e) {
+            console.error('Erro ao enviar feedback:', e);
+        }
+    };
+    tdReason.appendChild(btnFeedback);
+
     tr.appendChild(tdUser);
     tr.appendChild(tdMsg);
     tr.appendChild(tdCat);
