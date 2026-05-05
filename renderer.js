@@ -136,17 +136,38 @@ function createModalList(items, renderItem) {
     return list;
 }
 
-function renderUserLine(row, nickname, uniqueId) {
+function renderUserLine(row, nickname, uniqueId, isFollower) {
     const strong = document.createElement('strong');
     const userText = nickname || uniqueId || 'Nao identificado';
     strong.textContent = uniqueId ? `${userText} (@${uniqueId})` : userText;
     row.appendChild(strong);
+
+    const badge = createFollowerBadge(isFollower);
+    if (badge) {
+        row.appendChild(badge);
+    }
+}
+
+function createFollowerBadge(isFollower) {
+    if (isFollower === true) {
+        const span = document.createElement('span');
+        span.className = 'badge badge-follower';
+        span.textContent = 'Segue';
+        return span;
+    }
+    if (isFollower === false) {
+        const span = document.createElement('span');
+        span.className = 'badge badge-not-follower';
+        span.textContent = 'Não Segue';
+        return span;
+    }
+    return null;
 }
 
 function renderGiftHistory() {
     historyModalTitle.textContent = 'Últimos 15 Presentes Alvos';
     historyModalBody.replaceChildren(createModalList(targetGiftHistory, (row, item) => {
-        renderUserLine(row, item.nickname, item.uniqueId);
+        renderUserLine(row, item.nickname, item.uniqueId, item.isFollower);
         const gift = document.createElement('span');
         gift.textContent = item.giftName || 'Presente Alvo';
         row.appendChild(gift);
@@ -156,7 +177,8 @@ function renderGiftHistory() {
 function renderPinnedCommentHistory() {
     historyModalTitle.textContent = 'Últimos 15 Comentários Fixados';
     historyModalBody.replaceChildren(createModalList(pinnedCommentHistory, (row, item) => {
-        renderUserLine(row, item.nickname, item.uniqueId);
+        renderUserLine(row, item.nickname, item.uniqueId, item.isFollower);
+
         const comment = document.createElement('span');
         comment.textContent = item.comment || '[sem texto identificado]';
         row.appendChild(comment);
@@ -252,7 +274,7 @@ function renderListenModal(options = {}) {
     historyModalBody.appendChild(form);
     historyModalBody.appendChild(renderLiveUserSelector(input));
     historyModalBody.appendChild(createModalList(listenedMessages, (row, item) => {
-        renderUserLine(row, item.nickname, item.uniqueId);
+        renderUserLine(row, item.nickname, item.uniqueId, item.isFollower);
         const comment = document.createElement('span');
         comment.textContent = item.comment || '';
         row.appendChild(comment);
@@ -308,7 +330,8 @@ function addPinnedCommentToHistory(pinnedComment) {
         uniqueId: pinnedComment.uniqueId || '',
         nickname: pinnedComment.nickname || pinnedComment.uniqueId || 'Nao identificado',
         comment: pinnedComment.comment || '[sem texto identificado]',
-        timestamp: pinnedComment.timestamp || Date.now()
+        timestamp: pinnedComment.timestamp || Date.now(),
+        isFollower: pinnedComment.isFollower
     });
     trimHistory(pinnedCommentHistory);
     if (activeModalType === 'pinned-comments') {
@@ -646,19 +669,35 @@ function addUserToList(user) {
         tr.classList.add('red');
     }
 
-    tr.innerHTML = `
-        <td>
-            <span class="user-name">${user.nickname}</span>
-        </td>
-        <td class="gift-name-cell">${user.giftName}</td>
-        <td>
-            <button class="action-btn" data-unique-id="${user.uniqueId}" data-gift-name="${user.giftName}">Respondido</button>
-        </td>
-    `;
+    const userTd = document.createElement('td');
+    const userSpan = document.createElement('span');
+    userSpan.className = 'user-name';
+    userSpan.textContent = user.nickname;
+    userTd.appendChild(userSpan);
 
-    tr.querySelector('.action-btn').addEventListener('click', event => {
+    const badge = createFollowerBadge(user.isFollower);
+    if (badge) {
+        userTd.appendChild(badge);
+    }
+
+    tr.appendChild(userTd);
+
+    const giftTd = document.createElement('td');
+    giftTd.className = 'gift-name-cell';
+    giftTd.textContent = user.giftName;
+    tr.appendChild(giftTd);
+
+    const actionTd = document.createElement('td');
+    const actionBtn = document.createElement('button');
+    actionBtn.className = 'action-btn';
+    actionBtn.dataset.uniqueId = user.uniqueId;
+    actionBtn.dataset.giftName = user.giftName;
+    actionBtn.textContent = 'Respondido';
+    actionBtn.addEventListener('click', event => {
         removeUser(event.currentTarget.dataset.uniqueId, event.currentTarget.dataset.giftName, event.currentTarget);
     });
+    actionTd.appendChild(actionBtn);
+    tr.appendChild(actionTd);
 
     userTableBody.prepend(tr);
     startAutoRemoveTimer(user.uniqueId, user.giftName, tr);
@@ -781,13 +820,27 @@ function addAllGiftToList(gift) {
         tr.classList.add('red');
     }
 
-    tr.innerHTML = `
-        <td>
-            <span class="user-name">${gift.nickname}</span>
-        </td>
-        <td class="gift-name-cell">${gift.giftName}</td>
-        <td class="gift-count-cell">${quantity}</td>
-    `;
+    const userTd = document.createElement('td');
+    const userSpan = document.createElement('span');
+    userSpan.className = 'user-name';
+    userSpan.textContent = gift.nickname;
+    userTd.appendChild(userSpan);
+
+    const badge = createFollowerBadge(gift.isFollower);
+    if (badge) {
+        userTd.appendChild(badge);
+    }
+    tr.appendChild(userTd);
+
+    const giftTd = document.createElement('td');
+    giftTd.className = 'gift-name-cell';
+    giftTd.textContent = gift.giftName;
+    tr.appendChild(giftTd);
+
+    const countTd = document.createElement('td');
+    countTd.className = 'gift-count-cell';
+    countTd.textContent = String(quantity);
+    tr.appendChild(countTd);
 
     allGiftsTableBody.appendChild(tr);
     reorderAllGiftsTableByCount();
@@ -806,16 +859,13 @@ function addPinnedCommentToList(pinnedComment) {
     const userTd = document.createElement('td');
     const userSpan = document.createElement('span');
     userSpan.className = 'user-name';
-
-    let displayName = pinnedComment.nickname || pinnedComment.uniqueId || 'Nao identificado';
-    if (pinnedComment.isFollower === true) {
-        displayName += ' (Seguidor)';
-    } else if (pinnedComment.isFollower === false) {
-        displayName += ' (Não Segue)';
-    }
-
-    userSpan.innerText = displayName;
+    userSpan.innerText = pinnedComment.nickname || pinnedComment.uniqueId || 'Nao identificado';
     userTd.appendChild(userSpan);
+
+    const badge = createFollowerBadge(pinnedComment.isFollower);
+    if (badge) {
+        userTd.appendChild(badge);
+    }
 
     const commentTd = document.createElement('td');
     commentTd.className = 'comment-cell';
@@ -848,6 +898,11 @@ function addFlaggedMessageToList(data) {
     spanUser.className = 'user-name';
     spanUser.textContent = data.nickname != null ? String(data.nickname) : '';
     tdUser.appendChild(spanUser);
+
+    const badge = createFollowerBadge(data.isFollower);
+    if (badge) {
+        tdUser.appendChild(badge);
+    }
 
     const tdMsg = document.createElement('td');
     tdMsg.className = 'comment-cell';

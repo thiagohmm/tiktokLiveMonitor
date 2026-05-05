@@ -110,13 +110,24 @@ function getTargetGiftLabel(giftName) {
 }
 
 function getUserFromObject(data) {
-    if (!data) return { uniqueId: null, nickname: null };
+    if (!data) return { uniqueId: null, nickname: null, isFollower: null };
 
     const user = data.user || data.member || data.sender || data.author || data.owner || {};
     const uniqueId = data.uniqueId || user.uniqueId || user.secUid || user.id || null;
     const nickname = data.nickname || user.nickname || user.displayName || uniqueId || null;
 
-    return { uniqueId, nickname };
+    let isFollower = null;
+    if (user.followInfo && typeof user.followInfo.followStatus === 'number') {
+        isFollower = user.followInfo.followStatus >= 1;
+    } else if (data.followInfo && typeof data.followInfo.followStatus === 'number') {
+        isFollower = data.followInfo.followStatus >= 1;
+    } else if (data.isFollower !== undefined) {
+        isFollower = Boolean(data.isFollower);
+    } else if (user.isFollower !== undefined) {
+        isFollower = Boolean(user.isFollower);
+    }
+
+    return { uniqueId, nickname, isFollower };
 }
 
 function textFromDisplayText(displayText) {
@@ -194,7 +205,7 @@ function getPinnedUser(data, content) {
 
     const mentionMatch = content && content.match(/@([a-zA-Z0-9._]+)/);
     if (mentionMatch) {
-        return { uniqueId: mentionMatch[1].toLowerCase(), nickname: mentionMatch[1] };
+        return { uniqueId: mentionMatch[1].toLowerCase(), nickname: mentionMatch[1], isFollower: null };
     }
 
     if (content) {
@@ -204,17 +215,18 @@ function getPinnedUser(data, content) {
             return contentLower.includes(commentLower) || commentLower.includes(contentLower);
         });
         if (sender) {
-            return { uniqueId: sender.uniqueId, nickname: sender.nickname };
+            return { uniqueId: sender.uniqueId, nickname: sender.nickname, isFollower: sender.isFollower };
         }
     }
 
-    return { uniqueId: null, nickname: null };
+    return { uniqueId: null, nickname: null, isFollower: null };
 }
 
 function logPinnedComment(content, user, data) {
     console.log('\n📌 COMENTÁRIO FIXADO:');
     if (user.uniqueId) {
-        console.log(`👤 Autor: ${user.nickname || user.uniqueId} (@${user.uniqueId})`);
+        const followStr = user.isFollower === true ? ' (Seguidor)' : (user.isFollower === false ? ' (Não Segue)' : '');
+        console.log(`👤 Autor: ${user.nickname || user.uniqueId}${followStr} (@${user.uniqueId})`);
     } else {
         console.log('👤 Autor: Não identificado');
     }
@@ -253,12 +265,15 @@ function handlePinnedMessage(data) {
     // Sempre mostra o evento de fixado no console, mesmo se a lib mudar o formato.
     logPinnedComment(content, pinnedUser, data);
 
-    let isFollower = null;
-    const sourceUser = data.chatMessage?.user || data.pinMessage?.user || data.user || data;
-    if (sourceUser?.followInfo && typeof sourceUser.followInfo.followStatus === 'number') {
-        isFollower = sourceUser.followInfo.followStatus >= 1;
-    } else if (data.chatMessage?.isFollower !== undefined) {
-        isFollower = Boolean(data.chatMessage.isFollower);
+    let isFollower = pinnedUser.isFollower;
+
+    // Se ainda nulo, tenta buscar no buffer pelo uniqueId do autor identificado
+    if (isFollower === null && pinnedUser.uniqueId) {
+        const targetId = normalizeId(pinnedUser.uniqueId);
+        const lastKnown = chatBuffer.slice().reverse().find(m => normalizeId(m.uniqueId) === targetId);
+        if (lastKnown && lastKnown.isFollower !== undefined) {
+            isFollower = lastKnown.isFollower;
+        }
     }
 
     mainWindow.webContents.send('pinned-comment', {
@@ -366,11 +381,16 @@ ipcMain.on('connect-tiktok', (event, username) => {
             return;
         }
 
+        const user = getUserFromObject(data);
+        const isFollower = user.isFollower;
+
+
         const msg = {
             uniqueId: data.uniqueId,
             nickname: data.nickname,
             comment,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            isFollower: isFollower
         };
 
         const commentLower = comment.toLowerCase();
@@ -391,36 +411,29 @@ ipcMain.on('connect-tiktok', (event, username) => {
         if (isRepeat) {
             if (!repeatAlertedSequences.has(seqKey)) {
                 repeatAlertedSequences.add(seqKey);
-                mainWindow.webContents.send('flagged-message', {
-                    uniqueId: data.uniqueId,
-                    nickname: data.nickname,
-                    comment,
-                    reason: 'Mensagem repetida',
-                    category: 'REPETICAO'
-                });
-
-                // sendRepeatWarning removido a pedido do usuário
+                // Removido a pedido do usuário: não alertar mensagem repetida como flag
             }
         } else {
             repeatAlertedSequences.delete(seqKey);
-        }
 
-        // Realiza análise de moderação (Regex + IA Local)
-        analyzeMessageModeration(comment, data.uniqueId, data.nickname, chatBuffer)
-            .then(result => {
-                if (result.flagged) {
-                    mainWindow.webContents.send('flagged-message', {
-                        uniqueId: data.uniqueId,
-                        nickname: data.nickname,
-                        comment,
-                        reason: result.reason,
-                        category: result.category || null
-                    });
-                }
-            })
-            .catch(err => {
-                console.error('[AI] Erro na moderação:', err.message);
-            });
+            // Realiza análise de moderação (Regex + IA Local) apenas se não for repetida
+            // para evitar "falsos positivos" ou ruído excessivo.
+            analyzeMessageModeration(comment, data.uniqueId, data.nickname, chatBuffer)
+                .then(result => {
+                    if (result.flagged) {
+                        mainWindow.webContents.send('flagged-message', {
+                            uniqueId: data.uniqueId,
+                            nickname: data.nickname,
+                            comment,
+                            reason: result.reason,
+                            category: result.category || null
+                        });
+                    }
+                })
+                .catch(err => {
+                    console.error('[AI] Erro na moderação:', err.message);
+                });
+        }
 
         chatBuffer.push(msg);
         if (chatBuffer.length > 500) {
