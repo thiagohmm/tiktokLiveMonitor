@@ -6,341 +6,280 @@ const os = require('os');
 const { BINARY_RELIGIOUS_MODERATION_SYSTEM } = require('./moderation-prompt');
 const { GGUF_FILENAME } = require('./llm-model');
 
-let llamaProcess = null;
-const LLAMA_PORT = 8080;
+const BASE_PORT = 8080;
 
-/** Serializa chamadas ao llama-server para evitar picos de CPU com várias mensagens simultâneas */
-let llamaRequestChain = Promise.resolve();
+let aiWorker = null; // Single worker instance
+let requestQueue = [];
+const QUEUE_MAX = 50; // Limite para evitar que a fila cresça infinitamente e cause atrasos extremos
 
-function enqueueLlama(task) {
-    const next = llamaRequestChain.then(() => task());
-    llamaRequestChain = next.then(
-        () => {},
-        () => {}
-    );
-    return next;
+/**
+ * Representa um nó de processamento de IA (Local ou Remoto)
+ */
+class AIWorker {
+    constructor(host, port, isLocal = false, process = null) {
+        this.host = host;
+        this.port = port;
+        this.isLocal = isLocal;
+        this.process = process;
+        this.busy = false;
+        this.ready = false;
+        this.lastSeen = Date.now();
+    }
+
+    async checkHealth() {
+        return new Promise((resolve) => {
+            const req = http.get(`http://${this.host}:${this.port}/health`, (res) => {
+                this.ready = (res.statusCode === 200);
+                res.resume();
+                resolve(this.ready);
+            });
+            req.on('error', () => {
+                this.ready = false;
+                resolve(false);
+            });
+            req.setTimeout(2000, () => {
+                req.destroy();
+                this.ready = false;
+                resolve(false);
+            });
+        });
+    }
+
+    kill() {
+        if (this.process) {
+            this.process.kill();
+            this.process = null;
+        }
+    }
 }
 
 function getPaths() {
-    // Se estiver rodando no Electron empacotado, os arquivos estarão em Resources/resources
-    // Se estiver em desenvolvimento ou Node puro, estarão na raiz do projeto
-    
     let baseDir = __dirname;
-    
-    // Tenta detectar se estamos no Electron empacotado
-    if (process.resourcesPath) {
-        // No Mac, Resources fica acima do app.asar. No Win fica no mesmo nível.
-        // extraResources vai para o diretório de recursos da aplicação.
-        if (fs.existsSync(path.join(process.resourcesPath, 'bin'))) {
-            baseDir = process.resourcesPath;
-        }
+    if (process.resourcesPath && fs.existsSync(path.join(process.resourcesPath, 'bin'))) {
+        baseDir = process.resourcesPath;
     }
-
     const platform = process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? 'mac' : 'linux';
     const arch = process.arch;
-
     const binName = platform === 'win' ? 'llama-server.exe' : 'llama-server';
     const archDir = path.join(baseDir, 'bin', platform, arch);
-
     const binPath = resolveLlamaServerPath(archDir, binName);
     const modelPath = path.join(baseDir, 'models', GGUF_FILENAME);
-
     return { binPath, modelPath };
 }
 
-/** Zip Windows (flat), zip mac antigo em build/bin/, tarball llama-bNNNN/ em mac/linux novos */
 function resolveLlamaServerPath(archDir, binName) {
-    const ordered = [
-        path.join(archDir, binName),
-        path.join(archDir, 'build', 'bin', binName)
-    ];
-    for (const p of ordered) {
-        if (fs.existsSync(p)) return p;
-    }
-    if (!fs.existsSync(archDir)) return ordered[0];
+    const ordered = [path.join(archDir, binName), path.join(archDir, 'build', 'bin', binName)];
+    for (const p of ordered) if (fs.existsSync(p)) return p;
     try {
         const entries = fs.readdirSync(archDir, { withFileTypes: true });
         for (const e of entries) {
-            if (!e.isDirectory()) continue;
-            if (/^llama-b\d+$/i.test(e.name)) {
+            if (e.isDirectory() && /^llama-b\d+$/i.test(e.name)) {
                 const nested = path.join(archDir, e.name, binName);
                 if (fs.existsSync(nested)) return nested;
             }
         }
-    } catch {
-        /* ignore */
-    }
+    } catch { /* ignore */ }
     return ordered[0];
 }
 
-async function startLlamaServer() {
-    if (llamaProcess) return;
-
+async function spawnLocalWorker(port) {
     const { binPath, modelPath } = getPaths();
-    
-    if (!fs.existsSync(binPath)) {
-        throw new Error(`Binário do llama-server não encontrado em: ${binPath}. Execute 'npm install' ou 'npm run setup-llm'.`);
-    }
-    if (!fs.existsSync(modelPath)) {
-        throw new Error(`Modelo GGUF não encontrado em: ${modelPath}. Execute 'npm install' ou 'npm run setup-llm'.`);
-    }
-    const ms = fs.statSync(modelPath).size;
-    if (ms < 4096) {
-        throw new Error(`Modelo GGUF parece inválido ou vazio (${ms} bytes). Execute: npm run setup-llm`);
-    }
+    if (!fs.existsSync(binPath) || !fs.existsSync(modelPath)) return null;
 
+    let bindHost = process.env.LLAMA_SERVER_BIND || (fs.existsSync('/.dockerenv') ? '0.0.0.0' : '127.0.0.1');
     const binDir = path.dirname(binPath);
-
-    /** 127.0.0.1 quebra porta publicada pelo Docker (curl no host → resposta vazia). */
-    let bindHost = process.env.LLAMA_SERVER_BIND;
-    if (!bindHost) {
-        try {
-            bindHost = fs.existsSync('/.dockerenv') ? '0.0.0.0' : '127.0.0.1';
-        } catch {
-            bindHost = '127.0.0.1';
-        }
-    }
-
-    console.log(`[AI] Iniciando llama-server em http://${bindHost}:${LLAMA_PORT}...`);
-    console.log(`[AI] Bin: ${binPath}`);
-    console.log(`[AI] Model: ${modelPath}`);
-
-    const cores = Math.max(1, (os.cpus() && os.cpus().length) || 2);
-    const cap = process.platform === 'linux' && process.arch === 'arm64' ? 4 : 8;
-    const threads = String(Math.min(cap, cores));
-
-    /** Distribuições tarball colocam libggml*.so ao lado do binário */
-    const spawnEnv = { ...process.env };
-    if (process.platform === 'linux') {
-        const sep = ':';
-        spawnEnv.LD_LIBRARY_PATH = spawnEnv.LD_LIBRARY_PATH
-            ? `${binDir}${sep}${spawnEnv.LD_LIBRARY_PATH}`
-            : binDir;
-    }
+    
+    // Allocate all available CPU threads to the single worker for maximum speed
+    const totalCores = os.cpus().length || 2;
+    const threadsPerWorker = String(totalCores);
 
     const llamaArgs = [
         '-m', modelPath,
         '--host', bindHost,
-        '--port', LLAMA_PORT.toString(),
+        '--port', port.toString(),
         '--n-gpu-layers', '0',
-        '--threads', threads
+        '--threads', threadsPerWorker
     ];
-    // Docker/overlay: mmap costuma funcionar melhor; desktop com pouca RAM pode usar --no-mmap
-    if (process.env.LLAMA_USE_MMAP !== '1') {
-        llamaArgs.push('--no-mmap');
+    if (process.env.LLAMA_USE_MMAP !== '1') llamaArgs.push('--no-mmap');
+
+    console.log(`[AI-Queue] Spawning single local worker on port ${port}...`);
+    const proc = spawn(binPath, llamaArgs, { 
+        cwd: binDir, 
+        stdio: 'inherit', // Permite ver o log do llama-server diretamente no console
+        env: { ...process.env } 
+    });
+    
+    aiWorker = new AIWorker(bindHost, port, true, proc);
+
+    // Aguarda ficar pronto (health check)
+    for (let i = 0; i < 90; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        if (await aiWorker.checkHealth()) {
+            console.log(`[AI-Queue] Single AI worker na porta ${port} está pronto.`);
+            return aiWorker;
+        }
     }
-
-    let stderrTail = '';
-    llamaProcess = spawn(binPath, llamaArgs, {
-        cwd: binDir,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: spawnEnv
-    });
-
-    llamaProcess.stderr.on('data', (chunk) => {
-        const text = chunk.toString();
-        stderrTail = (stderrTail + text).slice(-8000);
-        const line = text.trim();
-        if (/error|fatal|fail|cannot load|not found|permission denied/i.test(line)) {
-            console.error('[AI] llama-server:', line.slice(0, 800));
-        }
-    });
-
-    llamaProcess.on('error', (err) => {
-        console.error(`[AI] Falha ao iniciar processo:`, err);
-    });
-    llamaProcess.on('exit', (code, signal) => {
-        if ((code !== 0 && code !== null) || signal) {
-            console.error(`[AI] llama-server encerrou (code=${code} signal=${signal})`);
-            if (stderrTail.trim()) {
-                console.error('[AI] stderr (final):\n', stderrTail.trim().slice(-4000));
-            }
-        }
-    });
-
-    const maxAttempts = Math.min(
-        600,
-        Math.max(30, Number(process.env.LLAMA_HEALTH_MAX_ATTEMPTS) || 90)
-    );
-
-    // /health devolve 503 {"Loading model"...} até o GGUF ficar pronto (Pi pode levar vários minutos)
-    let attempts = 0;
-
-    return new Promise((resolve, reject) => {
-        const check = setInterval(() => {
-            attempts++;
-            if (attempts > maxAttempts) {
-                clearInterval(check);
-                reject(new Error(
-                    `Timeout ao aguardar o modelo carregar (${maxAttempts}s). Raspberry/memória lenta ou GGUF corrompido.`
-                ));
-                return;
-            }
-
-            const req = http.get(`http://127.0.0.1:${LLAMA_PORT}/health`, (res) => {
-                if (res.statusCode === 200) {
-                    clearInterval(check);
-                    res.resume();
-                    console.log(`[AI] llama-server pronto.`);
-                    resolve();
-                    return;
-                }
-                res.resume();
-                if (res.statusCode === 503 && attempts % 15 === 0) {
-                    console.log('[AI] Modelo ainda carregando (HTTP 503); aguarde…');
-                }
-            });
-            req.on('error', () => {
-                if (attempts >= maxAttempts) {
-                    clearInterval(check);
-                    reject(new Error('Timeout ao aguardar o llama-server iniciar.'));
-                }
-            });
-        }, 1000);
-    });
+    return aiWorker;
 }
 
-/** Gemma 4 / modelos com thinking: sem isso, max_tokens baixo esgota no reasoning e content fica vazio. */
-function mergeChatCompletionBody(bodyObj) {
-    return {
-        stream: false,
-        chat_template_kwargs: { enable_thinking: false },
-        ...bodyObj
-    };
+function registerWorker(host, port) {
+    if (aiWorker && aiWorker.host === host && aiWorker.port === port) {
+        aiWorker.lastSeen = Date.now();
+        aiWorker.ready = true;
+    } else {
+        console.log(`[AI-Queue] Novo worker registrado: ${host}:${port}`);
+        // If it's a new remote worker, we replace the current one
+        if (aiWorker && aiWorker.isLocal) {
+            aiWorker.kill();
+        }
+        aiWorker = new AIWorker(host, port, false);
+    }
+}
+
+async function processQueue() {
+    if (requestQueue.length === 0) return;
+
+    if (!aiWorker || !aiWorker.ready || aiWorker.busy) {
+        // Se o worker não existe ou não está pronto e não estamos ocupados tentando resolver, tenta (re)iniciar
+        if (!aiWorker || (!aiWorker.ready && !aiWorker.busy)) {
+            const currentQueueSize = requestQueue.length;
+            console.log(`[AI-Queue] Worker indisponível ou em falha. Tentando (re)iniciar... (Fila: ${currentQueueSize})`);
+            
+            if (aiWorker && aiWorker.isLocal) {
+                aiWorker.kill();
+                aiWorker = null;
+            }
+
+            await spawnLocalWorker(BASE_PORT);
+            
+            // Se após o spawn ainda não estiver pronto, evita loop infinito imediato mas mantém a fila
+            if (!aiWorker || !aiWorker.ready) {
+                console.warn('[AI-Queue] Falha ao reativar worker local. Aguardando próxima tentativa.');
+                return;
+            }
+            
+            // Se agora está pronto, continua o processamento
+            processQueue();
+        }
+        return;
+    }
+
+    const task = requestQueue.shift();
+    aiWorker.busy = true;
+    
+    console.log(`[AI] Processando tarefa... (Restantes na fila: ${requestQueue.length})`);
+    task.run(aiWorker)
+        .then(res => {
+            console.log(`[AI] Resposta recebida: ${res}`);
+            task.resolve(res);
+        })
+        .catch(err => {
+            console.error(`[AI] Erro ao processar tarefa:`, err.message);
+            // Se falhou por rede, desativa o worker temporariamente
+            aiWorker.ready = false;
+            requestQueue.unshift(task); // Devolve para a fila
+            task.reject(err); // Ou resolve com erro se for persistente
+        })
+        .finally(() => {
+            if (aiWorker) aiWorker.busy = false;
+            processQueue();
+        });
+}
+
+async function completeModeration(systemContent, userContent, maxTokens = 32) {
+    if (requestQueue.length >= QUEUE_MAX) {
+        console.warn(`[AI-Queue] Fila cheia (${requestQueue.length}). Descartando mensagem para manter performance.`);
+        return 'NAO'; // Retorna NAO por padrão para não travar o fluxo
+    }
+
+    return new Promise((resolve, reject) => {
+        const task = {
+            run: async (worker) => {
+                const bodyObj = {
+                    messages: [{ role: 'system', content: systemContent }, { role: 'user', content: userContent }],
+                    temperature: 0.1,
+                    max_tokens: maxTokens,
+                    stream: false,
+                    chat_template_kwargs: { enable_thinking: false }
+                };
+                const data = JSON.stringify(bodyObj);
+                
+                // Log do input (resumido se for muito grande)
+                const userContentPreview = userContent.length > 100 ? userContent.substring(0, 100) + '...' : userContent;
+                console.log(`[AI] Chamando LLM com: "${userContentPreview.replace(/\n/g, ' ')}"`);
+
+                return new Promise((res, rej) => {
+                    const req = http.request({
+                        hostname: worker.host,
+                        port: worker.port,
+                        path: '/v1/chat/completions',
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+                        timeout: 120_000
+                    }, (httpRes) => {
+                        let respData = '';
+                        httpRes.on('data', c => respData += c);
+                        httpRes.on('end', () => {
+                            try {
+                                const json = JSON.parse(respData);
+                                const text = assistantTextFromChatResponse(json);
+                                if (text == null) rej(new Error('Resposta vazia'));
+                                else res(text.trim());
+                            } catch (e) { rej(e); }
+                        });
+                    });
+                    req.on('error', rej);
+                    req.write(data);
+                    req.end();
+                });
+            },
+            resolve,
+            reject
+        };
+
+        requestQueue.push(task);
+        processQueue();
+    });
 }
 
 function assistantTextFromChatResponse(json) {
     const msg = json.choices?.[0]?.message;
-    if (!msg || typeof msg !== 'object') return null;
-    const c = typeof msg.content === 'string' ? msg.content : '';
-    const r = typeof msg.reasoning_content === 'string' ? msg.reasoning_content : '';
-    const out = (c.trim() || r.trim()) ? (c.trim() || r.trim()) : null;
-    return out;
+    if (!msg) return null;
+    return (msg.content || msg.reasoning_content || '').trim() || null;
 }
 
-function postChatCompletion(bodyObj) {
-    const data = JSON.stringify(mergeChatCompletionBody(bodyObj));
-
-    return new Promise((resolve, reject) => {
-        const req = http.request({
-            hostname: 'localhost',
-            port: LLAMA_PORT,
-            path: '/v1/chat/completions',
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(data)
-            },
-            timeout: 120_000
-        }, (res) => {
-            let responseData = '';
-            res.on('data', (chunk) => responseData += chunk);
-            res.on('end', () => {
-                try {
-                    const json = JSON.parse(responseData);
-                    const text = assistantTextFromChatResponse(json);
-                    if (text == null) {
-                        reject(new Error('Resposta sem content (pense em aumentar max_tokens ou desativar thinking no servidor)'));
-                        return;
-                    }
-                    resolve(text.trim());
-                } catch (e) {
-                    reject(e);
-                }
-            });
-        });
-
-        req.on('error', reject);
-        req.on('timeout', () => {
-            req.destroy();
-            reject(new Error('Timeout na requisição ao llama-server'));
-        });
-        req.write(data);
-        req.end();
-    });
-}
-
-/**
- * Uma inferência por vez (fila). Retorna o texto da assistente (trimmed).
- */
-async function completeModeration(systemContent, userContent, maxTokens = 32) {
-    return enqueueLlama(async () => {
-        try {
-            await startLlamaServer();
-        } catch (err) {
-            console.error(`[AI] Erro ao iniciar servidor:`, err.message);
-            throw err;
-        }
-
-        const bodyObj = {
-            messages: [
-                { role: 'system', content: systemContent },
-                { role: 'user', content: userContent }
-            ],
-            temperature: 0.1,
-            max_tokens: maxTokens
-        };
-
-        try {
-            return await postChatCompletion(bodyObj);
-        } catch (e) {
-            console.error('[AI] Erro na inferência:', e.message);
-            throw e;
-        }
-    });
-}
-
-/** Compat: moderador binário SIM/NAO (usa a mesma fila). */
 async function askLlama(prompt) {
     try {
-        const userContent = `Texto para analisar:\n${typeof prompt === 'string' ? prompt : JSON.stringify(prompt)}`;
-        const text = await completeModeration(BINARY_RELIGIOUS_MODERATION_SYSTEM, userContent, 32);
-        const compact = String(text || '')
-            .toLowerCase()
-            .trim()
-            .replace(/\s+/g, ' ');
-        if (/^nao\b/i.test(compact)) return 'NAO';
-        if (/^sim[_\s]/i.test(compact) || /^sim\b/i.test(compact)) return 'SIM';
-        return 'NAO';
-    } catch {
-        return 'NAO';
-    }
+        const text = await completeModeration(BINARY_RELIGIOUS_MODERATION_SYSTEM, `Texto: ${prompt}`, 32);
+        const compact = String(text || '').toLowerCase();
+        return /^sim\b/i.test(compact) ? 'SIM' : 'NAO';
+    } catch { return 'NAO'; }
 }
 
 function stopLlamaServer() {
-    if (llamaProcess) {
-        console.log('[AI] Encerrando llama-server...');
-        llamaProcess.kill();
-        llamaProcess = null;
+    console.log('[AI-Queue] Encerrando worker local...');
+    if (aiWorker) {
+        aiWorker.kill();
+        aiWorker = null;
     }
 }
 
-// Garante que o processo morra ao sair
 process.on('SIGINT', stopLlamaServer);
 process.on('SIGTERM', stopLlamaServer);
 process.on('exit', stopLlamaServer);
 
-function aiConfigured() {
-    return true;
-}
-
-/** Sobe o llama-server se necessário e confere /health — uso ao conectar na live */
 async function probeLlamaReady() {
-    try {
-        await startLlamaServer();
-        return true;
-    } catch (err) {
-        console.warn('[AI] Probe LLM:', err?.message || err);
-        return false;
-    }
+    if (!aiWorker) await spawnLocalWorker(BASE_PORT);
+    const healthy = await aiWorker.checkHealth();
+    console.log(`[AI-Status] Verificação de saúde: ${healthy ? 'OK' : 'FALHA'}`);
+    return healthy;
 }
 
 module.exports = {
     askLlama,
     completeModeration,
     stopLlamaServer,
-    aiConfigured,
+    aiConfigured: () => true,
     probeLlamaReady,
-    mergeChatCompletionBody,
-    assistantTextFromChatResponse
+    registerWorker
 };

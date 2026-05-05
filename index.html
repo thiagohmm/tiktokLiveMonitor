@@ -143,6 +143,12 @@
             color: #4527a0;
             white-space: nowrap;
         }
+        .blink-row {
+            animation: blinker 1s linear infinite;
+        }
+        @keyframes blinker {
+            50% { background-color: #ffebee; }
+        }
         .ai-led-row {
             display: none;
             align-items: center;
