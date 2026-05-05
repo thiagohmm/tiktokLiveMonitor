@@ -3,23 +3,28 @@
 # Bookworm-slim (glibc 2.36) quebra no arm64; não existe node:*-noble-slim oficial — usar trixie-slim.
 FROM node:22-trixie-slim
 
-# OpenMP + libs C++; slim não inclui tudo por padrão
+# OpenMP + libs C++ + build tools para sqlite3/native modules
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         libgomp1 \
         libstdc++6 \
         libatomic1 \
+        python3 \
+        make \
+        g++ \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY package*.json ./
-COPY scripts/setup-llm.js scripts/setup-llm.js
-
-RUN npm ci --omit=dev --ignore-scripts
+# Scripts de setup-llm não são necessários no build (baixamos no entrypoint)
+# Mas o sqlite3 precisa rodar seu install script para baixar/gerar bindings.
+ENV SKIP_POSTINSTALL=1
+RUN npm ci --omit=dev
 
 COPY server.js ai.js llm-model.js moderation.js moderation-prompt.js database.js index.html renderer.js ./
+COPY scripts/ ./scripts/
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
