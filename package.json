@@ -12,7 +12,7 @@
     "build:linux": "electron-builder --linux",
     "build:mac": "electron-builder --mac",
     "build:all": "electron-builder --win --linux --mac",
-    "postinstall": "node scripts/setup-llm.js",
+    "postinstall": "node -e \"if (!process.env.SKIP_POSTINSTALL) { require('child_process').execSync('node scripts/setup-llm.js', { stdio: 'inherit' }); }\"",
     "setup-llm": "node scripts/setup-llm.js",
     "setup-llm:linux:arm64": "node scripts/setup-llm.js linux arm64",
     "setup-llm:linux:x64": "node scripts/setup-llm.js linux x64",
