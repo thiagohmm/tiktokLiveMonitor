@@ -37,6 +37,12 @@ const chartCanvas = document.getElementById('messageChart');
 const aiLedRow = document.getElementById('aiLedRow');
 const aiLedDot = document.getElementById('aiLedDot');
 const aiLedText = document.getElementById('aiLedText');
+const modelSelectorContainer = document.getElementById('modelSelectorContainer');
+const modelSelect = document.getElementById('modelSelect');
+const setupProgressContainer = document.getElementById('setupProgressContainer');
+const setupStatusText = document.getElementById('setupStatusText');
+const setupPercentage = document.getElementById('setupPercentage');
+const setupProgressBar = document.getElementById('setupProgressBar');
 const targetGiftHistoryBtn = document.getElementById('targetGiftHistoryBtn');
 const pinnedCommentHistoryBtn = document.getElementById('pinnedCommentHistoryBtn');
 const historyModalBackdrop = document.getElementById('historyModalBackdrop');
@@ -1164,6 +1170,20 @@ function setupEventStream() {
 }
 
 function setupElectronIpc() {
+    ipcRenderer.on('setup-progress', (event, data) => {
+        setupProgressContainer.style.display = 'flex';
+        setupStatusText.textContent = `Baixando ${data.filename}...`;
+        setupPercentage.textContent = `${data.progress}%`;
+        setupProgressBar.style.width = `${data.progress}%`;
+        
+        if (data.progress === 100) {
+            setTimeout(() => {
+                setupProgressContainer.style.display = 'none';
+                runLlmProbeElectron();
+            }, 2000);
+        }
+    });
+
     ipcRenderer.on('connection-status', (event, data) => {
         if (data.success) {
             statusDiv.innerText = `Conectado a: ${data.username}`;
@@ -1240,8 +1260,38 @@ async function bootstrap() {
         try {
             const cfg = await ipcRenderer.invoke('get-ui-config');
             applyInfractionsSectionTitle(Boolean(cfg && cfg.geminiConfigured));
+            
+            // Popula seletor de modelos
+            if (cfg.models && modelSelect) {
+                modelSelectorContainer.style.display = 'flex';
+                modelSelect.innerHTML = '';
+                Object.keys(cfg.models).forEach(key => {
+                    const opt = document.createElement('option');
+                    opt.value = key;
+                    opt.textContent = cfg.models[key].name;
+                    if (key === cfg.selectedModel) opt.selected = true;
+                    modelSelect.appendChild(opt);
+                });
+
+                modelSelect.addEventListener('change', async () => {
+                    const newModel = modelSelect.value;
+                    const success = await ipcRenderer.invoke('change-model', newModel);
+                    if (success) {
+                        setAiLedActive(false);
+                        aiLedText.textContent = 'Iniciando novo modelo...';
+                        const setupResult = await ipcRenderer.invoke('run-setup');
+                        if (setupResult) {
+                            runLlmProbeElectron();
+                        } else {
+                            aiLedText.textContent = 'Erro ao baixar modelo.';
+                        }
+                    }
+                });
+            }
+
             runLlmProbeElectron();
-        } catch {
+        } catch (err) {
+            console.error('Erro ao configurar UI Electron:', err);
             applyInfractionsSectionTitle(false);
         }
         setupElectronIpc();

@@ -4,7 +4,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const { BINARY_RELIGIOUS_MODERATION_SYSTEM } = require('./moderation-prompt');
-const { GGUF_FILENAME } = require('./llm-model');
+const { GGUF_FILENAME, getSelectedModel } = require('./llm-model');
 
 const BASE_PORT = 8080;
 
@@ -54,6 +54,10 @@ class AIWorker {
 }
 
 function getPaths() {
+    // Re-importa para garantir que pegamos o nome correto se mudou
+    delete require.cache[require.resolve('./llm-model')];
+    const { GGUF_FILENAME: currentGguf } = require('./llm-model');
+
     let baseDir = __dirname;
     if (process.resourcesPath && fs.existsSync(path.join(process.resourcesPath, 'bin'))) {
         baseDir = process.resourcesPath;
@@ -63,7 +67,7 @@ function getPaths() {
     const binName = platform === 'win' ? 'llama-server.exe' : 'llama-server';
     const archDir = path.join(baseDir, 'bin', platform, arch);
     const binPath = resolveLlamaServerPath(archDir, binName);
-    const modelPath = path.join(baseDir, 'models', GGUF_FILENAME);
+    const modelPath = path.join(baseDir, 'models', currentGguf);
     return { binPath, modelPath };
 }
 
@@ -84,7 +88,29 @@ function resolveLlamaServerPath(archDir, binName) {
 
 async function spawnLocalWorker(port) {
     const { binPath, modelPath } = getPaths();
-    if (!fs.existsSync(binPath) || !fs.existsSync(modelPath)) return null;
+    
+    if (!fs.existsSync(binPath) || !fs.existsSync(modelPath)) {
+        console.log('[AI-Queue] Binários ou modelo ausentes. Tentando baixar via setup-llm.js...');
+        try {
+            const { execSync } = require('child_process');
+            let baseDir = __dirname;
+            if (process.resourcesPath && fs.existsSync(path.join(process.resourcesPath, 'scripts'))) {
+                baseDir = process.resourcesPath;
+            }
+            const setupPath = path.join(baseDir, 'scripts', 'setup-llm.js');
+            // Usamos execSync para garantir que o setup termine antes de continuarmos
+            execSync(`node "${setupPath}"`, { stdio: 'inherit' });
+            
+            // Re-checar após o setup
+            if (!fs.existsSync(binPath) || !fs.existsSync(modelPath)) {
+                console.error('[AI-Queue] Falha ao baixar binários ou modelo após execução do setup.');
+                return null;
+            }
+        } catch (err) {
+            console.error('[AI-Queue] Erro ao executar setup-llm.js:', err.message);
+            return null;
+        }
+    }
 
     let bindHost = process.env.LLAMA_SERVER_BIND || (fs.existsSync('/.dockerenv') ? '0.0.0.0' : '127.0.0.1');
     const binDir = path.dirname(binPath);

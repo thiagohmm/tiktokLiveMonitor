@@ -76,7 +76,23 @@ async function downloadFile(url, dest) {
                     reject(new Error(`Falha ao baixar: ${response.statusCode}`));
                     return;
                 }
+
+                const totalSize = parseInt(response.headers['content-length'], 10);
+                let downloadedSize = 0;
+                let lastReportedProgress = -1;
+
                 const file = fs.createWriteStream(dest);
+                response.on('data', (chunk) => {
+                    downloadedSize += chunk.length;
+                    if (totalSize > 0) {
+                        const progress = Math.floor((downloadedSize / totalSize) * 100);
+                        if (progress !== lastReportedProgress) {
+                            lastReportedProgress = progress;
+                            console.log(JSON.stringify({ type: 'progress', filename: path.basename(dest), progress }));
+                        }
+                    }
+                });
+
                 response.pipe(file);
                 file.on('finish', () => {
                     file.close();
@@ -203,15 +219,17 @@ async function setup() {
     const targetBinDir = path.join(BIN_DIR, targetOs, targetArch);
 
     try {
-        await downloadFile(artifact.url, archiveDest);
-
-        console.log(`[Setup] Extraindo binários (${artifact.ext})...`);
-        fs.rmSync(targetBinDir, { recursive: true, force: true });
-        fs.mkdirSync(targetBinDir, { recursive: true });
-        await extractArtifact(archiveDest, artifact.ext, targetBinDir);
-
-        console.log(`[Setup] Binários extraídos em: ${targetBinDir}`);
-        chmodLlamaBinaries(targetBinDir, targetOs);
+        // Binários geralmente já existem se rodando via setup inicial, 
+        // mas o modelo pode ser trocado.
+        if (!fs.existsSync(targetBinDir)) {
+            await downloadFile(artifact.url, archiveDest);
+            console.log(`[Setup] Extraindo binários (${artifact.ext})...`);
+            fs.rmSync(targetBinDir, { recursive: true, force: true });
+            fs.mkdirSync(targetBinDir, { recursive: true });
+            await extractArtifact(archiveDest, artifact.ext, targetBinDir);
+            console.log(`[Setup] Binários extraídos em: ${targetBinDir}`);
+            chmodLlamaBinaries(targetBinDir, targetOs);
+        }
     } catch (err) {
         console.error(`[Setup] Erro ao baixar/extrair binário do llama.cpp: ${err.message}`);
         console.log(`[Setup] DICA: Confira se o asset existe em https://github.com/${LLAMA_CPP_REPO}/releases/tag/${LLAMA_CPP_RELEASE_TAG}`);
