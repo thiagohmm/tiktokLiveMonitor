@@ -24,14 +24,46 @@ function getUserFromObject(data) {
     const nickname = data.nickname || user.nickname || user.displayName || uniqueId || null;
 
     let isFollower = null;
-    if (user.followInfo && typeof user.followInfo.followStatus === 'number') {
-        isFollower = user.followInfo.followStatus >= 1;
-    } else if (data.followInfo && typeof data.followInfo.followStatus === 'number') {
-        isFollower = data.followInfo.followStatus >= 1;
-    } else if (data.isFollower !== undefined) {
-        isFollower = Boolean(data.isFollower);
-    } else if (user.isFollower !== undefined) {
-        isFollower = Boolean(user.isFollower);
+    
+    // Tenta extrair status de seguidor de múltiplas fontes possíveis na estrutura do TikTok
+    const followInfo = user.followInfo || data.followInfo || {};
+    const followStatus = followInfo.followStatus !== undefined ? followInfo.followStatus : 
+                         (followInfo.followerStatus !== undefined ? followInfo.followerStatus : 
+                         (data.followStatus !== undefined ? data.followStatus : 
+                         (user.followStatus !== undefined ? user.followStatus : 
+                         (data.followerStatus !== undefined ? data.followerStatus : 
+                         (user.followerStatus !== undefined ? user.followerStatus : undefined)))));
+    
+    const followRole = data.followRole !== undefined ? data.followRole : (user.followRole !== undefined ? user.followRole : null);
+    const badges = data.userBadges || user.userBadges || [];
+    const userIdentity = data.userIdentity || user.userIdentity || {};
+
+    // Prioridade para userIdentity se disponível (mais confiável em versões recentes)
+    if (userIdentity.isFollowerOfAnchor !== undefined) {
+        isFollower = Boolean(userIdentity.isFollowerOfAnchor);
+    } else if (userIdentity.isMutualFollowingWithAnchor !== undefined) {
+        isFollower = Boolean(userIdentity.isMutualFollowingWithAnchor);
+    } 
+    
+    // Se ainda não determinado, tenta via followStatus (pode ser número ou string)
+    if (isFollower === null && followStatus !== undefined && followStatus !== null) {
+        const fs = Number(followStatus);
+        if (!isNaN(fs)) {
+            isFollower = fs >= 1;
+        }
+    }
+
+    // Outras verificações secundárias
+    if (isFollower === null) {
+        if (typeof followRole === 'number' && followRole > 0) {
+            isFollower = true;
+        } else if (Array.isArray(badges) && badges.some(b => b.type === 'follower' || b.name === 'Follower' || b.badgeId === 'follower')) {
+            isFollower = true;
+        } else if (data.isFollower !== undefined) {
+            isFollower = Boolean(data.isFollower);
+        } else if (user.isFollower !== undefined) {
+            isFollower = Boolean(user.isFollower);
+        }
     }
 
     return { uniqueId, nickname, isFollower };
@@ -232,10 +264,11 @@ async function startMonitoring(username) {
         const comment = String(data.comment || '').trim();
         if (!comment) return;
 
-        emit('new-chat-message', data);
+        const user = getUserFromObject(data);
+        emit('new-chat-message', { ...data, ...user });
         
         const commentLower = comment.toLowerCase();
-        const senderKey = normalizeId(data.uniqueId);
+        const senderKey = normalizeId(user.uniqueId);
         const now = Date.now();
         const repeatWindowMs = 60000;
         const repeatsRequired = 3;
@@ -253,8 +286,9 @@ async function startMonitoring(username) {
             if (!repeatAlertedSequences.has(seqKey)) {
                 repeatAlertedSequences.add(seqKey);
                 emit('flagged-message', {
-                    uniqueId: data.uniqueId,
-                    nickname: data.nickname,
+                    uniqueId: user.uniqueId,
+                    nickname: user.nickname,
+                    isFollower: user.isFollower,
                     comment,
                     reason: 'Mensagem repetida',
                     category: 'REPETICAO'
@@ -265,34 +299,37 @@ async function startMonitoring(username) {
         }
 
         const msgData = {
-            uniqueId: data.uniqueId,
-            nickname: data.nickname,
+            uniqueId: user.uniqueId,
+            nickname: user.nickname,
             comment,
             timestamp: now,
-            isFollower: data.isFollower
+            isFollower: user.isFollower
         };
         chatBuffer.push(msgData);
         if (chatBuffer.length > 500) chatBuffer.shift();
 
         if (settings.moderationEnabled && !isRepeat) {
-            const result = await analyzeMessageModeration(comment, data.uniqueId, data.nickname, chatBuffer, currentUsername);
+            const result = await analyzeMessageModeration(comment, user.uniqueId, user.nickname, chatBuffer, currentUsername);
             if (result.flagged) {
-                emit('flagged-message', { ...result, uniqueId: data.uniqueId, comment: data.comment, nickname: data.nickname });
+                emit('flagged-message', { ...result, uniqueId: user.uniqueId, comment: comment, nickname: user.nickname, isFollower: user.isFollower });
             }
         }
     });
 
     tiktokConnection.on('gift', (data) => {
-        const uniqueId = normalizeId(data.uniqueId);
+        const user = getUserFromObject(data);
+        const uniqueId = normalizeId(user.uniqueId);
         const isPinnedUser = pinnedCommentUsers.has(uniqueId);
         const targetGift = isTargetGift(data.giftName);
 
+        const payload = { ...data, ...user, isRed: targetGift && isPinnedUser };
+
         // Emitir para todos os presentes
-        emit('any-gift-received', { ...data, isRed: targetGift && isPinnedUser });
+        emit('any-gift-received', payload);
 
         // Emitir apenas para presentes alvos
         if (targetGift && isGiftCountingSettlement(data)) {
-            emit('new-gift-user', { ...data, isRed: isPinnedUser });
+            emit('new-gift-user', payload);
         }
     });
 
@@ -307,7 +344,21 @@ async function startMonitoring(username) {
     });
 
     tiktokConnection.on('member', (data) => {
-        emit('live-user-connected', data);
+        const user = getUserFromObject(data);
+        emit('live-user-connected', user);
+    });
+
+    tiktokConnection.on('social', (data) => {
+        if (data.displayType === 'pm_mt_guidance_share') return; // Ignorar share se necessário
+        const user = getUserFromObject(data);
+        emit('new-social-event', { ...data, ...user });
+    });
+
+    tiktokConnection.on('follow', (data) => {
+        const user = getUserFromObject(data);
+        // Quando alguém segue, forçamos isFollower para true se não estiver identificado
+        if (user.isFollower === null) user.isFollower = true;
+        emit('new-follower', user);
     });
 
     tiktokConnection.on('error', (err) => {

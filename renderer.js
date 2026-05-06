@@ -43,6 +43,7 @@ const historyModalBackdrop = document.getElementById('historyModalBackdrop');
 const historyModalTitle = document.getElementById('historyModalTitle');
 const historyModalBody = document.getElementById('historyModalBody');
 const historyModalCloseBtn = document.getElementById('historyModalCloseBtn');
+const giftSearchInput = document.getElementById('giftSearchInput');
 
 let chart;
 let messageCount = 0;
@@ -71,6 +72,7 @@ function rememberLiveUser(data) {
 
     const uniqueId = String(data.uniqueId || '').trim().replace(/^@+/, '');
     const nickname = String(data.nickname || uniqueId || '').trim();
+    const isFollower = data.isFollower;
     const key = normalizeListenUser(uniqueId || nickname);
 
     if (!key) {
@@ -81,6 +83,7 @@ function rememberLiveUser(data) {
     liveUsers.set(key, {
         uniqueId: uniqueId || previous.uniqueId || '',
         nickname: nickname || previous.nickname || uniqueId || 'Nao identificado',
+        isFollower: isFollower !== undefined ? isFollower : previous.isFollower,
         lastSeen: Date.now()
     });
 
@@ -222,6 +225,11 @@ function renderLiveUserSelector(input) {
         const name = document.createElement('strong');
         name.textContent = user.nickname || user.uniqueId || 'Nao identificado';
         button.appendChild(name);
+
+        const badge = createFollowerBadge(user.isFollower);
+        if (badge) {
+            button.appendChild(badge);
+        }
 
         if (user.uniqueId) {
             const handle = document.createElement('span');
@@ -780,6 +788,25 @@ function trimAllGiftsTable(maxRows) {
     }
 }
 
+function applyGiftFilter() {
+    if (!giftSearchInput) return;
+    const filterText = giftSearchInput.value.trim().toLowerCase();
+    const rows = Array.from(allGiftsTableBody.querySelectorAll('tr'));
+    
+    rows.forEach(row => {
+        const giftName = (row.getAttribute('data-gift-name') || '').toLowerCase();
+        if (!filterText || giftName.includes(filterText)) {
+            row.style.display = '';
+        } else {
+            row.style.display = 'none';
+        }
+    });
+}
+
+if (giftSearchInput) {
+    giftSearchInput.addEventListener('input', applyGiftFilter);
+}
+
 function addAllGiftToList(gift) {
     if (shouldSkipIntermediateStreakGift(gift)) {
         return;
@@ -804,6 +831,7 @@ function addAllGiftToList(gift) {
         }
         reorderAllGiftsTableByCount();
         trimAllGiftsTable(50);
+        applyGiftFilter();
         return;
     }
 
@@ -845,6 +873,7 @@ function addAllGiftToList(gift) {
     allGiftsTableBody.appendChild(tr);
     reorderAllGiftsTableByCount();
     trimAllGiftsTable(50);
+    applyGiftFilter();
 }
 
 function addPinnedCommentToList(pinnedComment) {
@@ -889,9 +918,21 @@ function addFlaggedMessageToList(data) {
     if (!flaggedMessagesTableBody) {
         return;
     }
+
+    // Se já existe uma mensagem idêntica pendente, não adicionamos duplicata para evitar spam de feedback
+    const messageKey = `msg-${data.comment}`;
+    const existingRow = Array.from(flaggedMessagesTableBody.children).find(row => row.dataset.messageKey === messageKey);
+    if (existingRow) {
+        // Apenas destaca a linha existente
+        existingRow.classList.add('blink-row');
+        setTimeout(() => existingRow.classList.remove('blink-row'), 2000);
+        return;
+    }
+
     const timerKey = `flagged-${Date.now()}-${Math.random()}`;
     const tr = document.createElement('tr');
     tr.className = 'flagged-message-row blink-row';
+    tr.dataset.messageKey = messageKey;
 
     const tdUser = document.createElement('td');
     const spanUser = document.createElement('span');
@@ -923,78 +964,81 @@ function addFlaggedMessageToList(data) {
     tdReason.appendChild(spanReason);
 
     // Botoes de Feedback (Aprendizado IA)
-    const btnContainer = document.createElement('div');
-    btnContainer.style.marginTop = '8px';
-    btnContainer.style.display = 'flex';
-    btnContainer.style.gap = '5px';
+    // Repetições detectadas por regra (não IA) não precisam de feedback de aprendizado
+    if (data.category !== 'REPETICAO') {
+        const btnContainer = document.createElement('div');
+        btnContainer.style.marginTop = '8px';
+        btnContainer.style.display = 'flex';
+        btnContainer.style.gap = '5px';
 
-    const sendFeedback = async (expected, btnOk, btnNao) => {
-        try {
-            if (isElectron && ipcRenderer) {
-                ipcRenderer.send('send-feedback', {
-                    comment: data.comment,
-                    category: data.category,
-                    expected: expected
+        const sendFeedback = async (expected, btnOk, btnNao) => {
+            try {
+                if (isElectron && ipcRenderer) {
+                    ipcRenderer.send('send-feedback', {
+                        comment: data.comment,
+                        category: data.category,
+                        expected: expected
+                    });
+                    // Simula sucesso imediato no UI
+                    tr.classList.remove('blink-row');
+                    tr.style.opacity = '0.7';
+                    tr.style.backgroundColor = expected === 'NAO' ? '#e8f5e9' : '#fff3e0';
+                    btnOk.disabled = true;
+                    btnNao.disabled = true;
+                    btnOk.textContent = expected !== 'NAO' ? 'Confirmado' : 'Confirmar';
+                    btnNao.textContent = expected === 'NAO' ? 'Enviado' : 'Falso Positivo';
+                    
+                    if (flaggedMessageTimers[timerKey]) {
+                        clearTimeout(flaggedMessageTimers[timerKey]);
+                        flaggedMessageTimers[timerKey] = setTimeout(() => tr.remove(), 10000);
+                    }
+                    return;
+                }
+
+                const resp = await fetch('/api/feedback', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        comment: data.comment, 
+                        category: data.category,
+                        expected: expected 
+                    })
                 });
-                // Simula sucesso imediato no UI
-                tr.classList.remove('blink-row');
-                tr.style.opacity = '0.7';
-                tr.style.backgroundColor = expected === 'NAO' ? '#e8f5e9' : '#fff3e0';
-                btnOk.disabled = true;
-                btnNao.disabled = true;
-                btnOk.textContent = expected !== 'NAO' ? 'Confirmado' : 'Confirmar';
-                btnNao.textContent = expected === 'NAO' ? 'Enviado' : 'Falso Positivo';
-                
-                if (flaggedMessageTimers[timerKey]) {
-                    clearTimeout(flaggedMessageTimers[timerKey]);
-                    flaggedMessageTimers[timerKey] = setTimeout(() => tr.remove(), 10000);
+                if (resp.ok) {
+                    tr.classList.remove('blink-row');
+                    tr.style.opacity = '0.7';
+                    tr.style.backgroundColor = expected === 'NAO' ? '#e8f5e9' : '#fff3e0';
+                    btnOk.disabled = true;
+                    btnNao.disabled = true;
+                    btnOk.textContent = expected !== 'NAO' ? 'Confirmado' : 'Confirmar';
+                    btnNao.textContent = expected === 'NAO' ? 'Enviado' : 'Falso Positivo';
+                    
+                    if (flaggedMessageTimers[timerKey]) {
+                        clearTimeout(flaggedMessageTimers[timerKey]);
+                        flaggedMessageTimers[timerKey] = setTimeout(() => tr.remove(), 10000);
+                    }
                 }
-                return;
+            } catch (e) {
+                console.error('Erro ao enviar feedback:', e);
             }
+        };
 
-            const resp = await fetch('/api/feedback', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    comment: data.comment, 
-                    category: data.category,
-                    expected: expected 
-                })
-            });
-            if (resp.ok) {
-                tr.classList.remove('blink-row');
-                tr.style.opacity = '0.7';
-                tr.style.backgroundColor = expected === 'NAO' ? '#e8f5e9' : '#fff3e0';
-                btnOk.disabled = true;
-                btnNao.disabled = true;
-                btnOk.textContent = expected !== 'NAO' ? 'Confirmado' : 'Confirmar';
-                btnNao.textContent = expected === 'NAO' ? 'Enviado' : 'Falso Positivo';
-                
-                if (flaggedMessageTimers[timerKey]) {
-                    clearTimeout(flaggedMessageTimers[timerKey]);
-                    flaggedMessageTimers[timerKey] = setTimeout(() => tr.remove(), 10000);
-                }
-            }
-        } catch (e) {
-            console.error('Erro ao enviar feedback:', e);
-        }
-    };
+        const btnConfirm = document.createElement('button');
+        btnConfirm.className = 'action-btn small-btn';
+        btnConfirm.textContent = 'Confirmar';
+        
+        const btnFalsePositive = document.createElement('button');
+        btnFalsePositive.className = 'action-btn small-btn';
+        btnFalsePositive.style.backgroundColor = '#666';
+        btnFalsePositive.textContent = 'Falso Positivo';
 
-    const btnConfirm = document.createElement('button');
-    btnConfirm.className = 'action-btn small-btn';
-    btnConfirm.textContent = 'Confirmar';
-    
-    const btnFalsePositive = document.createElement('button');
-    btnFalsePositive.className = 'action-btn small-btn';
-    btnFalsePositive.style.backgroundColor = '#666';
-    btnFalsePositive.textContent = 'Falso Positivo';
+        btnConfirm.onclick = () => sendFeedback(`SIM_${data.category || 'OUTRO'}`, btnConfirm, btnFalsePositive);
+        btnFalsePositive.onclick = () => sendFeedback('NAO', btnConfirm, btnFalsePositive);
 
-    btnConfirm.onclick = () => sendFeedback(`SIM_${data.category || 'OUTRO'}`, btnConfirm, btnFalsePositive);
-    btnFalsePositive.onclick = () => sendFeedback('NAO', btnConfirm, btnFalsePositive);
-
-    btnContainer.appendChild(btnConfirm);
-    btnContainer.appendChild(btnFalsePositive);
-    tdReason.appendChild(btnContainer);
+        btnContainer.appendChild(btnConfirm);
+        btnContainer.appendChild(btnFalsePositive);
+        tdReason.appendChild(btnContainer);
+    }
 
     tr.appendChild(tdUser);
     tr.appendChild(tdMsg);
@@ -1085,6 +1129,14 @@ function setupEventStream() {
         rememberLiveUser(JSON.parse(event.data));
     });
 
+    eventSource.addEventListener('new-follower', event => {
+        rememberLiveUser(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('new-social-event', event => {
+        rememberLiveUser(JSON.parse(event.data));
+    });
+
     eventSource.addEventListener('new-gift-user', event => {
         addUserToList(JSON.parse(event.data));
     });
@@ -1136,6 +1188,14 @@ function setupElectronIpc() {
     });
 
     ipcRenderer.on('live-user-connected', (event, data) => {
+        rememberLiveUser(data);
+    });
+
+    ipcRenderer.on('new-follower', (event, data) => {
+        rememberLiveUser(data);
+    });
+
+    ipcRenderer.on('new-social-event', (event, data) => {
         rememberLiveUser(data);
     });
 
