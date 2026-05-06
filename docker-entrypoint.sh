@@ -1,7 +1,9 @@
 #!/bin/sh
 set -e
 
-MODEL="/app/models/google_gemma-4-E2B-it-Q4_K_M.gguf"
+# Get the model filename from the node config
+MODEL_FILENAME=$(node -e "console.log(require('./llm-model.js').GGUF_FILENAME)")
+MODEL="/app/models/$MODEL_FILENAME"
 
 ARCH="$(uname -m)"
 case "$ARCH" in

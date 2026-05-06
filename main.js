@@ -1,8 +1,11 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const { spawn } = require('child_process');
 const monitor = require('./monitor');
 const { addFeedback } = require('./database');
-const { probeLlamaReady, aiConfigured } = require('./ai');
+const { probeLlamaReady, aiConfigured, stopLlamaServer } = require('./ai');
+const llmModel = require('./llm-model');
 
 // Inicia o servidor Express em paralelo
 require('./server');
@@ -89,6 +92,47 @@ ipcMain.handle('probe-llm', async () => {
 ipcMain.handle('get-ui-config', () => {
     return {
         isElectron: true,
-        geminiConfigured: aiConfigured()
+        geminiConfigured: aiConfigured(),
+        selectedModel: llmModel.getSelectedModel(),
+        models: llmModel.MODELS
     };
+});
+
+ipcMain.handle('change-model', async (event, modelKey) => {
+    const success = llmModel.setSelectedModel(modelKey);
+    if (success) {
+        stopLlamaServer(); // Força reinício com novo modelo
+    }
+    return success;
+});
+
+ipcMain.handle('run-setup', async (event) => {
+    return new Promise((resolve) => {
+        let baseDir = __dirname;
+        if (process.resourcesPath && fs.existsSync(path.join(process.resourcesPath, 'scripts'))) {
+            baseDir = process.resourcesPath;
+        }
+        const setupPath = path.join(baseDir, 'scripts', 'setup-llm.js');
+        
+        const child = spawn('node', [setupPath], { stdio: ['inherit', 'pipe', 'inherit'] });
+        
+        child.stdout.on('data', (data) => {
+            const lines = data.toString().split('\n');
+            for (const line of lines) {
+                if (!line.trim()) continue;
+                try {
+                    const json = JSON.parse(line);
+                    if (json.type === 'progress') {
+                        if (mainWindow) mainWindow.webContents.send('setup-progress', json);
+                    }
+                } catch (e) {
+                    console.log(`[Setup] ${line}`);
+                }
+            }
+        });
+
+        child.on('close', (code) => {
+            resolve(code === 0);
+        });
+    });
 });
