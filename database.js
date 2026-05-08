@@ -4,6 +4,26 @@ const path = require('path');
 const dbPath = path.join(__dirname, 'feedback.db');
 const db = new sqlite3.Database(dbPath);
 
+const VALID_EXPECTED = new Set([
+    'NAO',
+    'SIM_PERGUNTA',
+    'SIM_PROSELITISMO',
+    'SIM_ODIO',
+    'SIM_SPAM',
+    'SIM_GOLPE',
+    'SIM_OUTRO'
+]);
+
+const VALID_CATEGORY = new Set([
+    'OK',
+    'PERGUNTA',
+    'PROSELITISMO',
+    'ODIO',
+    'SPAM',
+    'GOLPE',
+    'OUTRO'
+]);
+
 // Inicializa a tabela
 db.serialize(() => {
     db.run(`
@@ -35,9 +55,25 @@ function addFalsePositive(comment, category) {
 }
 
 function addFeedback(comment, category, expected) {
+    const normalizedComment = String(comment || '').trim();
+    const normalizedCategory = String(category || '').trim().toUpperCase();
+    const normalizedExpected = String(expected || 'NAO').trim().toUpperCase();
+
+    if (!normalizedComment) {
+        return Promise.reject(new Error('comment is required'));
+    }
+
+    if (!VALID_CATEGORY.has(normalizedCategory)) {
+        return Promise.reject(new Error('invalid category'));
+    }
+
+    if (!VALID_EXPECTED.has(normalizedExpected)) {
+        return Promise.reject(new Error('invalid expected'));
+    }
+
     return new Promise((resolve, reject) => {
         const stmt = db.prepare("INSERT INTO false_positives (comment, category, expected) VALUES (?, ?, ?)");
-        stmt.run(comment, category, expected || 'NAO', function(err) {
+        stmt.run(normalizedComment, normalizedCategory, normalizedExpected, function(err) {
             if (err) reject(err);
             else resolve(this.lastID);
         });
@@ -81,9 +117,50 @@ function cleanupOldAnomalies() {
 
 function getRecentFeedbacks(limit = 10) {
     return new Promise((resolve, reject) => {
-        db.all("SELECT comment, category, expected FROM false_positives ORDER BY timestamp DESC LIMIT ?", [limit], (err, rows) => {
+        const safeLimit = Number.isFinite(Number(limit)) ? Math.max(1, Math.min(200, Number(limit))) : 10;
+        db.all("SELECT comment, category, expected FROM false_positives ORDER BY timestamp DESC LIMIT ?", [safeLimit], (err, rows) => {
             if (err) reject(err);
             else resolve(rows);
+        });
+    });
+}
+
+function getRecentModerations(limit = 100) {
+    return new Promise((resolve, reject) => {
+        const safeLimit = Number.isFinite(Number(limit)) ? Math.max(1, Math.min(500, Number(limit))) : 100;
+        db.all(
+            `SELECT id, live_name, day, timestamp, uniqueId, comment, is_anomaly, category
+             FROM anomaly_logs
+             ORDER BY timestamp DESC
+             LIMIT ?`,
+            [safeLimit],
+            (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows);
+            }
+        );
+    });
+}
+
+function clearHistory() {
+    return new Promise((resolve, reject) => {
+        db.run('DELETE FROM anomaly_logs', function(err) {
+            if (err) reject(err);
+            else resolve(this.changes);
+        });
+    });
+}
+
+function deleteModeration(id) {
+    const numericId = Number(id);
+    if (!Number.isInteger(numericId) || numericId <= 0) {
+        return Promise.reject(new Error('invalid id'));
+    }
+
+    return new Promise((resolve, reject) => {
+        db.run('DELETE FROM anomaly_logs WHERE id = ?', [numericId], function(err) {
+            if (err) reject(err);
+            else resolve(this.changes);
         });
     });
 }
@@ -92,6 +169,11 @@ module.exports = {
     addFalsePositive,
     addFeedback,
     getRecentFeedbacks,
+    getRecentModerations,
+    clearHistory,
+    deleteModeration,
     logAnomaly,
-    cleanupOldAnomalies
+    cleanupOldAnomalies,
+    VALID_EXPECTED,
+    VALID_CATEGORY
 };

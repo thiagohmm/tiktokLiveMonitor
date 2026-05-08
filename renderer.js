@@ -30,8 +30,7 @@ const statusDiv = document.getElementById('status');
 const userTableBody = document.getElementById('userTableBody');
 const allGiftsTableBody = document.getElementById('allGiftsTableBody');
 const pinnedCommentsTableBody = document.getElementById('pinnedCommentsTableBody');
-const flaggedMessagesTableBody = document.getElementById('flaggedMessagesTableBody');
-const infractionsSectionTitle = document.getElementById('infractionsSectionTitle');
+const correlationMessagesTableBody = document.getElementById('correlationMessagesTableBody');
 const targetExpirationMinutesInput = document.getElementById('targetExpirationMinutes');
 const chartCanvas = document.getElementById('messageChart');
 const aiLedRow = document.getElementById('aiLedRow');
@@ -393,13 +392,13 @@ function clearHistories() {
 /** Rótulo curto para coluna Categoria (payload.category do servidor) */
 function infractionCategoryLabel(category) {
     const map = {
-        RELIGIAO: 'Matriz africana',
         PROSELITISMO: 'Proselitismo Cristão',
         SPAM: 'Spam',
         GOLPE: 'Golpe',
         ODIO: 'Ataque Pessoal',
         OUTRO: 'Outro',
-        REPETICAO: 'Repetição'
+        REPETICAO: 'Repetição',
+        CORRELACAO: 'Correlação Dino/Perfume'
     };
     const key = String(category || '').trim().toUpperCase();
     if (!key) return '—';
@@ -407,10 +406,7 @@ function infractionCategoryLabel(category) {
 }
 
 function applyInfractionsSectionTitle(aiConfigured) {
-    if (!infractionsSectionTitle) {
-        return;
-    }
-    infractionsSectionTitle.textContent = aiConfigured ? 'Infrações (Análise IA Local)' : 'Infrações';
+    // Seção de infrações removida da UI.
 }
 
 function showAiLedChecking() {
@@ -420,15 +416,47 @@ function showAiLedChecking() {
     aiLedText.textContent = 'Verificando IA…';
 }
 
+let _aiLedPollTimer = null;
+
 function setAiLedActive(active) {
     if (!aiLedRow || !aiLedDot || !aiLedText) return;
     aiLedRow.style.display = 'flex';
     aiLedDot.className = 'ai-led-dot ' + (active ? 'ai-led-dot-on' : 'ai-led-dot-off');
     aiLedText.textContent = active ? 'IA ativa' : 'IA inativa';
+    if (active) {
+        _stopAiLedPoll();
+    }
+}
+
+function _stopAiLedPoll() {
+    if (_aiLedPollTimer) {
+        clearInterval(_aiLedPollTimer);
+        _aiLedPollTimer = null;
+    }
+}
+
+function _startAiLedPoll() {
+    _stopAiLedPoll();
+    if (isElectron) {
+        _aiLedPollTimer = setInterval(() => {
+            ipcRenderer
+                .invoke('probe-llm')
+                .then((data) => setAiLedActive(Boolean(data && data.llmActive)))
+                .catch(() => {});
+        }, 5000);
+    } else {
+        _aiLedPollTimer = setInterval(() => {
+            fetch('/api/probe-llm')
+                .then((r) => r.ok ? r.json() : { llmActive: false })
+                .then((data) => setAiLedActive(Boolean(data && data.llmActive)))
+                .catch(() => {});
+        }, 5000);
+    }
 }
 
 function hideAiLed() {
     if (!aiLedRow || !aiLedDot || !aiLedText) return;
+    _stopAiLedPoll();
     aiLedRow.style.display = 'none';
     aiLedDot.className = 'ai-led-dot ai-led-dot-checking';
     aiLedText.textContent = 'Verificando IA…';
@@ -438,8 +466,15 @@ function runLlmProbeElectron() {
     showAiLedChecking();
     ipcRenderer
         .invoke('probe-llm')
-        .then((data) => setAiLedActive(Boolean(data && data.llmActive)))
-        .catch(() => setAiLedActive(false));
+        .then((data) => {
+            const active = Boolean(data && data.llmActive);
+            setAiLedActive(active);
+            if (!active) _startAiLedPoll();
+        })
+        .catch(() => {
+            setAiLedActive(false);
+            _startAiLedPoll();
+        });
 }
 
 function createChart(ChartLib) {
@@ -571,9 +606,12 @@ if (isElectron) {
 
         try {
             const probeData = await probePromise;
-            setAiLedActive(Boolean(probeData.llmActive));
+            const active = Boolean(probeData.llmActive);
+            setAiLedActive(active);
+            if (!active) _startAiLedPoll();
         } catch {
             setAiLedActive(false);
+            _startAiLedPoll();
         }
     });
 
@@ -627,8 +665,8 @@ function clearTables() {
     userTableBody.innerHTML = '';
     allGiftsTableBody.innerHTML = '';
     pinnedCommentsTableBody.innerHTML = '';
-    if (flaggedMessagesTableBody) {
-        flaggedMessagesTableBody.innerHTML = '';
+    if (correlationMessagesTableBody) {
+        correlationMessagesTableBody.innerHTML = '';
     }
 
     for (const key in autoRemoveTimers) {
@@ -921,15 +959,18 @@ function addPinnedCommentToList(pinnedComment) {
 }
 
 function addFlaggedMessageToList(data) {
-    if (!flaggedMessagesTableBody) {
+    if (!correlationMessagesTableBody) {
         return;
     }
 
-    // Se já existe uma mensagem idêntica pendente, não adicionamos duplicata para evitar spam de feedback
-    const messageKey = `msg-${data.comment}`;
-    const existingRow = Array.from(flaggedMessagesTableBody.children).find(row => row.dataset.messageKey === messageKey);
+    const category = String(data.category || '').toUpperCase();
+    if (!['REPETICAO', 'CORRELACAO'].includes(category)) {
+        return;
+    }
+
+    const messageKey = `alert-${category}-${String(data.uniqueId || '').toLowerCase()}-${String(data.comment || '').toLowerCase()}`;
+    const existingRow = Array.from(correlationMessagesTableBody.children).find(row => row.dataset.messageKey === messageKey);
     if (existingRow) {
-        // Apenas destaca a linha existente
         existingRow.classList.add('blink-row');
         setTimeout(() => existingRow.classList.remove('blink-row'), 2000);
         return;
@@ -958,108 +999,102 @@ function addFlaggedMessageToList(data) {
     const tdCat = document.createElement('td');
     const spanCat = document.createElement('span');
     spanCat.className = 'infraction-category';
-    spanCat.textContent = infractionCategoryLabel(data.category);
-    if (data.category) spanCat.title = String(data.category);
+    spanCat.textContent = infractionCategoryLabel(category);
+    if (category) spanCat.title = category;
     tdCat.appendChild(spanCat);
 
     const tdReason = document.createElement('td');
-    const spanReason = document.createElement('span');
-    spanReason.style.color = '#fe2c55';
-    spanReason.style.fontWeight = 'bold';
-    spanReason.textContent = data.reason != null ? String(data.reason) : '';
-    tdReason.appendChild(spanReason);
-
-    // Botoes de Feedback (Aprendizado IA)
-    // Repetições detectadas por regra (não IA) não precisam de feedback de aprendizado
-    if (data.category !== 'REPETICAO') {
-        const btnContainer = document.createElement('div');
-        btnContainer.style.marginTop = '8px';
-        btnContainer.style.display = 'flex';
-        btnContainer.style.gap = '5px';
-
-        const sendFeedback = async (expected, btnOk, btnNao) => {
-            try {
-                if (isElectron && ipcRenderer) {
-                    ipcRenderer.send('send-feedback', {
-                        comment: data.comment,
-                        category: data.category,
-                        expected: expected
-                    });
-                    // Simula sucesso imediato no UI
-                    tr.classList.remove('blink-row');
-                    tr.style.opacity = '0.7';
-                    tr.style.backgroundColor = expected === 'NAO' ? '#e8f5e9' : '#fff3e0';
-                    btnOk.disabled = true;
-                    btnNao.disabled = true;
-                    btnOk.textContent = expected !== 'NAO' ? 'Confirmado' : 'Confirmar';
-                    btnNao.textContent = expected === 'NAO' ? 'Enviado' : 'Falso Positivo';
-                    
-                    if (flaggedMessageTimers[timerKey]) {
-                        clearTimeout(flaggedMessageTimers[timerKey]);
-                        flaggedMessageTimers[timerKey] = setTimeout(() => tr.remove(), 10000);
-                    }
-                    return;
-                }
-
-                const resp = await fetch('/api/feedback', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        comment: data.comment, 
-                        category: data.category,
-                        expected: expected 
-                    })
-                });
-                if (resp.ok) {
-                    tr.classList.remove('blink-row');
-                    tr.style.opacity = '0.7';
-                    tr.style.backgroundColor = expected === 'NAO' ? '#e8f5e9' : '#fff3e0';
-                    btnOk.disabled = true;
-                    btnNao.disabled = true;
-                    btnOk.textContent = expected !== 'NAO' ? 'Confirmado' : 'Confirmar';
-                    btnNao.textContent = expected === 'NAO' ? 'Enviado' : 'Falso Positivo';
-                    
-                    if (flaggedMessageTimers[timerKey]) {
-                        clearTimeout(flaggedMessageTimers[timerKey]);
-                        flaggedMessageTimers[timerKey] = setTimeout(() => tr.remove(), 10000);
-                    }
-                }
-            } catch (e) {
-                console.error('Erro ao enviar feedback:', e);
-            }
-        };
-
-        const btnConfirm = document.createElement('button');
-        btnConfirm.className = 'action-btn small-btn';
-        btnConfirm.textContent = 'Confirmar';
-        
-        const btnFalsePositive = document.createElement('button');
-        btnFalsePositive.className = 'action-btn small-btn';
-        btnFalsePositive.style.backgroundColor = '#666';
-        btnFalsePositive.textContent = 'Falso Positivo';
-
-        btnConfirm.onclick = () => sendFeedback(`SIM_${data.category || 'OUTRO'}`, btnConfirm, btnFalsePositive);
-        btnFalsePositive.onclick = () => sendFeedback('NAO', btnConfirm, btnFalsePositive);
-
-        btnContainer.appendChild(btnConfirm);
-        btnContainer.appendChild(btnFalsePositive);
-        tdReason.appendChild(btnContainer);
-    }
+    tdReason.textContent = data.reason != null ? String(data.reason) : '';
 
     tr.appendChild(tdUser);
     tr.appendChild(tdMsg);
     tr.appendChild(tdCat);
     tr.appendChild(tdReason);
 
-    flaggedMessagesTableBody.prepend(tr);
+    correlationMessagesTableBody.prepend(tr);
 
     flaggedMessageTimers[timerKey] = setTimeout(() => {
         tr.remove();
         delete flaggedMessageTimers[timerKey];
-    }, 60 * 1000); // Aumentado para 60s para dar tempo do usuario ver e clicar
+    }, 60 * 1000);
 
-    if (flaggedMessagesTableBody.children.length > 50) {
-        flaggedMessagesTableBody.lastChild.remove();
+    if (correlationMessagesTableBody.children.length > 50) {
+        correlationMessagesTableBody.lastChild.remove();
+    }
+}
+
+function handleKeywordMention(data) {
+    if (!data) {
+        return;
+    }
+
+    rememberLiveUser(data);
+    markUserRed(data.uniqueId || '');
+
+    addPinnedCommentToList({
+        uniqueId: data.uniqueId,
+        nickname: data.nickname,
+        isFollower: data.isFollower,
+        comment: data.comment,
+        pinId: `keyword-${data.keyword || 'target'}-${data.uniqueId || 'anon'}-${data.timestamp || Date.now()}`,
+        timestamp: data.timestamp || Date.now()
+    });
+}
+
+function addCorrelationMessageToList(data) {
+    if (!correlationMessagesTableBody) {
+        return;
+    }
+
+    const correlationId = String(data.correlationId || '').trim();
+    if (correlationId) {
+        const existing = Array.from(correlationMessagesTableBody.children).find((row) => row.dataset.correlationId === correlationId);
+        if (existing) {
+            existing.remove();
+        }
+    }
+
+    const tr = document.createElement('tr');
+    tr.className = 'flagged-message-row';
+    if (correlationId) {
+        tr.dataset.correlationId = correlationId;
+    }
+    if (data.replacement) {
+        tr.classList.add('blink-row');
+        setTimeout(() => tr.classList.remove('blink-row'), 1800);
+    }
+
+    const tdGiftUser = document.createElement('td');
+    const spanGiftUser = document.createElement('span');
+    spanGiftUser.className = 'user-name';
+    const userLabel = data.giftNickname || data.giftUserId || 'Nao identificado';
+    spanGiftUser.textContent = data.giftUserId
+        ? `${userLabel} (@${data.giftUserId})`
+        : userLabel;
+    tdGiftUser.appendChild(spanGiftUser);
+
+    const tdQuestion = document.createElement('td');
+    tdQuestion.className = 'comment-cell';
+    tdQuestion.textContent = data.question || '[pergunta não encontrada]';
+
+    const tdConfidence = document.createElement('td');
+    const confidenceBadge = document.createElement('span');
+    confidenceBadge.className = 'infraction-category';
+    confidenceBadge.textContent = String(data.confidence || 'medium').toUpperCase();
+    tdConfidence.appendChild(confidenceBadge);
+
+    const tdMethod = document.createElement('td');
+    const methodLabel = String(data.method || 'heuristica');
+    tdMethod.textContent = data.replacement ? `${methodLabel} (ajustada)` : methodLabel;
+
+    tr.appendChild(tdGiftUser);
+    tr.appendChild(tdQuestion);
+    tr.appendChild(tdConfidence);
+    tr.appendChild(tdMethod);
+
+    correlationMessagesTableBody.prepend(tr);
+    if (correlationMessagesTableBody.children.length > 50) {
+        correlationMessagesTableBody.lastChild.remove();
     }
 }
 
@@ -1159,6 +1194,15 @@ function setupEventStream() {
         addFlaggedMessageToList(JSON.parse(event.data));
     });
 
+    eventSource.addEventListener('gift-question-correlation', event => {
+        const data = JSON.parse(event.data);
+        addCorrelationMessageToList(data);
+    });
+
+    eventSource.addEventListener('keyword-mention', event => {
+        handleKeywordMention(JSON.parse(event.data));
+    });
+
     eventSource.addEventListener('mark-user-red', event => {
         markUserRed(JSON.parse(event.data));
     });
@@ -1233,6 +1277,14 @@ function setupElectronIpc() {
 
     ipcRenderer.on('flagged-message', (event, data) => {
         addFlaggedMessageToList(data);
+    });
+
+    ipcRenderer.on('gift-question-correlation', (event, data) => {
+        addCorrelationMessageToList(data);
+    });
+
+    ipcRenderer.on('keyword-mention', (event, data) => {
+        handleKeywordMention(data);
     });
 
     ipcRenderer.on('mark-user-red', (event, uniqueId) => {

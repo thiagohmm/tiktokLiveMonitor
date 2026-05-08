@@ -13,6 +13,7 @@ const {
 } = require('./monitor');
 const { getRecentModerations, clearHistory, deleteModeration, addFeedback } = require('./database');
 const { probeLlamaReady, aiConfigured } = require('./ai');
+const { clearModerationCache, warmupModerationLearning, getModerationStartupStatus } = require('./moderation');
 
 const app = express();
 const server = http.createServer(app);
@@ -29,6 +30,39 @@ app.get('/vendor/chart.js', (req, res) => {
 
 // SSE: Server-Sent Events para atualizar a UI em tempo real
 const sseClients = new Set();
+let startupReadyPromise = null;
+
+function normalizeBoolean(value, defaultValue = false) {
+    if (value === undefined || value === null) return defaultValue;
+    const lowered = String(value).trim().toLowerCase();
+    if (['1', 'true', 'yes', 'y'].includes(lowered)) return true;
+    if (['0', 'false', 'no', 'n'].includes(lowered)) return false;
+    return defaultValue;
+}
+
+async function ensureStartupModerationReady() {
+    const current = getModerationStartupStatus();
+    if (current.ready) return current;
+
+    if (!startupReadyPromise) {
+        startupReadyPromise = (async () => {
+            const llmReady = await probeLlamaReady();
+            const status = await warmupModerationLearning({ touchLlm: llmReady });
+            return {
+                ...status,
+                llmReady
+            };
+        })()
+            .catch((error) => {
+                throw error;
+            })
+            .finally(() => {
+                startupReadyPromise = null;
+            });
+    }
+
+    return startupReadyPromise;
+}
 
 app.get('/events', (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
@@ -77,6 +111,7 @@ app.post('/api/connect', async (req, res) => {
     if (!username) return res.status(400).json({ error: 'Username is required' });
     
     try {
+        await ensureStartupModerationReady();
         await startMonitoring(username);
         res.json({ success: true });
     } catch (err) {
@@ -96,8 +131,8 @@ app.post('/api/settings', (req, res) => {
 
 app.post('/api/clear-history', async (req, res) => {
     try {
-        await clearHistory();
-        res.json({ success: true });
+        const deleted = await clearHistory();
+        res.json({ success: true, deleted });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -105,10 +140,11 @@ app.post('/api/clear-history', async (req, res) => {
 
 app.delete('/api/history/:id', async (req, res) => {
     try {
-        await deleteModeration(req.params.id);
-        res.json({ success: true });
+        const deleted = await deleteModeration(req.params.id);
+        res.json({ success: true, deleted });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        const statusCode = err.message === 'invalid id' ? 400 : 500;
+        res.status(statusCode).json({ error: err.message });
     }
 });
 
@@ -125,9 +161,39 @@ app.post('/api/feedback', async (req, res) => {
     const { comment, category, expected } = req.body;
     try {
         await addFeedback(comment, category, expected);
+        clearModerationCache();
+        const llmReady = await probeLlamaReady();
+        await warmupModerationLearning({ touchLlm: llmReady, force: true });
         res.json({ success: true });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        const statusCode = ['comment is required', 'invalid category', 'invalid expected'].includes(err.message) ? 400 : 500;
+        res.status(statusCode).json({ error: err.message });
+    }
+});
+
+app.get('/api/readiness', async (req, res) => {
+    try {
+        const force = normalizeBoolean(req.query.force, false);
+        if (force) {
+            await ensureStartupModerationReady();
+        }
+
+        const moderation = getModerationStartupStatus();
+        const llmReady = await probeLlamaReady();
+
+        res.json({
+            ready: Boolean(moderation.ready && llmReady),
+            llmReady,
+            moderation,
+            aiConfigured: aiConfigured()
+        });
+    } catch (err) {
+        res.status(500).json({
+            ready: false,
+            error: err.message,
+            moderation: getModerationStartupStatus(),
+            aiConfigured: aiConfigured()
+        });
     }
 });
 
@@ -140,9 +206,21 @@ app.get('/api/probe-llm', async (req, res) => {
     }
 });
 
-server.listen(PORT, HOST, () => {
-    console.log(`Server running at http://${HOST}:${PORT}`);
-});
+async function startServer() {
+    server.listen(PORT, HOST, () => {
+        console.log(`Server running at http://${HOST}:${PORT}`);
+    });
+
+    // Warmup moderation in background after server is already listening
+    try {
+        const status = await ensureStartupModerationReady();
+        console.log(`[Startup] Moderação pronta. Feedbacks carregados: ${status.feedbackCount}`);
+    } catch (error) {
+        console.error('[Startup] Falha ao aquecer moderação:', error.message);
+    }
+}
+
+void startServer();
 
 function shutdownServer() {
     console.log('Shutting down server...');

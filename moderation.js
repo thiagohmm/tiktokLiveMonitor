@@ -1,5 +1,5 @@
 const { completeModeration } = require('./ai');
-const { BINARY_RELIGIOUS_MODERATION_SYSTEM, getModerationSystemPrompt } = require('./moderation-prompt');
+const { getModerationSystemPrompt, getModerationPromptContext } = require('./moderation-prompt');
 
 /** Cache para evitar chamadas repetidas à IA */
 const aiCache = new Map();
@@ -7,6 +7,27 @@ const AI_CACHE_MAX = 150;
 
 let aiModerationCooldownUntil = 0;
 const AI_MODERATION_COOLDOWN_MS = 30_000;
+const MODERATION_AUDIT_RECLASSIFY = ['1', 'true', 'yes', 'y'].includes(
+    String(process.env.MODERATION_AUDIT_RECLASSIFY || '').trim().toLowerCase()
+);
+
+let moderationStartupStatus = {
+    ready: false,
+    feedbackCount: 0,
+    warmedAt: null,
+    lastError: null
+};
+
+let warmupInFlight = null;
+
+function logModerationAudit(event, payload) {
+    if (!MODERATION_AUDIT_RECLASSIFY) return;
+    try {
+        console.log(`[MOD-AUDIT] ${event}: ${JSON.stringify(payload)}`);
+    } catch {
+        console.log(`[MOD-AUDIT] ${event}`);
+    }
+}
 
 function foldChatText(text) {
     return String(text || '')
@@ -14,20 +35,6 @@ function foldChatText(text) {
         .normalize('NFD')
         .replace(/\p{M}/gu, '')
         .replace(/ç/g, 'c');
-}
-
-function looksObviousAttackOnAfroBrazilianReligion(commentLower) {
-    const t = foldChatText(commentLower);
-    const evil = /\b(diabo|demonio|demoniac[o]?|capeta|satanas|satanico|satan|inferno)\b/;
-    const traditions = /\b(candomble|umbanda|macumba|orixa[s]?|feitico|feitisa[m]?)\b/;
-    const patterns = [
-        new RegExp(`${traditions.source}[\\s\\S]{0,140}${evil.source}`, 'i'),
-        new RegExp(`${evil.source}[\\s\\S]{0,140}${traditions.source}`, 'i'),
-        /\b(candomble|umbanda|macumba)\b[\s\S]{0,120}\bsatanismo\b/,
-        /\bsatanismo\b[\s\S]{0,120}\b(candomble|umbanda|macumba|orixa)\b/,
-        /\b(idolatr|heresia)\b[\s\S]{0,100}\b(candomble|umbanda|macumba|orixa)\b/
-    ];
-    return patterns.some(rx => rx.test(t));
 }
 
 function looksExplicitChristianProselytizing(commentLower) {
@@ -132,10 +139,58 @@ function passesPersonalAttackAiGate(commentFolded) {
     return false;
 }
 
+function looksQuestion(comment) {
+    const raw = String(comment || '').trim();
+    if (!raw) return false;
+
+    const folded = foldChatText(raw);
+    if (raw.includes('?') || raw.includes('¿')) return true;
+
+    const startsLikeQuestion =
+        /^(pq|pk|por\s+que|porque|como|quando|onde|aonde|quem|qual|quais|q\b|sera\s+que|pode|poderia|tem\s+como|da\s+pra|d[aá]\s+pra|isso\s+e|isso\s+eh|v[oô]ce\s+sabe|alguem\s+sabe|algm\s+sabe|me\s+tira\s+uma\s+duvida|duvida\b|duvida:|duvida\s*[-:])\b/.test(
+            folded
+        );
+
+    if (startsLikeQuestion) return true;
+
+    const containsQuestionCue =
+        /\b(pq|pk|por\s+que|como\s+assim|quem\s+sabe|alguem\s+sabe|algm\s+sabe|tem\s+como|da\s+pra|d[aá]\s+pra|sera\s+que|qual\s+o|qual\s+a)\b/.test(
+            folded
+        );
+
+    return containsQuestionCue;
+}
+
+function hasClearPersonalAttackSignal(comment) {
+    const folded = foldChatText(comment);
+    if (passesPersonalAttackAiGate(folded)) return true;
+
+    // Cobre ataques em formato de pergunta que nem sempre passam no gate base.
+    return /\b(vc|voce|voces|tu|ce|c\b)\b[\s\S]{0,20}\b(e\s+)?(burro|idiota|imbecil|retardad[oa]|ridicul[oa]|otari[oa]|troux[ae]|lixo)\b/.test(
+        folded
+    );
+}
+
+/**
+ * Detecta linguagem afetiva/romântica sobre terceiros.
+ * Ex: "ela gosta dele", "vai atrás", "tem sentimentos", "está apaixonado".
+ * Essas frases NÃO são ataques pessoais e nunca devem ser classificadas como ODIO.
+ */
+function looksAffectiveOrRomantic(comment) {
+    const t = foldChatText(comment);
+    if (/\b(gosta\s+d[eio]|gostar\s+d[eio]|gostou\s+d[eio])\b/.test(t)) return true;
+    if (/\b(vai\s+atras|vai\s+atr[aá]s|foi\s+atras|correr\s+atras)\b/.test(t)) return true;
+    if (/\b(tem\s+sentimentos?|tinha\s+sentimentos?|ter\s+sentimentos?)\b/.test(t)) return true;
+    if (/\b(esta\s+apaixonad[oa]|ficou\s+apaixonad[oa]|apaixonou)\b/.test(t)) return true;
+    if (/\b(tem\s+interesse|demonstrou?\s+interesse|esta\s+interessad[oa])\b/.test(t)) return true;
+    if (/\b(curte|curtiu|se\s+apaixonou|quer\s+fic[ao]r?|quer\s+namorar)\b/.test(t)) return true;
+    if (/\b(esta\s+(gostando|querendo)|sempre\s+gostou)\b/.test(t)) return true;
+    return false;
+}
+
 const { logAnomaly } = require('./database');
 
 const CATEGORY_LABELS = {
-    RELIGIAO: 'Matriz Africana',
     PROSELITISMO: 'Proselitismo Cristão',
     SPAM: 'Spam / propaganda (IA)',
     GOLPE: 'Possível golpe ou fraude (IA)',
@@ -160,7 +215,6 @@ function parseBinaryReligiousAnswer(raw) {
     const prefixMap = [
         ['sim_odio', 'ODIO'],
         ['sim_proselitismo', 'PROSELITISMO'],
-        ['sim_religiao', 'RELIGIAO'],
         ['sim_spam', 'SPAM'],
         ['sim_golpe', 'GOLPE'],
         ['sim_pergunta', 'PERGUNTA'],
@@ -195,27 +249,20 @@ async function analyzeMessage(comment, uniqueId, nickname, chatBuffer, liveName 
     const commentLower = comment.trim().toLowerCase();
     const folded = foldChatText(commentLower);
 
-    // 1. Filtros de Regex (Rápido) - Mantemos para agilizar flag óbvia, mas o log passará pela IA
-    if (looksObviousAttackOnAfroBrazilianReligion(commentLower)) {
-        const res = { flagged: true, reason: 'Ataque a matriz africana / Orixás (filtro)', category: 'RELIGIAO' };
-        void logAnomaly(liveName, comment, true, res.category, uniqueId).catch(() => {});
-        return res;
-    }
-
-    // 2. IA Gate (Removido o isSuspicious para que TODAS passem pela classificação de anomalias via IA)
+    // 1. IA Gate (Removido o isSuspicious para que TODAS passem pela classificação de anomalias via IA)
     // No entanto, ainda evitamos perguntas ou cooldowns graves se o servidor estiver caído.
     if (Date.now() < aiModerationCooldownUntil) {
         return { flagged: false };
     }
 
-    // 3. Cache da IA (mensagem normalizada)
+    // 2. Cache da IA (mensagem normalizada)
     const aiCacheKey = folded.slice(0, 500);
     let result;
     
     if (aiCache.has(aiCacheKey)) {
         result = aiCache.get(aiCacheKey);
     } else {
-        // 4. Chamada à IA Local (Pool distribuído no ai.js)
+        // 3. Chamada à IA Local (Pool distribuído no ai.js)
         try {
             const systemPrompt = await getModerationSystemPrompt();
             const userPrompt =
@@ -225,12 +272,62 @@ async function analyzeMessage(comment, uniqueId, nickname, chatBuffer, liveName 
 
             const raw = await completeModeration(systemPrompt, userPrompt, 48);
             const { flagged, category } = parseBinaryReligiousAnswer(raw);
-            const reason = flagged ? CATEGORY_LABELS[category] || CATEGORY_LABELS.OUTRO : null;
+            let finalCategory = category;
+            let finalFlagged = flagged;
 
-            result = { flagged, reason, category };
+            // Evita falso positivo: perguntas sem sinal claro de ataque não devem virar "ODIO".
+            if (finalCategory === 'ODIO' && looksQuestion(comment) && !hasClearPersonalAttackSignal(comment)) {
+                logModerationAudit('reclassified_odio_to_pergunta', {
+                    liveName,
+                    uniqueId,
+                    nickname,
+                    rawModelOutput: raw,
+                    originalCategory: finalCategory,
+                    finalCategory: 'PERGUNTA',
+                    message: comment
+                });
+                finalCategory = 'PERGUNTA';
+                finalFlagged = false;
+            }
+
+            // Evita falso positivo: linguagem afetiva/romântica (ex: "ela gosta dele", "vai atrás",
+            // "tem sentimentos") não deve ser classificada como ODIO.
+            if (finalCategory === 'ODIO' && finalFlagged && looksAffectiveOrRomantic(comment)) {
+                logModerationAudit('reclassified_odio_to_nao_affective', {
+                    liveName,
+                    uniqueId,
+                    nickname,
+                    rawModelOutput: raw,
+                    originalCategory: finalCategory,
+                    finalCategory: 'NAO',
+                    message: comment
+                });
+                finalCategory = 'OK';
+                finalFlagged = false;
+            }
+
+            // Evita falso positivo: gossip/drama sobre terceiros (ex: "X está traindo Y") sem
+            // sinal verificável de ataque pessoal não devem ser flagados como ODIO.
+            if (finalCategory === 'ODIO' && finalFlagged && !hasClearPersonalAttackSignal(comment)) {
+                logModerationAudit('reclassified_odio_to_nao_no_signal', {
+                    liveName,
+                    uniqueId,
+                    nickname,
+                    rawModelOutput: raw,
+                    originalCategory: finalCategory,
+                    finalCategory: 'NAO',
+                    message: comment
+                });
+                finalCategory = 'OK';
+                finalFlagged = false;
+            }
+
+            const reason = finalFlagged ? CATEGORY_LABELS[finalCategory] || CATEGORY_LABELS.OUTRO : null;
+
+            result = { flagged: finalFlagged, reason, category: finalCategory };
             
-            if (flagged) {
-                console.log(`[AI] ⚠️ CONTEÚDO FLAGADO: [${category}] - "${comment}"`);
+            if (result.flagged) {
+                console.log(`[AI] ⚠️ CONTEÚDO FLAGADO: [${result.category}] - "${comment}"`);
             } else {
                 console.log(`[AI] ✅ Conteúdo liberado: "${comment.substring(0, 50)}${comment.length > 50 ? '...' : ''}"`);
             }
@@ -244,7 +341,7 @@ async function analyzeMessage(comment, uniqueId, nickname, chatBuffer, liveName 
         }
     }
 
-    // 5. Salva no banco de dados de anomalias (requisito do usuário)
+    // 4. Salva no banco de dados de anomalias (requisito do usuário)
     void logAnomaly(liveName, comment, result.flagged, result.category, uniqueId).catch(err => {
         console.error('[Database] Erro ao logar anomalia:', err.message);
     });
@@ -257,4 +354,57 @@ function clearModerationCache() {
     aiModerationCooldownUntil = 0;
 }
 
-module.exports = { analyzeMessage, clearModerationCache };
+async function warmupModerationLearning(options = {}) {
+    const { touchLlm = false, force = false } = options;
+
+    if (warmupInFlight && !force) {
+        return warmupInFlight;
+    }
+
+    warmupInFlight = (async () => {
+        try {
+            const { prompt, feedbackCount } = await getModerationPromptContext(12);
+
+            if (touchLlm) {
+                // Warmup para reduzir latência da primeira classificação após startup.
+                await completeModeration(
+                    prompt,
+                    'Contexto recente (mensagens anteriores na live): (nenhuma mensagem anterior no buffer)\n\nAutor do comentário: "system"\nTexto para analisar (ignore menções @nome no início): "mensagem de aquecimento"',
+                    8
+                );
+            }
+
+            moderationStartupStatus = {
+                ready: true,
+                feedbackCount,
+                warmedAt: new Date().toISOString(),
+                lastError: null
+            };
+
+            return { ...moderationStartupStatus };
+        } catch (error) {
+            moderationStartupStatus = {
+                ready: false,
+                feedbackCount: 0,
+                warmedAt: null,
+                lastError: error.message
+            };
+            throw error;
+        } finally {
+            warmupInFlight = null;
+        }
+    })();
+
+    return warmupInFlight;
+}
+
+function getModerationStartupStatus() {
+    return { ...moderationStartupStatus };
+}
+
+module.exports = {
+    analyzeMessage,
+    clearModerationCache,
+    warmupModerationLearning,
+    getModerationStartupStatus
+};
