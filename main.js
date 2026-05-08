@@ -5,6 +5,7 @@ const { spawn } = require('child_process');
 const monitor = require('./monitor');
 const { addFeedback } = require('./database');
 const { probeLlamaReady, aiConfigured, stopLlamaServer } = require('./ai');
+const { clearModerationCache, warmupModerationLearning } = require('./moderation');
 const llmModel = require('./llm-model');
 
 // Inicia o servidor Express em paralelo
@@ -75,6 +76,9 @@ ipcMain.on('disconnect-tiktok', () => {
 ipcMain.on('send-feedback', async (event, data) => {
     try {
         await addFeedback(data.comment, data.category, data.expected);
+        clearModerationCache();
+        const llmReady = await probeLlamaReady();
+        await warmupModerationLearning({ touchLlm: llmReady, force: true });
     } catch (err) {
         console.error('Erro ao salvar feedback via IPC:', err);
     }

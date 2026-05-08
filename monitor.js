@@ -1,16 +1,20 @@
 const { WebcastPushConnection } = require('tiktok-live-connector');
-const { aiConfigured, probeLlamaReady } = require('./ai');
-const { analyzeMessage: analyzeMessageModeration } = require('./moderation');
-const { addFeedback } = require('./database');
+const { correlateGiftQuestionWithLlm } = require('./ai');
 
 // Variáveis de estado
 let tiktokConnection;
 let currentUsername;
 let chatBuffer = []; // Ultimas 500 mensagens
+let questionBuffer = []; // Perguntas recentes para correlacionar com presentes alvo
 let pinnedCommentUsers = new Set();
 let processedPinnedMessages = new Set();
 let repeatAlertedSequences = new Set();
 let eventHandlers = [];
+
+const QUESTION_BUFFER_MAX = 300;
+const QUESTION_CORRELATION_WINDOW_MS = 3 * 60 * 1000;
+const CORRELATION_FORWARD_LOOKAHEAD_COUNT = 2;
+const CORRELATION_FORWARD_REVIEW_DELAY_MS = 4000;
 
 function repeatSequenceKey(senderKey, commentLower) {
     return JSON.stringify([senderKey, commentLower]);
@@ -215,15 +219,360 @@ function normalizeId(value) {
     return String(value || '').toLowerCase();
 }
 
+function foldChatText(text) {
+    return String(text || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/\p{M}/gu, '')
+        .replace(/ç/g, 'c');
+}
+
+function looksLikeQuestion(comment) {
+    const raw = String(comment || '').trim();
+    if (!raw) return false;
+    if (/[?¿]/.test(raw)) return true;
+
+    const t = foldChatText(raw);
+    if (/^(pq|pk|por\s+que|porque|como|quando|onde|aonde|quem|qual|quais|sera\s+que|duvida\b|duvida[:\-])\b/.test(t)) {
+        return true;
+    }
+    return /\b(tem\s+como|da\s+pra|d[aá]\s+pra|alguem\s+sabe|algm\s+sabe|me\s+tira\s+uma\s+duvida|qual\s+o|qual\s+a)\b/.test(t);
+}
+
+function pruneQuestionBuffer(now = Date.now()) {
+    questionBuffer = questionBuffer.filter((q) => (now - q.timestamp) <= QUESTION_CORRELATION_WINDOW_MS);
+    if (questionBuffer.length > QUESTION_BUFFER_MAX) {
+        questionBuffer = questionBuffer.slice(-QUESTION_BUFFER_MAX);
+    }
+}
+
+function trackQuestionMessage(msgData) {
+    if (!msgData || !looksLikeQuestion(msgData.comment)) return;
+    questionBuffer.push({
+        uniqueId: normalizeId(msgData.uniqueId),
+        nickname: msgData.nickname,
+        comment: msgData.comment,
+        timestamp: msgData.timestamp,
+        isFollower: msgData.isFollower
+    });
+    pruneQuestionBuffer(msgData.timestamp);
+}
+
+function getRecentChatCandidates(now = Date.now()) {
+    return [...chatBuffer]
+        .filter((m) => (now - Number(m.timestamp || 0)) <= QUESTION_CORRELATION_WINDOW_MS)
+        .slice(-40)
+        .map((m) => ({
+            uniqueId: normalizeId(m.uniqueId),
+            nickname: m.nickname,
+            comment: m.comment,
+            timestamp: m.timestamp,
+            isFollower: m.isFollower
+        }));
+}
+
+function chooseQuestionHeuristic(giftPayload) {
+    const now = Date.now();
+    const giftUid = normalizeId(giftPayload?.uniqueId);
+    const giftNickFold = foldChatText(giftPayload?.nickname || '');
+    const questionCandidates = [...questionBuffer].reverse().filter((q) => (now - q.timestamp) <= QUESTION_CORRELATION_WINDOW_MS);
+    const recentChatCandidates = getRecentChatCandidates(now).reverse();
+    if (!questionCandidates.length && !recentChatCandidates.length) return null;
+
+    // Melhor caso: mesmo usuário enviou a pergunta e depois enviou o presente.
+    if (giftUid) {
+        const directQuestion = questionCandidates.find((q) => q.uniqueId && q.uniqueId === giftUid);
+        if (directQuestion) return { match: directQuestion, method: 'same-user-question', confidence: 'high' };
+
+        const directRecentMessage = recentChatCandidates.find((m) => m.uniqueId && m.uniqueId === giftUid);
+        if (directRecentMessage) return { match: directRecentMessage, method: 'same-user-recent-message', confidence: 'high' };
+    }
+
+    if (giftNickFold) {
+        const directNick = recentChatCandidates.find((m) => foldChatText(m.nickname || '').includes(giftNickFold));
+        if (directNick) return { match: directNick, method: 'same-nickname-recent-message', confidence: 'medium' };
+    }
+
+    // Fallback: pergunta menciona o nickname de quem enviou o presente.
+    if (giftNickFold) {
+        const byMention = questionCandidates.find((q) => foldChatText(q.comment).includes(giftNickFold));
+        if (byMention) return { match: byMention, method: 'nickname-mention', confidence: 'medium' };
+    }
+
+    return null;
+}
+
+function correlationLog(event, payload = {}) {
+    const shortQuestion = String(payload.question || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 120);
+
+    console.log(
+        `[Correlation] ${event} | gift=${payload.giftName || '-'} | giftUser=${payload.giftNickname || payload.giftUserId || '-'} | method=${payload.method || '-'} | confidence=${payload.confidence || '-'} | questionUser=${payload.questionNickname || payload.questionUserId || '-'} | question="${shortQuestion}"`
+    );
+}
+
+function correlationIdFor(giftPayload, now = Date.now()) {
+    const giftUser = normalizeId(giftPayload?.uniqueId) || foldChatText(giftPayload?.nickname || 'anon');
+    const nonce = Math.random().toString(36).slice(2, 8);
+    return `corr-${giftUser}-${now}-${nonce}`;
+}
+
+function sameMessageIdentity(a, b) {
+    if (!a || !b) return false;
+    const aUid = normalizeId(a.uniqueId);
+    const bUid = normalizeId(b.uniqueId);
+    if (aUid && bUid) return aUid === bUid;
+
+    const aNick = foldChatText(a.nickname || '');
+    const bNick = foldChatText(b.nickname || '');
+    return Boolean(aNick && bNick && aNick === bNick);
+}
+
+function scoreCorrelationCandidate(candidate) {
+    const text = String(candidate?.comment || '').trim();
+    if (!text) return 0;
+
+    let score = 0;
+    if (looksLikeQuestion(text)) score += 3;
+    if (/[?¿]/.test(text)) score += 1;
+    if (/\b(pq|pk|por\s+que|porque|como|quando|onde|aonde|quem|qual|duvida|tem\s+como|da\s+pra|d[aá]\s+pra)\b/i.test(text)) {
+        score += 1;
+    }
+
+    const len = text.length;
+    if (len >= 8 && len <= 220) score += 0.5;
+
+    return score;
+}
+
+function getForwardMessages(baseMatch, limit = CORRELATION_FORWARD_LOOKAHEAD_COUNT) {
+    const baseTs = Number(baseMatch?.timestamp || 0);
+    if (!baseTs) return [];
+
+    const forward = [...chatBuffer]
+        .filter((m) => Number(m.timestamp || 0) > baseTs)
+        .sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
+
+    if (!forward.length) return [];
+
+    const sameAuthor = forward.filter((m) => sameMessageIdentity(baseMatch, m));
+    const source = sameAuthor.length ? sameAuthor : forward;
+
+    return source.slice(0, Math.max(1, limit)).map((m) => ({
+        uniqueId: normalizeId(m.uniqueId),
+        nickname: m.nickname,
+        comment: m.comment,
+        timestamp: m.timestamp,
+        isFollower: m.isFollower
+    }));
+}
+
+function emitCorrelationEvent({ correlationId, giftPayload, pick, method, confidence, replacement = false }) {
+    emit('gift-question-correlation', {
+        correlationId,
+        giftName: giftPayload.giftName,
+        giftUserId: giftPayload.uniqueId,
+        giftNickname: giftPayload.nickname,
+        questionUserId: pick.uniqueId,
+        questionNickname: pick.nickname,
+        question: pick.comment,
+        method,
+        confidence,
+        replacement,
+        timestamp: Date.now()
+    });
+}
+
+function scheduleForwardCorrelationReview({ correlationId, giftPayload, baseMatch, baseMethod, baseConfidence }) {
+    setTimeout(() => {
+        const forwardMessages = getForwardMessages(baseMatch, CORRELATION_FORWARD_LOOKAHEAD_COUNT);
+        if (!forwardMessages.length) {
+            correlationLog('FORWARD_NO_MESSAGES', {
+                giftName: giftPayload.giftName,
+                giftUserId: giftPayload.uniqueId,
+                giftNickname: giftPayload.nickname,
+                method: `${baseMethod}+forward-${CORRELATION_FORWARD_LOOKAHEAD_COUNT}`,
+                confidence: baseConfidence
+            });
+            return;
+        }
+
+        const baseScore = scoreCorrelationCandidate(baseMatch);
+        let bestPick = baseMatch;
+        let bestScore = baseScore;
+
+        for (const msg of forwardMessages) {
+            const score = scoreCorrelationCandidate(msg);
+            if (score > bestScore) {
+                bestPick = msg;
+                bestScore = score;
+            }
+        }
+
+        const changed = String(bestPick.comment || '') !== String(baseMatch.comment || '') ||
+            normalizeId(bestPick.uniqueId) !== normalizeId(baseMatch.uniqueId);
+
+        if (!changed || bestScore < (baseScore + 0.5)) {
+            correlationLog('FORWARD_KEEP_ORIGINAL', {
+                giftName: giftPayload.giftName,
+                giftUserId: giftPayload.uniqueId,
+                giftNickname: giftPayload.nickname,
+                questionUserId: baseMatch.uniqueId,
+                questionNickname: baseMatch.nickname,
+                question: baseMatch.comment,
+                method: baseMethod,
+                confidence: baseConfidence
+            });
+            return;
+        }
+
+        correlationLog('FORWARD_REPLACED', {
+            giftName: giftPayload.giftName,
+            giftUserId: giftPayload.uniqueId,
+            giftNickname: giftPayload.nickname,
+            questionUserId: bestPick.uniqueId,
+            questionNickname: bestPick.nickname,
+            question: bestPick.comment,
+            method: `${baseMethod}+forward-${CORRELATION_FORWARD_LOOKAHEAD_COUNT}`,
+            confidence: baseConfidence
+        });
+
+        emitCorrelationEvent({
+            correlationId,
+            giftPayload,
+            pick: bestPick,
+            method: `${baseMethod}+forward-${CORRELATION_FORWARD_LOOKAHEAD_COUNT}`,
+            confidence: baseConfidence,
+            replacement: true
+        });
+    }, CORRELATION_FORWARD_REVIEW_DELAY_MS);
+}
+
+async function correlateGiftWithQuestion(giftPayload) {
+    const now = Date.now();
+    const correlationId = correlationIdFor(giftPayload, now);
+    pruneQuestionBuffer(now);
+    const recentChatCandidates = getRecentChatCandidates(now);
+    if (!questionBuffer.length && !recentChatCandidates.length) {
+        correlationLog('NO_CANDIDATES', {
+            giftName: giftPayload.giftName,
+            giftUserId: giftPayload.uniqueId,
+            giftNickname: giftPayload.nickname,
+            method: 'none',
+            confidence: 'none'
+        });
+        return;
+    }
+
+    const heuristic = chooseQuestionHeuristic(giftPayload);
+    if (heuristic?.match) {
+        correlationLog('HEURISTIC_MATCH', {
+            giftName: giftPayload.giftName,
+            giftUserId: giftPayload.uniqueId,
+            giftNickname: giftPayload.nickname,
+            questionUserId: heuristic.match.uniqueId,
+            questionNickname: heuristic.match.nickname,
+            question: heuristic.match.comment,
+            method: heuristic.method,
+            confidence: heuristic.confidence
+        });
+
+        emitCorrelationEvent({
+            correlationId,
+            giftPayload,
+            pick: heuristic.match,
+            method: heuristic.method,
+            confidence: heuristic.confidence
+        });
+        scheduleForwardCorrelationReview({
+            correlationId,
+            giftPayload,
+            baseMatch: heuristic.match,
+            baseMethod: heuristic.method,
+            baseConfidence: heuristic.confidence
+        });
+        return;
+    }
+
+    // Fallback via LLM quando heurística não encontrou vínculo claro.
+    const llmCandidates = [...questionBuffer]
+        .filter((q) => (now - q.timestamp) <= QUESTION_CORRELATION_WINDOW_MS)
+        .concat(recentChatCandidates)
+        .filter((entry, index, arr) => arr.findIndex((x) =>
+            x.uniqueId === entry.uniqueId &&
+            String(x.comment || '') === String(entry.comment || '') &&
+            Number(x.timestamp || 0) === Number(entry.timestamp || 0)
+        ) === index)
+        .slice(-8)
+        .map((q) => ({
+            ...q,
+            ageMs: now - q.timestamp
+        }));
+
+    const llmPick = await correlateGiftQuestionWithLlm({
+        giftName: giftPayload.giftName,
+        giftUser: { uniqueId: giftPayload.uniqueId, nickname: giftPayload.nickname },
+        candidates: llmCandidates
+    });
+
+    if (!llmPick) {
+        correlationLog('LLM_NO_MATCH', {
+            giftName: giftPayload.giftName,
+            giftUserId: giftPayload.uniqueId,
+            giftNickname: giftPayload.nickname,
+            method: 'llm-fallback',
+            confidence: 'none'
+        });
+        return;
+    }
+
+    correlationLog('LLM_MATCH', {
+        giftName: giftPayload.giftName,
+        giftUserId: giftPayload.uniqueId,
+        giftNickname: giftPayload.nickname,
+        questionUserId: llmPick.uniqueId,
+        questionNickname: llmPick.nickname,
+        question: llmPick.comment,
+        method: 'llm-fallback',
+        confidence: 'medium'
+    });
+
+    emitCorrelationEvent({
+        correlationId,
+        giftPayload,
+        pick: llmPick,
+        method: 'llm-fallback',
+        confidence: 'medium'
+    });
+    scheduleForwardCorrelationReview({
+        correlationId,
+        giftPayload,
+        baseMatch: llmPick,
+        baseMethod: 'llm-fallback',
+        baseConfidence: 'medium'
+    });
+}
+
 function isTargetGift(giftName) {
     const normalizedGiftName = String(giftName || '').toLowerCase();
     const compactGiftName = normalizedGiftName.replace(/[^a-z0-9]/g, '');
 
     return normalizedGiftName.includes('perfume') ||
+        normalizedGiftName.includes('dino') ||
         normalizedGiftName.includes('tiny dyny') ||
         normalizedGiftName.includes('tiny diny') ||
+        compactGiftName.includes('dino') ||
         compactGiftName.includes('tinydyny') ||
         compactGiftName.includes('tinydiny');
+}
+
+function detectKeywordMention(comment) {
+    const normalized = String(comment || '').toLowerCase();
+    if (normalized.includes('dino')) return 'dino';
+    if (normalized.includes('perfume')) return 'perfume';
+    return null;
 }
 
 function getGiftTypeFromPayload(data) {
@@ -254,6 +603,7 @@ async function startMonitoring(username) {
 
     currentUsername = username;
     chatBuffer = [];
+    questionBuffer = [];
     pinnedCommentUsers.clear();
     processedPinnedMessages.clear();
     repeatAlertedSequences.clear();
@@ -307,12 +657,23 @@ async function startMonitoring(username) {
         };
         chatBuffer.push(msgData);
         if (chatBuffer.length > 500) chatBuffer.shift();
+        trackQuestionMessage(msgData);
 
-        if (settings.moderationEnabled && !isRepeat) {
-            const result = await analyzeMessageModeration(comment, user.uniqueId, user.nickname, chatBuffer, currentUsername);
-            if (result.flagged) {
-                emit('flagged-message', { ...result, uniqueId: user.uniqueId, comment: comment, nickname: user.nickname, isFollower: user.isFollower });
+        const keyword = detectKeywordMention(comment);
+        if (keyword) {
+            if (senderKey) {
+                pinnedCommentUsers.add(senderKey);
+                emit('mark-user-red', senderKey);
             }
+
+            emit('keyword-mention', {
+                uniqueId: user.uniqueId,
+                nickname: user.nickname,
+                comment,
+                keyword,
+                timestamp: now,
+                isFollower: user.isFollower
+            });
         }
     });
 
@@ -330,6 +691,9 @@ async function startMonitoring(username) {
         // Emitir apenas para presentes alvos
         if (targetGift && isGiftCountingSettlement(data)) {
             emit('new-gift-user', payload);
+            void correlateGiftWithQuestion(payload).catch((err) => {
+                console.warn('[Correlation] Falha ao correlacionar presente com pergunta:', err.message);
+            });
         }
     });
 

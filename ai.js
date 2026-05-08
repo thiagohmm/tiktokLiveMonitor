@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
-const { BINARY_RELIGIOUS_MODERATION_SYSTEM } = require('./moderation-prompt');
+const { MODERATION_SYSTEM_PROMPT } = require('./moderation-prompt');
 const { GGUF_FILENAME, getSelectedModel } = require('./llm-model');
 
 const BASE_PORT = 8080;
@@ -11,6 +11,8 @@ const BASE_PORT = 8080;
 let aiWorker = null; // Single worker instance
 let requestQueue = [];
 const QUEUE_MAX = 50; // Limite para evitar que a fila cresça infinitamente e cause atrasos extremos
+let isRestarting = false;   // Evita spawns simultâneos
+let restartRetryTimer = null; // Timer para retry automático após falha no restart
 
 /**
  * Representa um nó de processamento de IA (Local ou Remoto)
@@ -166,25 +168,36 @@ async function processQueue() {
     if (requestQueue.length === 0) return;
 
     if (!aiWorker || !aiWorker.ready || aiWorker.busy) {
-        // Se o worker não existe ou não está pronto e não estamos ocupados tentando resolver, tenta (re)iniciar
-        if (!aiWorker || (!aiWorker.ready && !aiWorker.busy)) {
+        // Só tenta (re)iniciar se não houver outro restart em andamento
+        if (!isRestarting && (!aiWorker || !aiWorker.ready)) {
+            isRestarting = true;
+            if (restartRetryTimer) {
+                clearTimeout(restartRetryTimer);
+                restartRetryTimer = null;
+            }
+
             const currentQueueSize = requestQueue.length;
-            console.log(`[AI-Queue] Worker indisponível ou em falha. Tentando (re)iniciar... (Fila: ${currentQueueSize})`);
-            
+            console.log(`[AI-Queue] Worker indisponível. Tentando (re)iniciar... (Fila: ${currentQueueSize})`);
+
             if (aiWorker && aiWorker.isLocal) {
                 aiWorker.kill();
                 aiWorker = null;
             }
 
             await spawnLocalWorker(BASE_PORT);
-            
-            // Se após o spawn ainda não estiver pronto, evita loop infinito imediato mas mantém a fila
+            isRestarting = false;
+
             if (!aiWorker || !aiWorker.ready) {
-                console.warn('[AI-Queue] Falha ao reativar worker local. Aguardando próxima tentativa.');
+                console.warn('[AI-Queue] Falha ao reativar worker local. Tentando novamente em 15s.');
+                // Agenda retry automático — garante recuperação mesmo sem novas mensagens chegando
+                restartRetryTimer = setTimeout(() => {
+                    restartRetryTimer = null;
+                    processQueue();
+                }, 15_000);
                 return;
             }
-            
-            // Se agora está pronto, continua o processamento
+
+            // Worker recuperado — processa a fila
             processQueue();
         }
         return;
@@ -201,10 +214,11 @@ async function processQueue() {
         })
         .catch(err => {
             console.error(`[AI] Erro ao processar tarefa:`, err.message);
-            // Se falhou por rede, desativa o worker temporariamente
-            aiWorker.ready = false;
-            requestQueue.unshift(task); // Devolve para a fila
-            task.reject(err); // Ou resolve com erro se for persistente
+            // Marca worker como não pronto para disparar restart na próxima iteração.
+            // Recoloca a tarefa na fila SEM rejeitar a promise — ela será resolvida
+            // quando o worker se recuperar.
+            if (aiWorker) aiWorker.ready = false;
+            requestQueue.unshift(task);
         })
         .finally(() => {
             if (aiWorker) aiWorker.busy = false;
@@ -276,10 +290,66 @@ function assistantTextFromChatResponse(json) {
 
 async function askLlama(prompt) {
     try {
-        const text = await completeModeration(BINARY_RELIGIOUS_MODERATION_SYSTEM, `Texto: ${prompt}`, 32);
+        const text = await completeModeration(MODERATION_SYSTEM_PROMPT, `Texto: ${prompt}`, 32);
         const compact = String(text || '').toLowerCase();
         return /^sim\b/i.test(compact) ? 'SIM' : 'NAO';
     } catch { return 'NAO'; }
+}
+
+/**
+ * Escolhe, via LLM, qual pergunta recente mais provavelmente se relaciona ao presente enviado.
+ * Retorna null quando não há correlação confiável.
+ */
+async function correlateGiftQuestionWithLlm({ giftName, giftUser, candidates }) {
+    const safeCandidates = Array.isArray(candidates) ? candidates.slice(0, 8) : [];
+    if (!safeCandidates.length) return null;
+
+    const systemPrompt = [
+        'Você correlaciona evento de presente no chat com uma pergunta recente.',
+        'Escolha APENAS uma opção da lista de perguntas candidatas.',
+        'Responda com UMA ÚNICA token:',
+        '- NAO (sem correlação clara)',
+        '- IDX_<N> (ex: IDX_2 para escolher a opção 2)',
+        'Use IDX apenas quando a ligação for clara por autor, menção, contexto ou sequência temporal próxima.',
+        'Sem explicações.'
+    ].join('\n');
+
+    const serializedCandidates = safeCandidates
+        .map((c, idx) => {
+            const user = String(c.nickname || c.uniqueId || 'desconhecido');
+            const uid = String(c.uniqueId || '');
+            const age = Number(c.ageMs || 0);
+            const ageSec = Math.max(0, Math.round(age / 1000));
+            return `${idx + 1}. user=${JSON.stringify(user)} uid=${JSON.stringify(uid)} ageSec=${ageSec} text=${JSON.stringify(String(c.comment || ''))}`;
+        })
+        .join('\n');
+
+    const userPrompt = [
+        `Presente: ${JSON.stringify(String(giftName || ''))}`,
+        `Quem enviou presente: ${JSON.stringify(String(giftUser?.nickname || giftUser?.uniqueId || 'desconhecido'))}`,
+        `UID de quem enviou presente: ${JSON.stringify(String(giftUser?.uniqueId || ''))}`,
+        '',
+        'Candidatas:',
+        serializedCandidates
+    ].join('\n');
+
+    try {
+        const raw = await completeModeration(systemPrompt, userPrompt, 12);
+        const normalized = String(raw || '').trim().toUpperCase();
+        if (!normalized || normalized.startsWith('NAO')) return null;
+
+        const match = normalized.match(/IDX[_\s-]?(\d+)/i);
+        if (!match) return null;
+
+        const oneBased = Number(match[1]);
+        if (!Number.isFinite(oneBased) || oneBased < 1 || oneBased > safeCandidates.length) {
+            return null;
+        }
+
+        return safeCandidates[oneBased - 1] || null;
+    } catch {
+        return null;
+    }
 }
 
 function stopLlamaServer() {
@@ -310,5 +380,6 @@ module.exports = {
     stopLlamaServer,
     aiConfigured: () => true,
     probeLlamaReady,
-    registerWorker
+    registerWorker,
+    correlateGiftQuestionWithLlm
 };
