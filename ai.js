@@ -126,7 +126,8 @@ async function spawnLocalWorker(port) {
         '--host', bindHost,
         '--port', port.toString(),
         '--n-gpu-layers', '0',
-        '--threads', threadsPerWorker
+        '--threads', threadsPerWorker,
+        '--ctx-size', '2048'
     ];
     if (process.env.LLAMA_USE_MMAP !== '1') llamaArgs.push('--no-mmap');
 
