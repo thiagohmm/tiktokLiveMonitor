@@ -39,3 +39,4 @@ yarn-error.log*
 # Workspace
 .vscode/
 .idea/
+.blackboxcli/

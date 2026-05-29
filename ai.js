@@ -342,5 +342,6 @@ module.exports = {
     aiConfigured,
     probeLlamaReady,
     mergeChatCompletionBody,
-    assistantTextFromChatResponse
+    assistantTextFromChatResponse,
+    startLlamaServer
 };
