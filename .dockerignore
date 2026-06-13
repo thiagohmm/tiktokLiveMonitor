@@ -7,3 +7,6 @@ dist
 models
 bin
 .DS_Store
+*.db
+*.exe
+/tiktok-live-monitor

@@ -9,21 +9,19 @@ services:
       PORT: "3000"
       LLAMA_SERVER_BIND: "0.0.0.0"
       LLAMA_USE_MMAP: "1"
-      LLAMA_HEALTH_MAX_ATTEMPTS: "180"
     shm_size: "512mb"
     volumes:
       - llm-models:/app/models
       - llm-bin:/app/bin
+      - feedback-data:/app
 
+  # AI worker can still run the llama-server on a separate node.
   ai-worker:
     build: .
-    command: node worker.js
+    command: /bin/sh -c "echo 'Worker mode: spawn llama-server manually or use sidecar' && sleep infinity"
     environment:
       MASTER_URL: "http://tiktok-live-monitor:3000"
       WORKER_PORT: "8081"
-      # O hostname no Docker é o ID do container ou o nome do serviço se for fixo. 
-      # Usaremos o IP interno ou deixaremos o Master resolver se estiver na mesma rede.
-      WORKER_HOST: "ai-worker" 
     shm_size: "512mb"
     volumes:
       - llm-models:/app/models
@@ -34,3 +32,4 @@ services:
 volumes:
   llm-models:
   llm-bin:
+  feedback-data:
