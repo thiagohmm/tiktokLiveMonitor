@@ -1,0 +1,19 @@
+{
+  "$schema": "https://wails.io/schemas/config.v3.json",
+  "name": "tiktok-live-monitor",
+  "outputfilename": "tiktok-live-monitor",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "",
+  "author": {
+    "name": "thiagohmm",
+    "email": ""
+  },
+  "info": {
+    "productName": "TikTok Live Monitor",
+    "companyName": "",
+    "copyright": "",
+    "comments": "Monitor de lives TikTok com moderação IA"
+  }
+}
