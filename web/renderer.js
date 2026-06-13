@@ -1,0 +1,1356 @@
+let ipcRenderer = null;
+try {
+    if (typeof require !== 'undefined') {
+        ipcRenderer = require('electron').ipcRenderer;
+    }
+} catch {
+    ipcRenderer = null;
+}
+
+const isElectron = Boolean(ipcRenderer);
+
+function ensureBrowserChart() {
+    if (isElectron || typeof window.Chart !== 'undefined') {
+        return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = `${window.location.origin}/vendor/chart.js`;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error('Não foi possível carregar Chart.js.'));
+        document.head.appendChild(script);
+    });
+}
+
+const usernameInput = document.getElementById('username');
+const connectBtn = document.getElementById('connectBtn');
+const disconnectBtn = document.getElementById('disconnectBtn');
+const listenBtn = document.getElementById('listenBtn');
+const statusDiv = document.getElementById('status');
+const userTableBody = document.getElementById('userTableBody');
+const allGiftsTableBody = document.getElementById('allGiftsTableBody');
+const pinnedCommentsTableBody = document.getElementById('pinnedCommentsTableBody');
+const correlationMessagesTableBody = document.getElementById('correlationMessagesTableBody');
+const targetExpirationMinutesInput = document.getElementById('targetExpirationMinutes');
+const chartCanvas = document.getElementById('messageChart');
+const aiLedRow = document.getElementById('aiLedRow');
+const aiLedDot = document.getElementById('aiLedDot');
+const aiLedText = document.getElementById('aiLedText');
+const modelSelectorContainer = document.getElementById('modelSelectorContainer');
+const modelSelect = document.getElementById('modelSelect');
+const setupProgressContainer = document.getElementById('setupProgressContainer');
+const setupStatusText = document.getElementById('setupStatusText');
+const setupPercentage = document.getElementById('setupPercentage');
+const setupProgressBar = document.getElementById('setupProgressBar');
+const targetGiftHistoryBtn = document.getElementById('targetGiftHistoryBtn');
+const pinnedCommentHistoryBtn = document.getElementById('pinnedCommentHistoryBtn');
+const historyModalBackdrop = document.getElementById('historyModalBackdrop');
+const historyModalTitle = document.getElementById('historyModalTitle');
+const historyModalBody = document.getElementById('historyModalBody');
+const historyModalCloseBtn = document.getElementById('historyModalCloseBtn');
+const giftSearchInput = document.getElementById('giftSearchInput');
+
+let chart;
+let messageCount = 0;
+let chartData = Array(60).fill(0);
+let giftCount = 0;
+let giftChartData = Array(60).fill(0);
+let autoRemoveTimers = {};
+let pinnedCommentTimers = {};
+let flaggedMessageTimers = {};
+let targetGiftHistory = [];
+let pinnedCommentHistory = [];
+let listenedMessages = [];
+let listenedUserId = '';
+let listenDraftValue = '';
+let liveUsers = new Map();
+let activeModalType = null;
+
+function normalizeListenUser(value) {
+    return String(value || '').trim().replace(/^@+/, '').toLowerCase();
+}
+
+function rememberLiveUser(data) {
+    if (!data) {
+        return;
+    }
+
+    const uniqueId = String(data.uniqueId || '').trim().replace(/^@+/, '');
+    const nickname = String(data.nickname || uniqueId || '').trim();
+    const isFollower = data.isFollower;
+    const key = normalizeListenUser(uniqueId || nickname);
+
+    if (!key) {
+        return;
+    }
+
+    const previous = liveUsers.get(key) || {};
+    liveUsers.set(key, {
+        uniqueId: uniqueId || previous.uniqueId || '',
+        nickname: nickname || previous.nickname || uniqueId || 'Nao identificado',
+        isFollower: isFollower !== undefined ? isFollower : previous.isFollower,
+        lastSeen: Date.now()
+    });
+
+    if (activeModalType === 'listen') {
+        renderListenModal({ preserveFocus: true });
+    }
+}
+
+function getLiveUserMatches(query) {
+    const normalizedQuery = normalizeListenUser(query);
+    return Array.from(liveUsers.values())
+        .filter(user => {
+            if (!normalizedQuery) {
+                return true;
+            }
+
+            return normalizeListenUser(user.uniqueId).includes(normalizedQuery) ||
+                normalizeListenUser(user.nickname).includes(normalizedQuery);
+        })
+        .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0))
+        .slice(0, 50);
+}
+
+function trimHistory(items) {
+    if (items.length > 15) {
+        items.length = 15;
+    }
+}
+
+function appendEmptyState(parent) {
+    const p = document.createElement('p');
+    p.className = 'modal-empty';
+    p.textContent = 'Nenhum registro ainda.';
+    parent.appendChild(p);
+}
+
+function createModalList(items, renderItem) {
+    const list = document.createElement('div');
+    list.className = 'modal-list';
+
+    if (!items.length) {
+        appendEmptyState(list);
+        return list;
+    }
+
+    items.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'modal-item';
+        renderItem(row, item);
+        list.appendChild(row);
+    });
+
+    return list;
+}
+
+function renderUserLine(row, nickname, uniqueId, isFollower) {
+    const strong = document.createElement('strong');
+    const userText = nickname || uniqueId || 'Nao identificado';
+    strong.textContent = uniqueId ? `${userText} (@${uniqueId})` : userText;
+    row.appendChild(strong);
+
+    const badge = createFollowerBadge(isFollower);
+    if (badge) {
+        row.appendChild(badge);
+    }
+}
+
+function createFollowerBadge(isFollower) {
+    if (isFollower === true) {
+        const span = document.createElement('span');
+        span.className = 'badge badge-follower';
+        span.textContent = 'Segue';
+        return span;
+    }
+    if (isFollower === false) {
+        const span = document.createElement('span');
+        span.className = 'badge badge-not-follower';
+        span.textContent = 'Não Segue';
+        return span;
+    }
+    return null;
+}
+
+function renderGiftHistory() {
+    historyModalTitle.textContent = 'Últimos 15 Presentes Alvos';
+    historyModalBody.replaceChildren(createModalList(targetGiftHistory, (row, item) => {
+        renderUserLine(row, item.nickname, item.uniqueId, item.isFollower);
+        const gift = document.createElement('span');
+        gift.textContent = item.giftName || 'Presente Alvo';
+        row.appendChild(gift);
+    }));
+}
+
+function renderPinnedCommentHistory() {
+    historyModalTitle.textContent = 'Últimos 15 Comentários Fixados';
+    historyModalBody.replaceChildren(createModalList(pinnedCommentHistory, (row, item) => {
+        renderUserLine(row, item.nickname, item.uniqueId, item.isFollower);
+
+        const comment = document.createElement('span');
+        comment.textContent = item.comment || '[sem texto identificado]';
+        row.appendChild(comment);
+    }));
+}
+
+function setListenedUser(value) {
+    const nextUserId = normalizeListenUser(value);
+    if (nextUserId !== listenedUserId) {
+        listenedMessages = [];
+    }
+    listenedUserId = nextUserId;
+}
+
+function renderLiveUserSelector(input) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'listen-user-panel';
+
+    const users = getLiveUserMatches(input.value);
+    if (!liveUsers.size) {
+        const empty = document.createElement('p');
+        empty.className = 'modal-empty';
+        empty.textContent = 'Nenhum usuário visto na live ainda.';
+        wrapper.appendChild(empty);
+        return wrapper;
+    }
+
+    if (!users.length) {
+        const empty = document.createElement('p');
+        empty.className = 'modal-empty';
+        empty.textContent = 'Nenhum usuário encontrado.';
+        wrapper.appendChild(empty);
+        return wrapper;
+    }
+
+    users.forEach(user => {
+        const button = document.createElement('button');
+        button.className = 'listen-user-option';
+        button.type = 'button';
+
+        const name = document.createElement('strong');
+        name.textContent = user.nickname || user.uniqueId || 'Nao identificado';
+        button.appendChild(name);
+
+        const badge = createFollowerBadge(user.isFollower);
+        if (badge) {
+            button.appendChild(badge);
+        }
+
+        if (user.uniqueId) {
+            const handle = document.createElement('span');
+            handle.textContent = `@${user.uniqueId}`;
+            button.appendChild(handle);
+        }
+
+        button.addEventListener('click', () => {
+            listenDraftValue = user.uniqueId ? `@${user.uniqueId}` : user.nickname;
+            setListenedUser(listenDraftValue);
+            renderListenModal({ preserveFocus: true });
+        });
+
+        wrapper.appendChild(button);
+    });
+
+    return wrapper;
+}
+
+function renderListenModal(options = {}) {
+    historyModalTitle.textContent = 'Escuta';
+    historyModalBody.replaceChildren();
+
+    const form = document.createElement('form');
+    form.className = 'listen-form';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = '@usuario';
+    input.autocomplete = 'off';
+    input.value = listenDraftValue;
+    input.addEventListener('input', () => {
+        listenDraftValue = input.value;
+        renderListenModal({ preserveFocus: true });
+    });
+
+    const button = document.createElement('button');
+    button.type = 'submit';
+    button.textContent = 'Escutar';
+
+    form.appendChild(input);
+    form.appendChild(button);
+    form.addEventListener('submit', event => {
+        event.preventDefault();
+        setListenedUser(input.value);
+        listenDraftValue = listenedUserId ? `@${listenedUserId}` : '';
+        renderListenModal();
+    });
+
+    historyModalBody.appendChild(form);
+    historyModalBody.appendChild(renderLiveUserSelector(input));
+    historyModalBody.appendChild(createModalList(listenedMessages, (row, item) => {
+        renderUserLine(row, item.nickname, item.uniqueId, item.isFollower);
+        const comment = document.createElement('span');
+        comment.textContent = item.comment || '';
+        row.appendChild(comment);
+    }));
+
+    if (options.preserveFocus) {
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+    }
+}
+
+function renderActiveModal() {
+    if (activeModalType === 'target-gifts') {
+        renderGiftHistory();
+    } else if (activeModalType === 'pinned-comments') {
+        renderPinnedCommentHistory();
+    } else if (activeModalType === 'listen') {
+        renderListenModal();
+    }
+}
+
+function openHistoryModal(type) {
+    activeModalType = type;
+    if (type === 'listen') {
+        listenDraftValue = listenedUserId ? `@${listenedUserId}` : '';
+    }
+    renderActiveModal();
+    historyModalBackdrop.classList.add('is-open');
+    historyModalBackdrop.setAttribute('aria-hidden', 'false');
+}
+
+function closeHistoryModal() {
+    historyModalBackdrop.classList.remove('is-open');
+    historyModalBackdrop.setAttribute('aria-hidden', 'true');
+    activeModalType = null;
+}
+
+function addTargetGiftToHistory(user) {
+    targetGiftHistory.unshift({
+        uniqueId: user.uniqueId || '',
+        nickname: user.nickname || user.uniqueId || 'Nao identificado',
+        giftName: user.giftName || 'Presente Alvo',
+        timestamp: user.timestamp || Date.now()
+    });
+    trimHistory(targetGiftHistory);
+    if (activeModalType === 'target-gifts') {
+        renderGiftHistory();
+    }
+}
+
+function addPinnedCommentToHistory(pinnedComment) {
+    pinnedCommentHistory.unshift({
+        uniqueId: pinnedComment.uniqueId || '',
+        nickname: pinnedComment.nickname || pinnedComment.uniqueId || 'Nao identificado',
+        comment: pinnedComment.comment || '[sem texto identificado]',
+        timestamp: pinnedComment.timestamp || Date.now(),
+        isFollower: pinnedComment.isFollower
+    });
+    trimHistory(pinnedCommentHistory);
+    if (activeModalType === 'pinned-comments') {
+        renderPinnedCommentHistory();
+    }
+}
+
+function handleListenedMessage(data) {
+    if (!listenedUserId || !data) {
+        return;
+    }
+
+    if (normalizeListenUser(data.uniqueId) !== listenedUserId) {
+        return;
+    }
+
+    listenedMessages.unshift({
+        uniqueId: data.uniqueId || '',
+        nickname: data.nickname || data.uniqueId || 'Nao identificado',
+        comment: data.comment || '',
+        timestamp: data.timestamp || Date.now()
+    });
+    trimHistory(listenedMessages);
+    if (activeModalType === 'listen') {
+        renderListenModal();
+    }
+}
+
+function handleNewChatMessage(data) {
+    rememberLiveUser(data);
+    messageCount++;
+    handleListenedMessage(data);
+}
+
+function clearHistories() {
+    targetGiftHistory = [];
+    pinnedCommentHistory = [];
+    listenedMessages = [];
+    listenedUserId = '';
+    listenDraftValue = '';
+    liveUsers.clear();
+    renderActiveModal();
+}
+
+/** Rótulo curto para coluna Categoria (payload.category do servidor) */
+function infractionCategoryLabel(category) {
+    const map = {
+        PROSELITISMO: 'Proselitismo Cristão',
+        SPAM: 'Spam',
+        GOLPE: 'Golpe',
+        ODIO: 'Ataque Pessoal',
+        OUTRO: 'Outro',
+        REPETICAO: 'Repetição',
+        CORRELACAO: 'Correlação Dino/Perfume'
+    };
+    const key = String(category || '').trim().toUpperCase();
+    if (!key) return '—';
+    return map[key] || key;
+}
+
+function applyInfractionsSectionTitle(aiConfigured) {
+    // Seção de infrações removida da UI.
+}
+
+function showAiLedChecking() {
+    if (!aiLedRow || !aiLedDot || !aiLedText) return;
+    aiLedRow.style.display = 'flex';
+    aiLedDot.className = 'ai-led-dot ai-led-dot-checking';
+    aiLedText.textContent = 'Verificando IA…';
+}
+
+let _aiLedPollTimer = null;
+
+function setAiLedActive(active) {
+    if (!aiLedRow || !aiLedDot || !aiLedText) return;
+    aiLedRow.style.display = 'flex';
+    aiLedDot.className = 'ai-led-dot ' + (active ? 'ai-led-dot-on' : 'ai-led-dot-off');
+    aiLedText.textContent = active ? 'IA ativa' : 'IA inativa';
+    if (active) {
+        _stopAiLedPoll();
+    }
+}
+
+function _stopAiLedPoll() {
+    if (_aiLedPollTimer) {
+        clearInterval(_aiLedPollTimer);
+        _aiLedPollTimer = null;
+    }
+}
+
+function _startAiLedPoll() {
+    _stopAiLedPoll();
+    if (isElectron) {
+        _aiLedPollTimer = setInterval(() => {
+            ipcRenderer
+                .invoke('probe-llm')
+                .then((data) => setAiLedActive(Boolean(data && data.llmActive)))
+                .catch(() => {});
+        }, 5000);
+    } else {
+        _aiLedPollTimer = setInterval(() => {
+            fetch('/api/probe-llm')
+                .then((r) => r.ok ? r.json() : { llmActive: false })
+                .then((data) => setAiLedActive(Boolean(data && data.llmActive)))
+                .catch(() => {});
+        }, 5000);
+    }
+}
+
+function hideAiLed() {
+    if (!aiLedRow || !aiLedDot || !aiLedText) return;
+    _stopAiLedPoll();
+    aiLedRow.style.display = 'none';
+    aiLedDot.className = 'ai-led-dot ai-led-dot-checking';
+    aiLedText.textContent = 'Verificando IA…';
+}
+
+function runLlmProbeElectron() {
+    showAiLedChecking();
+    ipcRenderer
+        .invoke('probe-llm')
+        .then((data) => {
+            const active = Boolean(data && data.llmActive);
+            setAiLedActive(active);
+            if (!active) _startAiLedPoll();
+        })
+        .catch(() => {
+            setAiLedActive(false);
+            _startAiLedPoll();
+        });
+}
+
+function createChart(ChartLib) {
+    const ctx = chartCanvas.getContext('2d');
+    return new ChartLib(ctx, {
+        type: 'line',
+        data: {
+            labels: Array(60).fill('').map((_, index) => `${60 - index}s atrás`),
+            datasets: [
+                {
+                    label: 'Mensagens/s',
+                    data: chartData,
+                    borderColor: '#fe2c55',
+                    backgroundColor: 'rgba(254, 44, 85, 0.1)',
+                    fill: true,
+                    tension: 0.4
+                },
+                {
+                    label: 'Presentes/s',
+                    data: giftChartData,
+                    borderColor: '#22c55e',
+                    backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                    fill: true,
+                    tension: 0.4
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: { stepSize: 1 }
+                },
+                x: {
+                    display: false
+                }
+            },
+            plugins: {
+                legend: { display: true, position: 'top' }
+            },
+            animation: false
+        }
+    });
+}
+
+setInterval(() => {
+    if (!chart) {
+        return;
+    }
+    chartData.push(messageCount);
+    chartData.shift();
+    messageCount = 0;
+
+    giftChartData.push(giftCount);
+    giftChartData.shift();
+    giftCount = 0;
+
+    chart.update();
+}, 1000);
+
+targetGiftHistoryBtn.addEventListener('click', () => openHistoryModal('target-gifts'));
+pinnedCommentHistoryBtn.addEventListener('click', () => openHistoryModal('pinned-comments'));
+listenBtn.addEventListener('click', () => openHistoryModal('listen'));
+
+historyModalCloseBtn.addEventListener('click', closeHistoryModal);
+historyModalBackdrop.addEventListener('click', event => {
+    if (event.target === historyModalBackdrop) {
+        closeHistoryModal();
+    }
+});
+document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && activeModalType) {
+        closeHistoryModal();
+    }
+});
+
+if (isElectron) {
+    connectBtn.addEventListener('click', () => {
+        const user = usernameInput.value.trim().replace(/^@/, '');
+        if (!user) {
+            return;
+        }
+        connectBtn.disabled = true;
+        statusDiv.innerText = 'Conectando...';
+        statusDiv.style.color = '#666';
+        runLlmProbeElectron();
+        ipcRenderer.send('connect-tiktok', user);
+    });
+
+    disconnectBtn.addEventListener('click', () => {
+        hideAiLed();
+        ipcRenderer.send('disconnect-tiktok');
+        statusDiv.innerText = 'Desconectando...';
+    });
+} else {
+    connectBtn.addEventListener('click', async () => {
+        const username = usernameInput.value.trim().replace(/^@/, '');
+        if (!username) {
+            return;
+        }
+
+        setConnectingState();
+        showAiLedChecking();
+        const probePromise = fetch('/api/probe-llm')
+            .then(async (r) => {
+                if (!r.ok) return { llmActive: false };
+                return r.json();
+            })
+            .catch(() => ({ llmActive: false }));
+
+        try {
+            const response = await fetch('/api/connect', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ username })
+            });
+
+            if (!response.ok) {
+                const payload = await response.json();
+                throw new Error(payload.error || 'Falha ao conectar.');
+            }
+        } catch (error) {
+            applyDisconnectedState(error.message);
+        }
+
+        try {
+            const probeData = await probePromise;
+            const active = Boolean(probeData.llmActive);
+            setAiLedActive(active);
+            if (!active) _startAiLedPoll();
+        } catch {
+            setAiLedActive(false);
+            _startAiLedPoll();
+        }
+    });
+
+    disconnectBtn.addEventListener('click', async () => {
+        hideAiLed();
+        statusDiv.innerText = 'Desconectando...';
+
+        try {
+            await fetch('/api/disconnect', { method: 'POST' });
+        } catch (error) {
+            applyDisconnectedState(error.message);
+        }
+    });
+}
+
+targetExpirationMinutesInput.addEventListener('change', () => {
+    resetTargetGiftTimers();
+});
+
+function setConnectingState() {
+    connectBtn.disabled = true;
+    disconnectBtn.disabled = true;
+    statusDiv.innerText = 'Conectando...';
+    statusDiv.style.color = '#666';
+}
+
+function applyConnectedState(username) {
+    statusDiv.innerText = `Conectado a: ${username}`;
+    statusDiv.style.color = 'green';
+    connectBtn.style.display = 'none';
+    connectBtn.disabled = false;
+    disconnectBtn.style.display = 'inline-block';
+    disconnectBtn.disabled = false;
+    usernameInput.disabled = true;
+}
+
+function applyDisconnectedState(error) {
+    statusDiv.innerText = error === 'Desconectado pelo usuário' || error === 'Servidor encerrado'
+        ? 'Desconectado'
+        : `Erro: ${error}`;
+    statusDiv.style.color = error === 'Desconectado pelo usuário' || error === 'Servidor encerrado' ? '#666' : 'red';
+    connectBtn.style.display = 'inline-block';
+    connectBtn.disabled = false;
+    disconnectBtn.style.display = 'none';
+    disconnectBtn.disabled = false;
+    usernameInput.disabled = false;
+    clearTables();
+}
+
+function clearTables() {
+    userTableBody.innerHTML = '';
+    allGiftsTableBody.innerHTML = '';
+    pinnedCommentsTableBody.innerHTML = '';
+    if (correlationMessagesTableBody) {
+        correlationMessagesTableBody.innerHTML = '';
+    }
+
+    for (const key in autoRemoveTimers) {
+        clearTimeout(autoRemoveTimers[key]);
+    }
+    autoRemoveTimers = {};
+
+    for (const key in pinnedCommentTimers) {
+        clearTimeout(pinnedCommentTimers[key]);
+    }
+    pinnedCommentTimers = {};
+
+    for (const key in flaggedMessageTimers) {
+        clearTimeout(flaggedMessageTimers[key]);
+    }
+    flaggedMessageTimers = {};
+    clearHistories();
+}
+
+function handleConnectionStatus(data) {
+    if (data.success) {
+        applyConnectedState(data.username);
+        return;
+    }
+
+    applyDisconnectedState(data.error || 'Falha ao conectar.');
+}
+
+function addUserToList(user) {
+    rememberLiveUser(user);
+    addTargetGiftToHistory(user);
+
+    const existingRow = Array.from(userTableBody.querySelectorAll('.user-row')).find(row => {
+        return String(row.getAttribute('data-id')).toLowerCase() === String(user.uniqueId).toLowerCase() &&
+            row.querySelector('.gift-name-cell').innerText === user.giftName;
+    });
+
+    if (existingRow) {
+        userTableBody.prepend(existingRow);
+        if (user.isRed) {
+            existingRow.classList.add('red');
+        }
+        startAutoRemoveTimer(user.uniqueId, user.giftName, existingRow);
+        return;
+    }
+
+    const tr = document.createElement('tr');
+    tr.className = 'user-row';
+    tr.setAttribute('data-id', user.uniqueId);
+
+    if (user.isRed) {
+        tr.classList.add('red');
+    }
+
+    const userTd = document.createElement('td');
+    const userSpan = document.createElement('span');
+    userSpan.className = 'user-name';
+    userSpan.textContent = user.nickname;
+    userTd.appendChild(userSpan);
+
+    const badge = createFollowerBadge(user.isFollower);
+    if (badge) {
+        userTd.appendChild(badge);
+    }
+
+    tr.appendChild(userTd);
+
+    const giftTd = document.createElement('td');
+    giftTd.className = 'gift-name-cell';
+    giftTd.textContent = user.giftName;
+    tr.appendChild(giftTd);
+
+    const actionTd = document.createElement('td');
+    const actionBtn = document.createElement('button');
+    actionBtn.className = 'action-btn';
+    actionBtn.dataset.uniqueId = user.uniqueId;
+    actionBtn.dataset.giftName = user.giftName;
+    actionBtn.textContent = 'Respondido';
+    actionBtn.addEventListener('click', event => {
+        removeUser(event.currentTarget.dataset.uniqueId, event.currentTarget.dataset.giftName, event.currentTarget);
+    });
+    actionTd.appendChild(actionBtn);
+    tr.appendChild(actionTd);
+
+    userTableBody.prepend(tr);
+    startAutoRemoveTimer(user.uniqueId, user.giftName, tr);
+}
+
+function startAutoRemoveTimer(uniqueId, giftName, element) {
+    const timerKey = `${uniqueId}-${giftName}`;
+
+    if (autoRemoveTimers[timerKey]) {
+        clearTimeout(autoRemoveTimers[timerKey]);
+    }
+
+    autoRemoveTimers[timerKey] = setTimeout(() => {
+        element.remove();
+        delete autoRemoveTimers[timerKey];
+    }, getTargetExpirationMs());
+}
+
+function getTargetExpirationMs() {
+    const minutes = Number(targetExpirationMinutesInput.value);
+    const validMinutes = Number.isFinite(minutes) && minutes > 0 ? minutes : 4;
+    return validMinutes * 60 * 1000;
+}
+
+function resetTargetGiftTimers() {
+    Array.from(userTableBody.querySelectorAll('.user-row')).forEach(row => {
+        const uniqueId = row.getAttribute('data-id');
+        const giftName = row.querySelector('.gift-name-cell')?.innerText;
+        if (uniqueId && giftName) {
+            startAutoRemoveTimer(uniqueId, giftName, row);
+        }
+    });
+}
+
+function normalizeUserIdForGift(uniqueId) {
+    return String(uniqueId || '').toLowerCase();
+}
+
+function normalizedGiftNameInTable(row) {
+    return (row.querySelector('.gift-name-cell')?.innerText || '').trim().toLowerCase();
+}
+
+function normalizedGiftNameFromPayload(gift) {
+    return String(gift.giftName || '').trim().toLowerCase();
+}
+
+function findAllGiftsRowForGift(gift) {
+    const uid = normalizeUserIdForGift(gift.uniqueId);
+    const name = normalizedGiftNameFromPayload(gift);
+    return Array.from(allGiftsTableBody.querySelectorAll('tr')).find(row => {
+        if (normalizeUserIdForGift(row.getAttribute('data-user-id')) !== uid) {
+            return false;
+        }
+        return normalizedGiftNameInTable(row) === name;
+    });
+}
+
+function getGiftCountFromTableRow(row) {
+    const cell = row.querySelector('.gift-count-cell');
+    if (!cell) {
+        return 0;
+    }
+    const n = parseInt(String(cell.textContent).trim(), 10);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+function shouldSkipIntermediateStreakGift(gift) {
+    return Number(gift.giftType) === 1 && gift.repeatEnd === false;
+}
+
+function reorderAllGiftsTableByCount() {
+    const rows = Array.from(allGiftsTableBody.children);
+    rows.sort((a, b) => (Number(b.getAttribute('data-count')) || 0) - (Number(a.getAttribute('data-count')) || 0));
+    rows.forEach(row => allGiftsTableBody.appendChild(row));
+}
+
+function trimAllGiftsTable(maxRows) {
+    while (allGiftsTableBody.children.length > maxRows) {
+        allGiftsTableBody.lastElementChild.remove();
+    }
+}
+
+function applyGiftFilter() {
+    if (!giftSearchInput) return;
+    const filterText = giftSearchInput.value.trim().toLowerCase();
+    const rows = Array.from(allGiftsTableBody.querySelectorAll('tr'));
+    
+    rows.forEach(row => {
+        const giftName = (row.getAttribute('data-gift-name') || '').toLowerCase();
+        if (!filterText || giftName.includes(filterText)) {
+            row.style.display = '';
+        } else {
+            row.style.display = 'none';
+        }
+    });
+}
+
+if (giftSearchInput) {
+    giftSearchInput.addEventListener('input', applyGiftFilter);
+}
+
+function addAllGiftToList(gift) {
+    if (shouldSkipIntermediateStreakGift(gift)) {
+        return;
+    }
+
+    giftCount++;
+    rememberLiveUser(gift);
+
+    const quantity = Math.max(1, Number(gift.repeatCount) || 1);
+    const existingRow = findAllGiftsRowForGift(gift);
+
+    if (existingRow) {
+        const current = getGiftCountFromTableRow(existingRow);
+        const next = current + quantity;
+        existingRow.setAttribute('data-count', String(next));
+        const countCell = existingRow.querySelector('.gift-count-cell');
+        if (countCell) {
+            countCell.textContent = String(next);
+        }
+        if (gift.isRed) {
+            existingRow.classList.add('red');
+        }
+        reorderAllGiftsTableByCount();
+        trimAllGiftsTable(50);
+        applyGiftFilter();
+        return;
+    }
+
+    const tr = document.createElement('tr');
+    tr.className = 'gift-row';
+    tr.setAttribute('data-id', gift.uniqueId);
+    tr.setAttribute('data-user-id', gift.uniqueId);
+    tr.setAttribute('data-gift-id', gift.giftId != null && gift.giftId !== '' ? String(gift.giftId) : '');
+    tr.setAttribute('data-gift-name', gift.giftName || '');
+    tr.setAttribute('data-count', String(quantity));
+    tr.setAttribute('data-target-gift', gift.isTargetGift ? 'true' : 'false');
+
+    if (gift.isRed) {
+        tr.classList.add('red');
+    }
+
+    const userTd = document.createElement('td');
+    const userSpan = document.createElement('span');
+    userSpan.className = 'user-name';
+    userSpan.textContent = gift.nickname;
+    userTd.appendChild(userSpan);
+
+    const badge = createFollowerBadge(gift.isFollower);
+    if (badge) {
+        userTd.appendChild(badge);
+    }
+    tr.appendChild(userTd);
+
+    const giftTd = document.createElement('td');
+    giftTd.className = 'gift-name-cell';
+    giftTd.textContent = gift.giftName;
+    tr.appendChild(giftTd);
+
+    const countTd = document.createElement('td');
+    countTd.className = 'gift-count-cell';
+    countTd.textContent = String(quantity);
+    tr.appendChild(countTd);
+
+    allGiftsTableBody.appendChild(tr);
+    reorderAllGiftsTableByCount();
+    trimAllGiftsTable(50);
+    applyGiftFilter();
+}
+
+function addPinnedCommentToList(pinnedComment) {
+    rememberLiveUser(pinnedComment);
+    addPinnedCommentToHistory(pinnedComment);
+
+    const timerKey = `${pinnedComment.pinId || pinnedComment.timestamp || Date.now()}-${Math.random()}`;
+    const tr = document.createElement('tr');
+    tr.className = 'pinned-comment-row';
+    tr.setAttribute('data-id', pinnedComment.uniqueId || '');
+
+    const userTd = document.createElement('td');
+    const userSpan = document.createElement('span');
+    userSpan.className = 'user-name';
+    userSpan.innerText = pinnedComment.nickname || pinnedComment.uniqueId || 'Nao identificado';
+    userTd.appendChild(userSpan);
+
+    const badge = createFollowerBadge(pinnedComment.isFollower);
+    if (badge) {
+        userTd.appendChild(badge);
+    }
+
+    const commentTd = document.createElement('td');
+    commentTd.className = 'comment-cell';
+    commentTd.innerText = pinnedComment.comment || '[sem texto identificado]';
+
+    tr.appendChild(userTd);
+    tr.appendChild(commentTd);
+    pinnedCommentsTableBody.prepend(tr);
+
+    pinnedCommentTimers[timerKey] = setTimeout(() => {
+        tr.remove();
+        delete pinnedCommentTimers[timerKey];
+    }, 50 * 1000);
+
+    if (pinnedCommentsTableBody.children.length > 50) {
+        pinnedCommentsTableBody.lastChild.remove();
+    }
+}
+
+function addFlaggedMessageToList(data) {
+    if (!correlationMessagesTableBody) {
+        return;
+    }
+
+    const category = String(data.category || '').toUpperCase();
+    if (!['REPETICAO', 'CORRELACAO'].includes(category)) {
+        return;
+    }
+
+    const messageKey = `alert-${category}-${String(data.uniqueId || '').toLowerCase()}-${String(data.comment || '').toLowerCase()}`;
+    const existingRow = Array.from(correlationMessagesTableBody.children).find(row => row.dataset.messageKey === messageKey);
+    if (existingRow) {
+        existingRow.classList.add('blink-row');
+        setTimeout(() => existingRow.classList.remove('blink-row'), 2000);
+        return;
+    }
+
+    const timerKey = `flagged-${Date.now()}-${Math.random()}`;
+    const tr = document.createElement('tr');
+    tr.className = 'flagged-message-row blink-row';
+    tr.dataset.messageKey = messageKey;
+
+    const tdUser = document.createElement('td');
+    const spanUser = document.createElement('span');
+    spanUser.className = 'user-name';
+    spanUser.textContent = data.nickname != null ? String(data.nickname) : '';
+    tdUser.appendChild(spanUser);
+
+    const badge = createFollowerBadge(data.isFollower);
+    if (badge) {
+        tdUser.appendChild(badge);
+    }
+
+    const tdMsg = document.createElement('td');
+    tdMsg.className = 'comment-cell';
+    tdMsg.textContent = data.comment != null ? String(data.comment) : '';
+
+    const tdCat = document.createElement('td');
+    const spanCat = document.createElement('span');
+    spanCat.className = 'infraction-category';
+    spanCat.textContent = infractionCategoryLabel(category);
+    if (category) spanCat.title = category;
+    tdCat.appendChild(spanCat);
+
+    const tdReason = document.createElement('td');
+    tdReason.textContent = data.reason != null ? String(data.reason) : '';
+
+    tr.appendChild(tdUser);
+    tr.appendChild(tdMsg);
+    tr.appendChild(tdCat);
+    tr.appendChild(tdReason);
+
+    correlationMessagesTableBody.prepend(tr);
+
+    flaggedMessageTimers[timerKey] = setTimeout(() => {
+        tr.remove();
+        delete flaggedMessageTimers[timerKey];
+    }, 60 * 1000);
+
+    if (correlationMessagesTableBody.children.length > 50) {
+        correlationMessagesTableBody.lastChild.remove();
+    }
+}
+
+function handleKeywordMention(data) {
+    if (!data) {
+        return;
+    }
+
+    rememberLiveUser(data);
+    markUserRed(data.uniqueId || '');
+
+    addPinnedCommentToList({
+        uniqueId: data.uniqueId,
+        nickname: data.nickname,
+        isFollower: data.isFollower,
+        comment: data.comment,
+        pinId: `keyword-${data.keyword || 'target'}-${data.uniqueId || 'anon'}-${data.timestamp || Date.now()}`,
+        timestamp: data.timestamp || Date.now()
+    });
+}
+
+function addCorrelationMessageToList(data) {
+    if (!correlationMessagesTableBody) {
+        return;
+    }
+
+    const correlationId = String(data.correlationId || '').trim();
+    if (correlationId) {
+        const existing = Array.from(correlationMessagesTableBody.children).find((row) => row.dataset.correlationId === correlationId);
+        if (existing) {
+            existing.remove();
+        }
+    }
+
+    const tr = document.createElement('tr');
+    tr.className = 'flagged-message-row';
+    if (correlationId) {
+        tr.dataset.correlationId = correlationId;
+    }
+    if (data.replacement) {
+        tr.classList.add('blink-row');
+        setTimeout(() => tr.classList.remove('blink-row'), 1800);
+    }
+
+    const tdGiftUser = document.createElement('td');
+    const spanGiftUser = document.createElement('span');
+    spanGiftUser.className = 'user-name';
+    const userLabel = data.giftNickname || data.giftUserId || 'Nao identificado';
+    spanGiftUser.textContent = data.giftUserId
+        ? `${userLabel} (@${data.giftUserId})`
+        : userLabel;
+    tdGiftUser.appendChild(spanGiftUser);
+
+    const tdQuestion = document.createElement('td');
+    tdQuestion.className = 'comment-cell';
+    tdQuestion.textContent = data.question || '[pergunta não encontrada]';
+
+    const tdConfidence = document.createElement('td');
+    const confidenceBadge = document.createElement('span');
+    confidenceBadge.className = 'infraction-category';
+    confidenceBadge.textContent = String(data.confidence || 'medium').toUpperCase();
+    tdConfidence.appendChild(confidenceBadge);
+
+    const tdMethod = document.createElement('td');
+    const methodLabel = String(data.method || 'heuristica');
+    tdMethod.textContent = data.replacement ? `${methodLabel} (ajustada)` : methodLabel;
+
+    tr.appendChild(tdGiftUser);
+    tr.appendChild(tdQuestion);
+    tr.appendChild(tdConfidence);
+    tr.appendChild(tdMethod);
+
+    correlationMessagesTableBody.prepend(tr);
+    if (correlationMessagesTableBody.children.length > 50) {
+        correlationMessagesTableBody.lastChild.remove();
+    }
+}
+
+function markUserRed(uniqueId) {
+    const targetId = String(uniqueId).toLowerCase();
+    const targetRows = document.querySelectorAll('.user-row, .gift-row[data-target-gift="true"]');
+
+    targetRows.forEach(row => {
+        const rowId = String(row.getAttribute('data-id')).toLowerCase();
+        if (rowId === targetId) {
+            row.classList.add('red');
+        }
+    });
+}
+
+function removeUser(uniqueId, giftName, button) {
+    const timerKey = `${uniqueId}-${giftName}`;
+    if (autoRemoveTimers[timerKey]) {
+        clearTimeout(autoRemoveTimers[timerKey]);
+        delete autoRemoveTimers[timerKey];
+    }
+
+    const tr = button.closest('.user-row');
+    if (tr) {
+        tr.remove();
+    }
+}
+
+async function loadInitialState() {
+    try {
+        const response = await fetch('/api/state');
+        const payload = await response.json();
+
+        if (typeof payload.aiConfigured === 'boolean') {
+            applyInfractionsSectionTitle(payload.aiConfigured);
+        }
+
+        if (payload.connected && payload.username) {
+            usernameInput.value = payload.username;
+            applyConnectedState(payload.username);
+        }
+    } catch (error) {
+        statusDiv.innerText = 'Servidor indisponível';
+        statusDiv.style.color = 'red';
+    }
+}
+
+function setupEventStream() {
+    const eventSource = new EventSource('/events');
+
+    eventSource.addEventListener('server-state', event => {
+        const data = JSON.parse(event.data);
+        if (typeof data.aiConfigured === 'boolean') {
+            applyInfractionsSectionTitle(data.aiConfigured);
+        }
+        if (data.connected && data.username) {
+            usernameInput.value = data.username;
+            applyConnectedState(data.username);
+        } else {
+            applyDisconnectedState('Desconectado pelo usuário');
+        }
+    });
+
+    eventSource.addEventListener('connection-status', event => {
+        handleConnectionStatus(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('new-chat-message', event => {
+        handleNewChatMessage(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('live-user-connected', event => {
+        rememberLiveUser(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('new-follower', event => {
+        rememberLiveUser(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('new-social-event', event => {
+        rememberLiveUser(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('new-gift-user', event => {
+        addUserToList(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('any-gift-received', event => {
+        addAllGiftToList(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('pinned-comment', event => {
+        addPinnedCommentToList(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('flagged-message', event => {
+        addFlaggedMessageToList(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('gift-question-correlation', event => {
+        const data = JSON.parse(event.data);
+        addCorrelationMessageToList(data);
+    });
+
+    eventSource.addEventListener('keyword-mention', event => {
+        handleKeywordMention(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('mark-user-red', event => {
+        markUserRed(JSON.parse(event.data));
+    });
+
+    eventSource.onerror = () => {
+        statusDiv.innerText = 'Reconectando ao servidor...';
+        statusDiv.style.color = '#666';
+    };
+}
+
+function setupElectronIpc() {
+    ipcRenderer.on('setup-progress', (event, data) => {
+        setupProgressContainer.style.display = 'flex';
+        setupStatusText.textContent = `Baixando ${data.filename}...`;
+        setupPercentage.textContent = `${data.progress}%`;
+        setupProgressBar.style.width = `${data.progress}%`;
+        
+        if (data.progress === 100) {
+            setTimeout(() => {
+                setupProgressContainer.style.display = 'none';
+                runLlmProbeElectron();
+            }, 2000);
+        }
+    });
+
+    ipcRenderer.on('connection-status', (event, data) => {
+        if (data.success) {
+            statusDiv.innerText = `Conectado a: ${data.username}`;
+            statusDiv.style.color = 'green';
+            connectBtn.style.display = 'none';
+            connectBtn.disabled = false;
+            disconnectBtn.style.display = 'inline-block';
+            usernameInput.disabled = true;
+        } else {
+            statusDiv.innerText = data.error === 'Desconectado pelo usuário' ? 'Desconectado' : `Erro: ${data.error}`;
+            statusDiv.style.color = data.error === 'Desconectado pelo usuário' ? '#666' : 'red';
+            connectBtn.style.display = 'inline-block';
+            connectBtn.disabled = false;
+            disconnectBtn.style.display = 'none';
+            usernameInput.disabled = false;
+            clearTables();
+        }
+    });
+
+    ipcRenderer.on('new-chat-message', (event, data) => {
+        handleNewChatMessage(data);
+    });
+
+    ipcRenderer.on('live-user-connected', (event, data) => {
+        rememberLiveUser(data);
+    });
+
+    ipcRenderer.on('new-follower', (event, data) => {
+        rememberLiveUser(data);
+    });
+
+    ipcRenderer.on('new-social-event', (event, data) => {
+        rememberLiveUser(data);
+    });
+
+    ipcRenderer.on('new-gift-user', (event, user) => {
+        addUserToList(user);
+    });
+
+    ipcRenderer.on('any-gift-received', (event, gift) => {
+        addAllGiftToList(gift);
+    });
+
+    ipcRenderer.on('pinned-comment', (event, pinnedComment) => {
+        addPinnedCommentToList(pinnedComment);
+    });
+
+    ipcRenderer.on('flagged-message', (event, data) => {
+        addFlaggedMessageToList(data);
+    });
+
+    ipcRenderer.on('gift-question-correlation', (event, data) => {
+        addCorrelationMessageToList(data);
+    });
+
+    ipcRenderer.on('keyword-mention', (event, data) => {
+        handleKeywordMention(data);
+    });
+
+    ipcRenderer.on('mark-user-red', (event, uniqueId) => {
+        markUserRed(uniqueId);
+    });
+}
+
+async function bootstrap() {
+    try {
+        await ensureBrowserChart();
+        const ChartLib = isElectron ? require('chart.js/auto') : window.Chart;
+        if (!ChartLib) {
+            throw new Error('Chart.js indisponível.');
+        }
+        chart = createChart(ChartLib);
+    } catch (e) {
+        statusDiv.innerText = `Erro ao iniciar gráfico: ${e.message}`;
+        statusDiv.style.color = 'red';
+        return;
+    }
+
+    applyInfractionsSectionTitle(false);
+
+    if (isElectron) {
+        try {
+            const cfg = await ipcRenderer.invoke('get-ui-config');
+            applyInfractionsSectionTitle(Boolean(cfg && cfg.geminiConfigured));
+            
+            // Popula seletor de modelos
+            if (cfg.models && modelSelect) {
+                modelSelectorContainer.style.display = 'flex';
+                modelSelect.innerHTML = '';
+                Object.keys(cfg.models).forEach(key => {
+                    const opt = document.createElement('option');
+                    opt.value = key;
+                    opt.textContent = cfg.models[key].name;
+                    if (key === cfg.selectedModel) opt.selected = true;
+                    modelSelect.appendChild(opt);
+                });
+
+                modelSelect.addEventListener('change', async () => {
+                    const newModel = modelSelect.value;
+                    const success = await ipcRenderer.invoke('change-model', newModel);
+                    if (success) {
+                        setAiLedActive(false);
+                        aiLedText.textContent = 'Iniciando novo modelo...';
+                        const setupResult = await ipcRenderer.invoke('run-setup');
+                        if (setupResult) {
+                            runLlmProbeElectron();
+                        } else {
+                            aiLedText.textContent = 'Erro ao baixar modelo.';
+                        }
+                    }
+                });
+            }
+
+            runLlmProbeElectron();
+        } catch (err) {
+            console.error('Erro ao configurar UI Electron:', err);
+            applyInfractionsSectionTitle(false);
+        }
+        setupElectronIpc();
+    } else {
+        await loadInitialState();
+        setupEventStream();
+    }
+}
+
+void bootstrap();

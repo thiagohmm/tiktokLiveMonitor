@@ -1,9 +1,17 @@
-# Interface web + IA local (llama-server). Electron não roda aqui — use o navegador na porta 3000.
-# Os artefatos ubuntu-* do llama.cpp (b8999+) pedem glibc ≥ 2.38 + libstdc++ recente.
-# Bookworm-slim (glibc 2.36) quebra no arm64; não existe node:*-noble-slim oficial — usar trixie-slim.
-FROM node:22-trixie-slim
+# Multi-stage build: Go backend + web frontend
+# Stage 1: Build Go binary
+FROM golang:1.24-bookworm AS builder
 
-# OpenMP + libs C++ + build tools para sqlite3/native modules
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=1 go build -o /tiktok-live-monitor ./cmd/tiktok-live-monitor/
+
+# Stage 2: Minimal runtime
+FROM debian:trixie-slim
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -11,23 +19,14 @@ RUN apt-get update \
         libstdc++6 \
         libatomic1 \
         python3 \
-        make \
-        g++ \
+        curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY package*.json ./
-# Scripts de setup-llm não são necessários no build (baixamos no entrypoint)
-# Mas o sqlite3 precisa rodar seu install script para baixar/gerar bindings.
-ENV SKIP_POSTINSTALL=1
-RUN npm ci --omit=dev
-
-COPY server.js main.js ai.js llm-model.js moderation.js moderation-prompt.js database.js monitor.js worker.js model-config.json index.html renderer.js ./
-COPY scripts/ ./scripts/
-
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+COPY --from=builder /tiktok-live-monitor /app/tiktok-live-monitor
+COPY web/ ./web/
+COPY model-config.json ./
 
 RUN mkdir -p models bin
 
@@ -36,8 +35,7 @@ ENV PORT=3000
 
 EXPOSE 3000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=5 \
-    CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/state',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=5 \
+    CMD curl -sf "http://127.0.0.1:${PORT:-3000}/api/state" || exit 1
 
-ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["node", "server.js"]
+ENTRYPOINT ["/app/tiktok-live-monitor"]
