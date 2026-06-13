@@ -322,15 +322,8 @@ func (m *Manager) scheduleRetry() {
 }
 
 func (m *Manager) resolvePaths() (binPath, modelPath string) {
-	// Platform detection.
-	platform := "linux"
-	arch := "arm64"
-	if os.Getenv("GOOS") != "" {
-		platform = os.Getenv("GOOS")
-	}
-	if os.Getenv("GOARCH") != "" {
-		arch = os.Getenv("GOARCH")
-	}
+	platform := runtime.GOOS
+	arch := runtime.GOARCH
 
 	binName := "llama-server"
 	if platform == "windows" {

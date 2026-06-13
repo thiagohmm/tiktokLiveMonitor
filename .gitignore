@@ -39,3 +39,11 @@ yarn-error.log*
 # Workspace
 .vscode/
 .idea/
+
+# SQLite runtime files
+*.db
+*.db-shm
+*.db-wal
+
+# Go build
+/tiktok-live-monitor
