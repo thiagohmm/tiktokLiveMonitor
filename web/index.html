@@ -322,11 +322,40 @@
             <button id="listenBtn" class="secondary-btn" type="button">Escuta</button>
         </div>
         <div id="status">Desconectado</div>
+        <div class="ai-question" style="margin-bottom: 20px;">
+            <label for="aiQuestion" style="font-size: 0.9em; margin-bottom: 6px; display: block;">Pergunta para IA:</label>
+            <input type="text" id="aiQuestion" placeholder="Digite sua pergunta..." style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ccc;">
+            <button id="askAiBtn" style="margin-top: 10px; padding: 8px 16px; background-color: #fe2c55; color: white; border: none; border-radius: 4px; cursor: pointer;">Enviar</button>
+        </div>
         <div id="aiLedRow" class="ai-led-row" aria-live="polite" style="flex-wrap: wrap;">
             <div style="display: flex; align-items: center; gap: 10px; margin-right: 20px;">
                 <span id="aiLedDot" class="ai-led-dot ai-led-dot-checking"></span>
                 <span id="aiLedText">Verificando IA…</span>
             </div>
+
+            <style>
+                .ai-question {
+                    margin-bottom: 20px;
+                }
+                .ai-question input {
+                    width: 100%;
+                    padding: 8px;
+                    border-radius: 4px;
+                    border: 1px solid #ccc;
+                }
+                .ai-question button {
+                    margin-top: 10px;
+                    padding: 8px 16px;
+                    background-color: #fe2c55;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    cursor: pointer;
+                }
+                .ai-question button:hover {
+                    opacity: 0.9;
+                }
+            </style>
             
             <div id="modelSelectorContainer" style="display: none; align-items: center; gap: 8px;">
                 <label for="modelSelect" style="font-size: 0.85em; color: #666;">Modelo:</label>
@@ -442,5 +471,15 @@
     </div>
 
     <script src="renderer.js"></script>
+    <script>
+        document.getElementById('askAiBtn').addEventListener('click', () => {
+            const question = document.getElementById('aiQuestion').value.trim();
+            if (question) {
+                // Implement your AI question handling logic here
+                console.log('Pergunta para IA:', question);
+                // Example: Send to backend or trigger AI processing
+            }
+        });
+    </script>
 </body>
 </html>

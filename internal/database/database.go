@@ -53,6 +53,15 @@ type Feedback struct {
 	Expected  string `json:"expected"`
 }
 
+// UserMessage represents a user message from a live stream.
+type UserMessage struct {
+	ID         int64     `json:"id"`
+	UniqueID   string    `json:"uniqueId"`
+	Username   string    `json:"username"`
+	Message    string    `json:"message"`
+	Timestamp  string    `json:"timestamp"`
+}
+
 // DB wraps the SQLite connection with thread-safe access.
 type DB struct {
 	conn *sql.DB
@@ -163,6 +172,55 @@ func (db *DB) GetRecentFeedbacks(limit int) ([]Feedback, error) {
 			return nil, fmt.Errorf("scan feedback: %w", err)
 		}
 		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// AddUserMessage stores a user message from a live stream.
+func (db *DB) AddUserMessage(uniqueID, username, message string) (int64, error) {
+	message = strings.TrimSpace(message)
+
+	if message == "" {
+		return 0, fmt.Errorf("message is required")
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	result, err := db.conn.Exec(
+		"INSERT INTO user_messages (uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?)",
+		uniqueID, username, message, time.Now(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("insert user message: %w", err)
+	}
+	return result.LastInsertId()
+}
+
+// GetRecentUserMessages returns the latest N user messages from all users.
+func (db *DB) GetRecentUserMessages(limit int) ([]UserMessage, error) {
+	if limit < 1 || limit > 100 {
+		limit = 10
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	rows, err := db.conn.Query(
+		"SELECT id, uniqueId, username, message, timestamp FROM user_messages ORDER BY timestamp DESC LIMIT ?",
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query user messages: %w", err)
+	}
+	defer rows.Close()
+
+	var out []UserMessage
+	for rows.Next() {
+		var um UserMessage
+		if err := rows.Scan(&um.ID, &um.UniqueID, &um.Username, &um.Message, &um.Timestamp); err != nil {
+			return nil, fmt.Errorf("scan user message: %w", err)
+		}
+		out = append(out, um)
 	}
 	return out, rows.Err()
 }
