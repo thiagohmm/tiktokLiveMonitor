@@ -1,5 +1,6 @@
 const { WebcastPushConnection } = require('tiktok-live-connector');
 const { correlateGiftQuestionWithLlm } = require('./ai');
+const { analyzeMessage } = require('./moderation');
 
 // Variáveis de estado
 let tiktokConnection;
@@ -675,6 +676,21 @@ async function startMonitoring(username) {
                 isFollower: user.isFollower
             });
         }
+
+        void analyzeMessage(comment, user.uniqueId, user.nickname, chatBuffer, currentUsername).then((result) => {
+            if (result.flagged) {
+                emit('flagged-message', {
+                    uniqueId: user.uniqueId,
+                    nickname: user.nickname,
+                    isFollower: user.isFollower,
+                    comment,
+                    reason: result.reason,
+                    category: result.category
+                });
+            }
+        }).catch((err) => {
+            console.error('[Monitor] Erro na análise de IA:', err.message);
+        });
     });
 
     tiktokConnection.on('gift', (data) => {

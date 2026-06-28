@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -98,6 +99,8 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/readiness", s.handleReadiness)
 	mux.HandleFunc("/api/probe-llm", s.handleProbeLLM)
 	mux.HandleFunc("/api/worker/register", s.handleWorkerRegister)
+	mux.HandleFunc("/api/gifts", s.handleGifts)
+	mux.HandleFunc("/api/ask-ai", s.handleAskAI)
 
 	// Static files.
 	mux.Handle("/", http.FileServer(http.Dir(s.webDir)))
@@ -114,6 +117,39 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Setup monitor event handler.
 	s.mon.m.OnEvent(func(eventType string, data monitor.EventData) {
+		if eventType == monitor.EventAnyGift {
+			go func() {
+				uniqueID := data["uniqueId"]
+				nickname := data["nickname"]
+				giftName := data["giftName"]
+				repeatCount := 1
+				if rc, ok := data["repeatCount"]; ok {
+					if rcInt, ok := rc.(int); ok {
+						repeatCount = rcInt
+					}
+				}
+				giftType := 0
+				if gt, ok := data["giftType"]; ok {
+					if gtInt, ok := gt.(int); ok {
+						giftType = gtInt
+					}
+				}
+				state := s.mon.m.GetState()
+				if _, err := s.db.AddGift(state.Username, uniqueID.(string), nickname.(string), giftName.(string), repeatCount, giftType); err != nil {
+					log.Printf("[Server] Error storing gift: %v", err)
+				}
+			}()
+		}
+		if eventType == monitor.EventChatMessage {
+			go func() {
+				uniqueID := data["uniqueId"]
+				nickname := data["nickname"]
+				comment := data["comment"]
+				if err := s.db.AddUserMessageDedup(uniqueID.(string), nickname.(string), comment.(string)); err != nil {
+					log.Printf("[Server] Error storing user message: %v", err)
+				}
+			}()
+		}
 		s.broadcastSSE(eventType, data)
 	})
 
@@ -374,6 +410,128 @@ func (s *Server) handleWorkerRegister(w http.ResponseWriter, r *http.Request) {
 
 	s.aiMgr.RegisterWorker(body.Host, body.Port)
 	writeJSON(w, map[string]bool{"success": true})
+}
+
+func (s *Server) handleGifts(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		limit := 100
+		if l := r.URL.Query().Get("limit"); l != "" {
+			if n, err := strconv.Atoi(l); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		userID := r.URL.Query().Get("user")
+		if userID != "" {
+			gifts, err := s.db.GetGiftsByUser(userID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, gifts)
+			return
+		}
+		gifts, err := s.db.GetRecentGifts(limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, gifts)
+		return
+	}
+	if r.Method == http.MethodDelete {
+		affected, err := s.db.ClearGifts()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, map[string]interface{}{"success": true, "deleted": affected})
+		return
+	}
+	writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+}
+
+func (s *Server) handleAskAI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var body struct {
+		Question string `json:"question"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if body.Question == "" {
+		writeError(w, http.StatusBadRequest, "question is required")
+		return
+	}
+
+	giftSummary, err := s.db.GetGiftSummary()
+	if err != nil {
+		log.Printf("[Server] Error fetching gift summary for AI: %v", err)
+	}
+
+	allMessages, err := s.db.GetAllUserMessages()
+	if err != nil {
+		log.Printf("[Server] Error fetching user messages for AI: %v", err)
+	}
+
+	var ctxBuilder strings.Builder
+
+	if len(allMessages) > 0 {
+		ctxBuilder.WriteString("MENSAGENS DOS USUÁRIOS NA LIVE (até 10 por usuário, sem repetidas):\n")
+		for uid, msgs := range allMessages {
+			ctxBuilder.WriteString(fmt.Sprintf("\n  %s:\n", uid))
+			for _, m := range msgs {
+				ctxBuilder.WriteString(fmt.Sprintf("    - %s\n", m.Message))
+			}
+		}
+	} else {
+		ctxBuilder.WriteString("NENHUMA MENSAGEM DE USUÁRIO REGISTRADA.\n")
+	}
+
+	ctxBuilder.WriteString("\n")
+
+	if len(giftSummary) > 0 {
+		ctxBuilder.WriteString("PRESENTES ENVIADOS NA LIVE:\n")
+		for uid, giftsMap := range giftSummary {
+			var parts []string
+			for gname, count := range giftsMap {
+				parts = append(parts, fmt.Sprintf("%s x%d", gname, count))
+			}
+			ctxBuilder.WriteString(fmt.Sprintf("- %s: %s\n", uid, strings.Join(parts, ", ")))
+		}
+	} else {
+		ctxBuilder.WriteString("NENHUM PRESENTE REGISTRADO NA LIVE.\n")
+	}
+
+	systemPrompt := fmt.Sprintf(`Você é um assistente que responde perguntas sobre uma live do TikTok.
+Use os dados abaixo para responder. Busque informações nos dados de mensagens e presentes.
+Se a pergunta não estiver relacionada aos dados disponíveis, diga que não encontrou informações.
+
+%s
+
+Responda em português do Brasil de forma direta e concisa.`, ctxBuilder.String())
+
+	ctx := r.Context()
+	req := ai.CompletionRequest{
+		SystemContent: systemPrompt,
+		UserContent:   body.Question,
+		MaxTokens:     512,
+	}
+
+	response, err := s.aiMgr.Complete(ctx, req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("AI error: %v", err))
+		return
+	}
+
+	writeJSON(w, map[string]string{
+		"question": body.Question,
+		"answer":   response,
+	})
 }
 
 // --- Helpers ---

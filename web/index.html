@@ -324,8 +324,9 @@
         <div id="status">Desconectado</div>
         <div class="ai-question" style="margin-bottom: 20px;">
             <label for="aiQuestion" style="font-size: 0.9em; margin-bottom: 6px; display: block;">Pergunta para IA:</label>
-            <input type="text" id="aiQuestion" placeholder="Digite sua pergunta..." style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ccc;">
+            <input type="text" id="aiQuestion" placeholder="Ex: Quem enviou mais presentes?" style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ccc;">
             <button id="askAiBtn" style="margin-top: 10px; padding: 8px 16px; background-color: #fe2c55; color: white; border: none; border-radius: 4px; cursor: pointer;">Enviar</button>
+            <div id="aiAnswer" style="margin-top: 10px; padding: 10px; background: #f0f0f0; border-radius: 4px; display: none; white-space: pre-wrap; word-break: break-word;"></div>
         </div>
         <div id="aiLedRow" class="ai-led-row" aria-live="polite" style="flex-wrap: wrap;">
             <div style="display: flex; align-items: center; gap: 10px; margin-right: 20px;">
@@ -472,12 +473,38 @@
 
     <script src="renderer.js"></script>
     <script>
-        document.getElementById('askAiBtn').addEventListener('click', () => {
-            const question = document.getElementById('aiQuestion').value.trim();
-            if (question) {
-                // Implement your AI question handling logic here
-                console.log('Pergunta para IA:', question);
-                // Example: Send to backend or trigger AI processing
+        document.getElementById('askAiBtn').addEventListener('click', async () => {
+            const questionInput = document.getElementById('aiQuestion');
+            const answerDiv = document.getElementById('aiAnswer');
+            const question = questionInput.value.trim();
+            if (!question) return;
+
+            answerDiv.style.display = 'block';
+            answerDiv.textContent = 'Pensando...';
+            document.getElementById('askAiBtn').disabled = true;
+
+            try {
+                const resp = await fetch('/api/ask-ai', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question })
+                });
+                const data = await resp.json();
+                if (data.answer) {
+                    answerDiv.textContent = data.answer;
+                } else if (data.error) {
+                    answerDiv.textContent = 'Erro: ' + data.error;
+                }
+            } catch (e) {
+                answerDiv.textContent = 'Erro ao conectar com o servidor.';
+            }
+
+            document.getElementById('askAiBtn').disabled = false;
+        });
+
+        document.getElementById('aiQuestion').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                document.getElementById('askAiBtn').click();
             }
         });
     </script>

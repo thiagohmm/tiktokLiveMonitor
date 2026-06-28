@@ -1,16 +1,20 @@
-# Multi-stage build: Go backend + web frontend
+# Multi-stage build: Go backend
 # Stage 1: Build Go binary
-FROM golang:1.24-bookworm AS builder
+FROM golang:1.26-bookworm AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+
+# Run tests before building
+RUN CGO_ENABLED=1 go test ./internal/... -count=1 -timeout 60s
+
 RUN CGO_ENABLED=1 go build -o /tiktok-live-monitor ./cmd/tiktok-live-monitor/
 
 # Stage 2: Minimal runtime
-FROM debian:trixie-slim
+FROM debian:bookworm-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -18,7 +22,6 @@ RUN apt-get update \
         libgomp1 \
         libstdc++6 \
         libatomic1 \
-        python3 \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
