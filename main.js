@@ -63,6 +63,8 @@ monitor.onEvent((type, data) => {
 // Handlers IPC solicitados pelo renderer.js
 ipcMain.on('connect-tiktok', async (event, username) => {
     try {
+        const llmReady = await probeLlamaReady();
+        await warmupModerationLearning({ touchLlm: llmReady });
         await monitor.startMonitoring(username);
     } catch (err) {
         console.error('Erro ao conectar TikTok via IPC:', err);
