@@ -4,6 +4,7 @@ package monitor
 import (
 	"context"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -121,22 +122,35 @@ type Monitor struct {
 }
 
 func newTikTokClientWithRetry() (*gotiktoklive.TikTok, error) {
+	signerURL := os.Getenv("TIKTOK_SIGNER_URL")
+	if signerURL == "" {
+		return nil, fmt.Errorf("TIKTOK_SIGNER_URL não definida. É necessário um serviço de assinatura TikTok. Configure via: export TIKTOK_SIGNER_URL=https://seu-signer.com")
+	}
+
+	opts := []gotiktoklive.TikTokLiveOption{
+		gotiktoklive.SigningUrl(signerURL),
+		gotiktoklive.DisableSigningLimitsValidation,
+	}
+	if apiKey := os.Getenv("TIKTOK_API_KEY"); apiKey != "" {
+		opts = append(opts, gotiktoklive.SigningApiKey(apiKey))
+	}
+
+	fmt.Printf("[Monitor] Using signer: %s\n", signerURL)
+
 	var lastErr error
 	for i := range maxRetries {
 		if i > 0 {
 			backoff := baseBackoff * (1 << i)
-			fmt.Printf("[Monitor] Rate limited, retrying in %v (attempt %d/%d)...\n", backoff, i+1, maxRetries)
+			fmt.Printf("[Monitor] Signer not ready, retrying in %v (attempt %d/%d)...\n", backoff, i+1, maxRetries)
 			time.Sleep(backoff)
 		}
-		tk, err := gotiktoklive.NewTikTok(
-			gotiktoklive.DisableSigningLimitsValidation,
-		)
+		tk, err := gotiktoklive.NewTikTok(opts...)
 		if err == nil {
 			return tk, nil
 		}
 		lastErr = err
 	}
-	return nil, lastErr
+	return nil, fmt.Errorf("falha ao conectar ao signer %s: %w", signerURL, lastErr)
 }
 
 // New creates a new Monitor with default settings.

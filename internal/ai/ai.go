@@ -257,10 +257,14 @@ func (m *Manager) processQueue(ctx context.Context) {
 	if m.worker == nil || !m.worker.ready || m.worker.busy {
 		if !m.isRestarting && (m.worker == nil || !m.worker.ready) {
 			m.mu.Unlock()
-			if err := m.spawnLocal(ctx); err != nil {
-				log.Printf("[AI-Queue] Falha ao iniciar worker: %v", err)
-				m.scheduleRetry()
-			}
+			go func() {
+				if err := m.spawnLocal(ctx); err != nil {
+					log.Printf("[AI-Queue] Falha ao iniciar worker: %v", err)
+					m.scheduleRetry()
+					return
+				}
+				m.processQueue(ctx)
+			}()
 			return
 		}
 		m.mu.Unlock()
@@ -296,7 +300,6 @@ func (m *Manager) processQueue(ctx context.Context) {
 			if m.worker == w {
 				m.worker.ready = false
 			}
-			// Re-queue the task.
 			m.queue = append([]queuedTask{task}, m.queue...)
 			m.mu.Unlock()
 			return
