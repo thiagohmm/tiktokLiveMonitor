@@ -159,11 +159,14 @@ func (s *Server) Start(ctx context.Context) error {
 		Handler: mux,
 	}
 
-	// Graceful shutdown.
+	// Graceful shutdown (on signal or context cancellation).
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-		<-sigCh
+		select {
+		case <-sigCh:
+		case <-ctx.Done():
+		}
 		log.Println("[Server] Shutting down...")
 		s.mon.m.StopMonitoring()
 		s.aiMgr.Stop()
@@ -300,12 +303,17 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Warmup moderation.
-	ctx := context.Background()
-	llmReady, _ := s.aiMgr.ProbeReady(ctx)
-	if _, err := s.modEngine.WarmupLearning(ctx, llmReady, false); err != nil {
-		log.Printf("[Server] Warmup warning: %v", err)
-	}
+	// Start LLM worker in background (don't block connection).
+	go func() {
+		ctx := context.Background()
+		llmReady, err := s.aiMgr.ProbeReady(ctx)
+		if err != nil {
+			log.Printf("[Server] LLM worker warmup error: %v", err)
+		}
+		if _, err := s.modEngine.WarmupLearning(ctx, llmReady, false); err != nil {
+			log.Printf("[Server] Warmup warning: %v", err)
+		}
+	}()
 
 	// Create a cancellable context for monitoring.
 	monCtx, cancel := context.WithCancel(context.Background())
