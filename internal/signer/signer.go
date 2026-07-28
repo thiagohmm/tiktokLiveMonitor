@@ -117,6 +117,7 @@ func (s *Signer) refreshMsToken() {
 func (s *Signer) handleFetch(w http.ResponseWriter, r *http.Request) {
 	targetURL := r.URL.Query().Get("url")
 	if targetURL == "" {
+		log.Printf("[Signer] missing url param in query: %s", r.URL.RawQuery)
 		http.Error(w, `{"error":"missing url param"}`, http.StatusBadRequest)
 		return
 	}
@@ -126,8 +127,12 @@ func (s *Signer) handleFetch(w http.ResponseWriter, r *http.Request) {
 		decodedURL = targetURL
 	}
 
+	log.Printf("[Signer] fetch url param: %s", targetURL[:min(len(targetURL), 300)])
+	log.Printf("[Signer] decoded: %s", decodedURL[:min(len(decodedURL), 300)])
+
 	parsed, err := url.Parse(decodedURL)
 	if err != nil {
+		log.Printf("[Signer] invalid url: %s", err)
 		http.Error(w, `{"error":"invalid url"}`, http.StatusBadRequest)
 		return
 	}
@@ -135,7 +140,11 @@ func (s *Signer) handleFetch(w http.ResponseWriter, r *http.Request) {
 	// Normalize path: TikTok API base already includes /webcast/,
 	// and the library appends another webcast/fetch/, resulting in
 	// /webcast/webcast/fetch/ — strip the duplicate.
+	originalPath := parsed.Path
 	parsed.Path = strings.Replace(parsed.Path, "/webcast/webcast/", "/webcast/", 1)
+	if parsed.Path != originalPath {
+		log.Printf("[Signer] normalized path: %s -> %s", originalPath, parsed.Path)
+	}
 
 	s.mu.RLock()
 	msToken := s.msToken
@@ -168,6 +177,8 @@ func (s *Signer) handleFetch(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
+	log.Printf("[Signer] TikTok responded %d for %s", resp.StatusCode, parsed.Host+parsed.Path)
+
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 5<<20))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -175,10 +186,7 @@ func (s *Signer) handleFetch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for k, v := range resp.Header {
-		kl := strings.ToLower(k)
-		if kl == "content-type" || kl == "content-length" || kl == "set-cookie" {
-			w.Header()[k] = v
-		}
+		w.Header()[k] = v
 	}
 
 	w.WriteHeader(resp.StatusCode)
@@ -193,4 +201,11 @@ func (s *Signer) handleRateLimits(w http.ResponseWriter, r *http.Request) {
 		now.Add(1*time.Hour).Format(time.RFC3339),
 		now.Add(1*time.Minute).Format(time.RFC3339),
 	)
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
