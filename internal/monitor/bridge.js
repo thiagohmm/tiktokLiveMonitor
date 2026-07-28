@@ -2,6 +2,9 @@ const { WebcastPushConnection } = require('tiktok-live-connector');
 
 let connection = null;
 let currentUsername = '';
+let chatBuffer = [];
+let processedPinnedMessages = new Set();
+const PINNED_MESSAGE_MAX = 200;
 
 function send(type, data) {
     const msg = JSON.stringify({ type, data }) + '\n';
@@ -16,6 +19,94 @@ function getUser(data) {
         isFollower: typeof data.isFollower === 'boolean' ? data.isFollower :
                     typeof user.isFollower === 'boolean' ? user.isFollower : null
     };
+}
+
+function textFromDisplayText(displayText) {
+    if (!displayText) return null;
+    if (typeof displayText === 'string') return displayText;
+    return displayText.defaultPattern || null;
+}
+
+function getPinnedContent(data) {
+    const pinnedSource = data.chatMessage ||
+        data.pinMessage ||
+        data.pinnedMessage ||
+        data.socialMessage ||
+        data.giftMessage ||
+        data.memberMessage ||
+        data.likeMessage ||
+        data;
+    const candidates = [
+        data.content, data.comment, data.text, data.message, data.description,
+        data.pinnedText, data.pinnedComment,
+        typeof data.pinnedMessage === 'string' ? data.pinnedMessage : null,
+        pinnedSource.comment, pinnedSource.content, pinnedSource.text, pinnedSource.message,
+        pinnedSource.actionDescription,
+        textFromDisplayText(pinnedSource.common?.displayText),
+        textFromDisplayText(pinnedSource.publicAreaMessageCommon?.displayText),
+        textFromDisplayText(pinnedSource.publicAreaCommon?.userLabel),
+        textFromDisplayText(pinnedSource.trayDisplayText),
+        textFromDisplayText(pinnedSource.displayTextForAnchor),
+        textFromDisplayText(pinnedSource.displayTextForAudience)
+    ];
+    const content = candidates.find(v => typeof v === 'string' && v.trim());
+    return content ? content.trim() : null;
+}
+
+function getPinnedUser(data, content) {
+    const sources = [
+        data.chatMessage, data.pinMessage, data.pinnedMessage,
+        data.socialMessage, data.giftMessage, data.memberMessage, data.likeMessage,
+        data.user, data
+    ].filter(s => s && typeof s === 'object');
+    for (const s of sources) {
+        const u = getUser(s);
+        if (u.uniqueId) return u;
+    }
+    const mentionMatch = content && content.match(/@([a-zA-Z0-9._]+)/);
+    if (mentionMatch) {
+        return { uniqueId: mentionMatch[1].toLowerCase(), nickname: mentionMatch[1], isFollower: null };
+    }
+    if (content) {
+        const contentLower = content.toLowerCase();
+        const sender = chatBuffer.find(m => {
+            const c = String(m.comment || '').toLowerCase();
+            return contentLower.includes(c) || c.includes(contentLower);
+        });
+        if (sender) return { uniqueId: sender.uniqueId, nickname: sender.nickname, isFollower: sender.isFollower };
+    }
+    return { uniqueId: null, nickname: null, isFollower: null };
+}
+
+function getPinnedMessageKey(data) {
+    return data.pinId || data.msgId ||
+        data.chatMessage?.common?.msgId || data.chatMessage?.msgId ||
+        `${data.pinTime || ''}:${data.chatMessage?.comment || ''}`;
+}
+
+function handlePinnedMessage(data) {
+    if (!data || data.method === 'unpin' || data.action === 2) return;
+    const messageKey = getPinnedMessageKey(data);
+    if (messageKey && processedPinnedMessages.has(messageKey)) return;
+    if (messageKey) {
+        processedPinnedMessages.add(messageKey);
+        if (processedPinnedMessages.size > PINNED_MESSAGE_MAX) {
+            processedPinnedMessages = new Set(Array.from(processedPinnedMessages).slice(-100));
+        }
+    }
+    const content = getPinnedContent(data);
+    const pinnedUser = getPinnedUser(data, content);
+    send('pinned-comment', {
+        uniqueId: pinnedUser.uniqueId,
+        nickname: pinnedUser.nickname || pinnedUser.uniqueId || 'Nao identificado',
+        comment: content || '[sem texto identificado]',
+        pinId: data.pinId || data.msgId || null,
+        timestamp: Date.now(),
+        isFollower: pinnedUser.isFollower
+    });
+    if (pinnedUser.uniqueId) {
+        send('mark-user-red', pinnedUser.uniqueId.toLowerCase());
+    }
 }
 
 process.stdin.on('data', async (chunk) => {
@@ -49,6 +140,8 @@ async function doConnect(username) {
         doDisconnect();
     }
 
+    chatBuffer = [];
+    processedPinnedMessages = new Set();
     currentUsername = username;
     connection = new WebcastPushConnection(username, {
         processInitialData: false,
@@ -130,16 +223,23 @@ async function doConnect(username) {
     });
 
     connection.on('roomPin', (data) => {
-        const user = getUser(data);
-        const pinId = data.pinId || data.messageId || Date.now().toString();
-        send('pinned-comment', {
-            uniqueId: user.uniqueId,
-            nickname: user.nickname,
-            comment: data.comment || data.content || '[fixado]',
-            pinId: String(pinId),
-            timestamp: Date.now(),
-            isFollower: user.isFollower
+        handlePinnedMessage(data);
+    });
+
+    connection.on('decodedData', (type, data) => {
+        if (type === 'WebcastRoomPinMessage' || data?.method === 'WebcastRoomPinMessage') {
+            handlePinnedMessage(data);
+        }
+    });
+
+    connection.on('chat', (data) => {
+        chatBuffer.push({
+            uniqueId: getUser(data).uniqueId,
+            nickname: getUser(data).nickname,
+            comment: data.comment || '',
+            timestamp: Date.now()
         });
+        if (chatBuffer.length > 500) chatBuffer = chatBuffer.slice(-500);
     });
 
     connection.on('error', (err) => {
