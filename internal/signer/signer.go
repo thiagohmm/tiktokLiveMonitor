@@ -58,7 +58,7 @@ func (s *Signer) Start(ctx context.Context) error {
 		s.server.Shutdown(shutdownCtx)
 	}()
 
-	s.refreshMsToken()
+	go s.refreshMsToken()
 
 	log.Printf("[Signer] Listening on %s", s.baseURL)
 	return s.server.Serve(listener)
