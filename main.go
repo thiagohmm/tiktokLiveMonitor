@@ -5,12 +5,14 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/ai"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/moderation"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/server"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/signer"
 )
 
 func main() {
@@ -38,6 +40,24 @@ func main() {
 
 	aiMgr := ai.NewManager(modelsDir, binDir)
 	defer aiMgr.Stop()
+
+	// Start local signer.
+	signerSvc := signer.New()
+	signerCtx, signerCancel := context.WithCancel(context.Background())
+	defer signerCancel()
+	go func() {
+		if err := signerSvc.Start(signerCtx); err != nil {
+			log.Printf("[Main] Signer stopped: %v", err)
+		}
+	}()
+
+	readyCtx, readyCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer readyCancel()
+	if err := signerSvc.WaitReady(readyCtx); err != nil {
+		log.Fatalf("Failed to start local signer: %v", err)
+	}
+	os.Setenv("TIKTOK_SIGNER_URL", signerSvc.BaseURL())
+	log.Printf("Local signer ready at %s", signerSvc.BaseURL())
 
 	mon, err := monitor.New()
 	if err != nil {
