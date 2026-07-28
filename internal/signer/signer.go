@@ -20,6 +20,7 @@ type Signer struct {
 	baseURL string
 	msToken string
 	mu      sync.RWMutex
+	ready   chan struct{}
 }
 
 func New() *Signer {
@@ -27,6 +28,7 @@ func New() *Signer {
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		ready: make(chan struct{}),
 	}
 
 	mux := http.NewServeMux()
@@ -50,6 +52,7 @@ func (s *Signer) Start(ctx context.Context) error {
 	}
 
 	s.baseURL = fmt.Sprintf("http://127.0.0.1:%d", listener.Addr().(*net.TCPAddr).Port)
+	close(s.ready)
 
 	go func() {
 		<-ctx.Done()
@@ -65,23 +68,16 @@ func (s *Signer) Start(ctx context.Context) error {
 }
 
 func (s *Signer) BaseURL() string {
+	<-s.ready
 	return s.baseURL
 }
 
 func (s *Signer) WaitReady(ctx context.Context) error {
-	url := s.baseURL + "/health"
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		resp, err := http.Get(url)
-		if err == nil {
-			resp.Body.Close()
-			return nil
-		}
-		time.Sleep(50 * time.Millisecond)
+	select {
+	case <-s.ready:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
