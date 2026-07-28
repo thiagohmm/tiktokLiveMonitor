@@ -12,6 +12,12 @@ import (
 	"github.com/steampoweredtaco/gotiktoklive"
 )
 
+// maxRetries and baseBackoff for TikTok client creation (rate limit recovery).
+const (
+	maxRetries   = 5
+	baseBackoff  = 2 * time.Second
+)
+
 // Event types emitted to handlers.
 const (
 	EventChatMessage          = "new-chat-message"
@@ -72,9 +78,10 @@ type GiftPayload struct {
 
 // Settings for the monitor.
 type Settings struct {
-	ModerationEnabled   bool `json:"moderationEnabled"`
-	AIModerationEnabled bool `json:"aiModerationEnabled"`
-	LogLevel            string `json:"logLevel"`
+	ModerationEnabled   bool     `json:"moderationEnabled"`
+	AIModerationEnabled bool     `json:"aiModerationEnabled"`
+	LogLevel            string   `json:"logLevel"`
+	TargetGifts         []string `json:"targetGifts"`
 }
 
 // State represents the monitor's current state.
@@ -113,9 +120,28 @@ type Monitor struct {
 	CorrelateGiftQuestion func(gift GiftPayload)
 }
 
+func newTikTokClientWithRetry() (*gotiktoklive.TikTok, error) {
+	var lastErr error
+	for i := range maxRetries {
+		if i > 0 {
+			backoff := baseBackoff * (1 << i)
+			fmt.Printf("[Monitor] Rate limited, retrying in %v (attempt %d/%d)...\n", backoff, i+1, maxRetries)
+			time.Sleep(backoff)
+		}
+		tk, err := gotiktoklive.NewTikTok(
+			gotiktoklive.DisableSigningLimitsValidation,
+		)
+		if err == nil {
+			return tk, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
 // New creates a new Monitor with default settings.
 func New() (*Monitor, error) {
-	tk, err := gotiktoklive.NewTikTok()
+	tk, err := newTikTokClientWithRetry()
 	if err != nil {
 		return nil, fmt.Errorf("create tiktok client: %w", err)
 	}
@@ -130,7 +156,9 @@ func New() (*Monitor, error) {
 			ModerationEnabled:   true,
 			AIModerationEnabled: true,
 			LogLevel:            "info",
+			TargetGifts:         []string{"perfume", "coração", "dino"},
 		},
+
 	}, nil
 }
 
@@ -163,6 +191,7 @@ func (m *Monitor) GetSettings() Settings {
 func (m *Monitor) SetSettings(s Settings) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	fmt.Printf("[Monitor] Updating settings: %+v\n", s)
 	m.settings = s
 }
 
@@ -364,7 +393,7 @@ func (m *Monitor) handleChat(e gotiktoklive.ChatEvent) {
 	m.mu.Unlock()
 
 	// Detect keyword mentions.
-	if keyword := detectKeyword(comment); keyword != "" {
+	if keyword := m.detectKeyword(comment); keyword != "" {
 		m.mu.Lock()
 		m.pinnedUsers[senderKey] = true
 		m.mu.Unlock()
@@ -443,7 +472,7 @@ func (m *Monitor) handleGift(e gotiktoklive.GiftEvent) {
 	isPinned := m.pinnedUsers[uniqueID]
 	m.mu.Unlock()
 
-	isTarget := isTargetGift(e.Name)
+	isTarget := m.isTargetGift(e.Name)
 
 	payload := EventData{
 		"uniqueId":   user.UniqueID,
@@ -609,18 +638,18 @@ func looksLikeQuestion(comment string) bool {
 	return questionCues.MatchString(t)
 }
 
-func detectKeyword(comment string) string {
+func (m *Monitor) detectKeyword(comment string) string {
 	lower := strings.ToLower(comment)
-	if strings.Contains(lower, "dino") {
-		return "dino"
-	}
-	if strings.Contains(lower, "perfume") {
-		return "perfume"
+	for _, target := range m.settings.TargetGifts {
+		tLower := strings.ToLower(target)
+		if strings.Contains(lower, tLower) {
+			return tLower
+		}
 	}
 	return ""
 }
 
-func isTargetGift(name string) bool {
+func (m *Monitor) isTargetGift(name string) bool {
 	lower := strings.ToLower(name)
 	compact := strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
@@ -629,13 +658,20 @@ func isTargetGift(name string) bool {
 		return -1
 	}, lower)
 
-	return strings.Contains(lower, "perfume") ||
-		strings.Contains(lower, "dino") ||
-		strings.Contains(lower, "tiny dyny") ||
-		strings.Contains(lower, "tiny diny") ||
-		strings.Contains(compact, "dino") ||
-		strings.Contains(compact, "tinydyny") ||
-		strings.Contains(compact, "tinydiny")
+	for _, target := range m.settings.TargetGifts {
+		tLower := strings.ToLower(target)
+		tCompact := strings.Map(func(r rune) rune {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+				return r
+			}
+			return -1
+		}, tLower)
+
+		if strings.Contains(lower, tLower) || strings.Contains(compact, tCompact) {
+			return true
+		}
+	}
+	return false
 }
 
 func isGiftCountingSettlement(e gotiktoklive.GiftEvent) bool {

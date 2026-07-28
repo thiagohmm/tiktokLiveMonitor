@@ -1,3 +1,5 @@
+console.log('TikTok Live Monitor Renderer Loaded');
+
 let ipcRenderer = null;
 try {
     if (typeof require !== 'undefined') {
@@ -43,6 +45,9 @@ const setupStatusText = document.getElementById('setupStatusText');
 const setupPercentage = document.getElementById('setupPercentage');
 const setupProgressBar = document.getElementById('setupProgressBar');
 const targetGiftHistoryBtn = document.getElementById('targetGiftHistoryBtn');
+const targetGiftsList = document.getElementById('targetGiftsList');
+const newTargetGiftInput = document.getElementById('newTargetGift');
+const addTargetGiftBtn = document.getElementById('addTargetGiftBtn');
 const pinnedCommentHistoryBtn = document.getElementById('pinnedCommentHistoryBtn');
 const historyModalBackdrop = document.getElementById('historyModalBackdrop');
 const historyModalTitle = document.getElementById('historyModalTitle');
@@ -1292,7 +1297,96 @@ function setupElectronIpc() {
     });
 }
 
+function renderTargetGifts() {
+    if (!targetGiftsList) return;
+    console.log('Rendering target gifts list...');
+    targetGiftsList.innerHTML = '';
+
+    fetch('/api/settings')
+        .then(r => r.json())
+        .then(settings => {
+            console.log('Current settings fetched:', settings);
+            const gifts = settings.targetGifts || [];
+            gifts.forEach(gift => {
+                const span = document.createElement('span');
+                span.style.cssText = 'background: #eee; padding: 2px 6px; border-radius: 4px; display: flex; align-items: center; gap: 4px; margin-right: 4px; margin-bottom: 4px;';
+                span.textContent = gift;
+
+                const removeBtn = document.createElement('button');
+                removeBtn.textContent = '×';
+                removeBtn.style.cssText = 'border: none; background: none; color: #999; cursor: pointer; font-weight: bold; padding: 0; margin: 0; line-height: 1;';
+                removeBtn.addEventListener('click', () => removeTargetGift(gift));
+
+                span.appendChild(removeBtn);
+                targetGiftsList.appendChild(span);
+            });
+        })
+        .catch(e => console.error('Erro ao carregar presentes alvos:', e));
+}
+
+async function removeTargetGift(giftToRemove) {
+    console.log('Removing target gift:', giftToRemove);
+    try {
+        const response = await fetch('/api/settings');
+        const settings = await response.json();
+        const gifts = settings.targetGifts || [];
+        const updatedGifts = gifts.filter(g => g !== giftToRemove);
+
+        const res = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...settings, targetGifts: updatedGifts })
+        });
+        if (res.ok) {
+            console.log('Successfully removed target gift:', giftToRemove);
+            renderTargetGifts();
+        } else {
+            console.error('Failed to remove target gift:', await res.text());
+        }
+    } catch (e) {
+        console.error('Erro ao remover presente alvo:', e);
+    }
+}
+
+async function addTargetGift() {
+    const value = newTargetGiftInput.value.trim();
+    if (!value) return;
+    console.log('Adding target gift:', value);
+
+    try {
+        const response = await fetch('/api/settings');
+        const settings = await response.json();
+        const gifts = settings.targetGifts || [];
+        if (gifts.includes(value)) {
+            console.log('Gift already exists in targets:', value);
+            newTargetGiftInput.value = '';
+            return;
+        }
+
+        const updatedGifts = [...gifts, value];
+        const res = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...settings, targetGifts: updatedGifts })
+        });
+        if (res.ok) {
+            console.log('Successfully added target gift:', value);
+            newTargetGiftInput.value = '';
+            renderTargetGifts();
+        } else {
+            console.error('Failed to add target gift:', await res.text());
+        }
+    } catch (e) {
+        console.error('Erro ao adicionar presente alvo:', e);
+    }
+}
+
+addTargetGiftBtn.addEventListener('click', addTargetGift);
+
 async function bootstrap() {
+    renderTargetGifts();
+    applyInfractionsSectionTitle(false);
+
     try {
         await ensureBrowserChart();
         const ChartLib = isElectron ? require('chart.js/auto') : window.Chart;
@@ -1301,18 +1395,17 @@ async function bootstrap() {
         }
         chart = createChart(ChartLib);
     } catch (e) {
+        console.error('Chart.js init error:', e);
         statusDiv.innerText = `Erro ao iniciar gráfico: ${e.message}`;
         statusDiv.style.color = 'red';
-        return;
+        // Don't return; let the rest of bootstrap run.
     }
-
-    applyInfractionsSectionTitle(false);
 
     if (isElectron) {
         try {
             const cfg = await ipcRenderer.invoke('get-ui-config');
             applyInfractionsSectionTitle(Boolean(cfg && cfg.geminiConfigured));
-            
+
             // Popula seletor de modelos
             if (cfg.models && modelSelect) {
                 modelSelectorContainer.style.display = 'flex';

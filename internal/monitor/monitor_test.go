@@ -76,6 +76,11 @@ func TestLooksLikeQuestion(t *testing.T) {
 }
 
 func TestDetectKeyword(t *testing.T) {
+	m := &Monitor{
+		settings: Settings{
+			TargetGifts: []string{"dino", "perfume"},
+		},
+	}
 	tests := []struct {
 		input    string
 		expected string
@@ -87,7 +92,7 @@ func TestDetectKeyword(t *testing.T) {
 		{"Oi pessoal", ""},
 	}
 	for _, tt := range tests {
-		got := detectKeyword(tt.input)
+		got := m.detectKeyword(tt.input)
 		if got != tt.expected {
 			t.Errorf("detectKeyword(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
@@ -95,15 +100,19 @@ func TestDetectKeyword(t *testing.T) {
 }
 
 func TestIsTargetGift(t *testing.T) {
+	m := &Monitor{
+		settings: Settings{
+			TargetGifts: []string{"perfume", "coração", "dino"},
+		},
+	}
 	targets := []string{
 		"Perfume",
 		"Dino",
-		"Tiny Dyny",
-		"Tiny Diny",
+		"coração",
 		"tiny dino",
 	}
 	for _, g := range targets {
-		if !isTargetGift(g) {
+		if !m.isTargetGift(g) {
 			t.Errorf("expected %q to be a target gift", g)
 		}
 	}
@@ -115,7 +124,7 @@ func TestIsTargetGift(t *testing.T) {
 		"Galaxy",
 	}
 	for _, g := range notTargets {
-		if isTargetGift(g) {
+		if m.isTargetGift(g) {
 			t.Errorf("expected %q NOT to be a target gift", g)
 		}
 	}

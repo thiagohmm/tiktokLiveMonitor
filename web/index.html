@@ -381,8 +381,17 @@
         </div>
 
         <div class="section-title">
-            <h3>Presentes Alvos (Dino/Perfume)</h3>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <h3 style="margin:0">Presentes Alvos</h3>
+                <div id="targetGiftsList" style="display: flex; gap: 4px; flex-wrap: wrap; font-size: 0.85em; color: #666;">
+                    <!-- Gifts will be listed here -->
+                </div>
+            </div>
             <div class="section-title-actions">
+                <div style="display: flex; gap: 5px; align-items: center;">
+                    <input type="text" id="newTargetGift" placeholder="Nova meta..." style="width: 100px; padding: 4px; font-size: 0.8em; border: 1px solid #ccc; border-radius: 4px;">
+                    <button id="addTargetGiftBtn" class="small-btn" type="button" style="background-color: #22c55e;">+</button>
+                </div>
                 <button id="targetGiftHistoryBtn" class="small-btn" type="button">Últimos 15</button>
                 <label class="expiration-control">
                     Expirar em
@@ -424,7 +433,7 @@
             </table>
         </div>
 
-        <h3>Correlações Dino/Perfume e Alertas</h3>
+        <h3>Correlações de Presentes Alvos e Alertas</h3>
         <div class="table-container">
             <table>
                 <thead>

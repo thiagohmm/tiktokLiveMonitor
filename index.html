@@ -322,11 +322,41 @@
             <button id="listenBtn" class="secondary-btn" type="button">Escuta</button>
         </div>
         <div id="status">Desconectado</div>
+        <div class="ai-question" style="margin-bottom: 20px;">
+            <label for="aiQuestion" style="font-size: 0.9em; margin-bottom: 6px; display: block;">Pergunta para IA:</label>
+            <input type="text" id="aiQuestion" placeholder="Ex: Quem enviou mais presentes?" style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ccc;">
+            <button id="askAiBtn" style="margin-top: 10px; padding: 8px 16px; background-color: #fe2c55; color: white; border: none; border-radius: 4px; cursor: pointer;">Enviar</button>
+            <div id="aiAnswer" style="margin-top: 10px; padding: 10px; background: #f0f0f0; border-radius: 4px; display: none; white-space: pre-wrap; word-break: break-word;"></div>
+        </div>
         <div id="aiLedRow" class="ai-led-row" aria-live="polite" style="flex-wrap: wrap;">
             <div style="display: flex; align-items: center; gap: 10px; margin-right: 20px;">
                 <span id="aiLedDot" class="ai-led-dot ai-led-dot-checking"></span>
                 <span id="aiLedText">Verificando IA…</span>
             </div>
+
+            <style>
+                .ai-question {
+                    margin-bottom: 20px;
+                }
+                .ai-question input {
+                    width: 100%;
+                    padding: 8px;
+                    border-radius: 4px;
+                    border: 1px solid #ccc;
+                }
+                .ai-question button {
+                    margin-top: 10px;
+                    padding: 8px 16px;
+                    background-color: #fe2c55;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    cursor: pointer;
+                }
+                .ai-question button:hover {
+                    opacity: 0.9;
+                }
+            </style>
             
             <div id="modelSelectorContainer" style="display: none; align-items: center; gap: 8px;">
                 <label for="modelSelect" style="font-size: 0.85em; color: #666;">Modelo:</label>
@@ -351,8 +381,17 @@
         </div>
 
         <div class="section-title">
-            <h3>Presentes Alvos (Dino/Perfume)</h3>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <h3 style="margin:0">Presentes Alvos</h3>
+                <div id="targetGiftsList" style="display: flex; gap: 4px; flex-wrap: wrap; font-size: 0.85em; color: #666;">
+                    <!-- Gifts will be listed here -->
+                </div>
+            </div>
             <div class="section-title-actions">
+                <div style="display: flex; gap: 5px; align-items: center;">
+                    <input type="text" id="newTargetGift" placeholder="Nova meta..." style="width: 100px; padding: 4px; font-size: 0.8em; border: 1px solid #ccc; border-radius: 4px;">
+                    <button id="addTargetGiftBtn" class="small-btn" type="button" style="background-color: #22c55e;">+</button>
+                </div>
                 <button id="targetGiftHistoryBtn" class="small-btn" type="button">Últimos 15</button>
                 <label class="expiration-control">
                     Expirar em
@@ -394,7 +433,7 @@
             </table>
         </div>
 
-        <h3>Correlações Dino/Perfume e Alertas</h3>
+        <h3>Correlações de Presentes Alvos e Alertas</h3>
         <div class="table-container">
             <table>
                 <thead>
@@ -442,5 +481,41 @@
     </div>
 
     <script src="renderer.js"></script>
+    <script>
+        document.getElementById('askAiBtn').addEventListener('click', async () => {
+            const questionInput = document.getElementById('aiQuestion');
+            const answerDiv = document.getElementById('aiAnswer');
+            const question = questionInput.value.trim();
+            if (!question) return;
+
+            answerDiv.style.display = 'block';
+            answerDiv.textContent = 'Pensando...';
+            document.getElementById('askAiBtn').disabled = true;
+
+            try {
+                const resp = await fetch('/api/ask-ai', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question })
+                });
+                const data = await resp.json();
+                if (data.answer) {
+                    answerDiv.textContent = data.answer;
+                } else if (data.error) {
+                    answerDiv.textContent = 'Erro: ' + data.error;
+                }
+            } catch (e) {
+                answerDiv.textContent = 'Erro ao conectar com o servidor.';
+            }
+
+            document.getElementById('askAiBtn').disabled = false;
+        });
+
+        document.getElementById('aiQuestion').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                document.getElementById('askAiBtn').click();
+            }
+        });
+    </script>
 </body>
 </html>
