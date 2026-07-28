@@ -2,8 +2,6 @@ package monitor
 
 import (
 	"testing"
-
-	"github.com/steampoweredtaco/gotiktoklive"
 )
 
 func TestNormalizeID(t *testing.T) {
@@ -126,32 +124,6 @@ func TestIsTargetGift(t *testing.T) {
 	for _, g := range notTargets {
 		if m.isTargetGift(g) {
 			t.Errorf("expected %q NOT to be a target gift", g)
-		}
-	}
-}
-
-func TestIsGiftCountingSettlement(t *testing.T) {
-	type giftEvent struct {
-		Type      int
-		RepeatEnd bool
-	}
-	tests := []struct {
-		gift     giftEvent
-		expected bool
-	}{
-		{giftEvent{1, false}, false},
-		{giftEvent{1, true}, true},
-		{giftEvent{0, false}, true},
-		{giftEvent{2, false}, true},
-	}
-	for _, tt := range tests {
-		got := isGiftCountingSettlement(gotiktoklive.GiftEvent{
-			Type:      tt.gift.Type,
-			RepeatEnd: tt.gift.RepeatEnd,
-		})
-		if got != tt.expected {
-			t.Errorf("isGiftCountingSettlement(type=%d, repeatEnd=%v) = %v, want %v",
-				tt.gift.Type, tt.gift.RepeatEnd, got, tt.expected)
 		}
 	}
 }

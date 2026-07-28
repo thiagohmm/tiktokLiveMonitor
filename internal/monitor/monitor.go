@@ -1,25 +1,20 @@
-// Package monitor wraps the TikTok Live WebSocket connection and emits typed events.
 package monitor
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
-	"os"
+	"io"
+	"log"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/steampoweredtaco/gotiktoklive"
 )
 
-// maxRetries and baseBackoff for TikTok client creation (rate limit recovery).
-const (
-	maxRetries   = 5
-	baseBackoff  = 2 * time.Second
-)
-
-// Event types emitted to handlers.
 const (
 	EventChatMessage          = "new-chat-message"
 	EventGiftUser             = "new-gift-user"
@@ -35,20 +30,16 @@ const (
 	EventNewSocialEvent       = "new-social-event"
 )
 
-// EventData is a generic event payload sent to handlers.
 type EventData map[string]interface{}
 
-// EventHandler receives typed events from the monitor.
 type EventHandler func(eventType string, data EventData)
 
-// UserInfo holds extracted user identification data.
 type UserInfo struct {
 	UniqueID   string
 	Nickname   string
 	IsFollower *bool
 }
 
-// ChatMessage represents a buffered chat message.
 type ChatMessage struct {
 	UniqueID   string
 	Nickname   string
@@ -57,7 +48,6 @@ type ChatMessage struct {
 	IsFollower *bool
 }
 
-// QuestionEntry is a question tracked for gift correlation.
 type QuestionEntry struct {
 	UniqueID   string
 	Nickname   string
@@ -66,18 +56,16 @@ type QuestionEntry struct {
 	IsFollower *bool
 }
 
-// GiftPayload carries gift event data for correlation.
 type GiftPayload struct {
-	GiftName   string
-	UniqueID   string
-	Nickname   string
+	GiftName    string
+	UniqueID    string
+	Nickname    string
 	RepeatCount int
-	RepeatEnd  bool
-	GiftType   int
-	IsFollower *bool
+	RepeatEnd   bool
+	GiftType    int
+	IsFollower  *bool
 }
 
-// Settings for the monitor.
 type Settings struct {
 	ModerationEnabled   bool     `json:"moderationEnabled"`
 	AIModerationEnabled bool     `json:"aiModerationEnabled"`
@@ -85,7 +73,6 @@ type Settings struct {
 	TargetGifts         []string `json:"targetGifts"`
 }
 
-// State represents the monitor's current state.
 type State struct {
 	Connected bool     `json:"connected"`
 	Username  string   `json:"username"`
@@ -93,21 +80,21 @@ type State struct {
 }
 
 const (
-	chatBufferMax              = 500
-	questionBufferMax          = 300
-	questionCorrelationWindow  = 3 * time.Minute
-	correlationForwardCount    = 2
-	correlationForwardDelay    = 4 * time.Second
-	pinnedMessagesMax          = 200
-	repeatWindowMs             = 60000
-	repeatsRequired            = 3
+	chatBufferMax             = 500
+	questionBufferMax         = 300
+	questionCorrelationWindow = 3 * time.Minute
+	correlationForwardCount   = 2
+	correlationForwardDelay   = 4 * time.Second
+	pinnedMessagesMax         = 200
+	repeatWindowMs            = 60000
+	repeatsRequired           = 3
 )
 
-// Monitor manages the TikTok Live connection and event dispatching.
 type Monitor struct {
 	mu               sync.Mutex
-	tiktok           *gotiktoklive.TikTok
-	live             *gotiktoklive.Live
+	cmd              *exec.Cmd
+	stdin            io.WriteCloser
+	stdout           io.ReadCloser
 	currentUsername  string
 	chatBuffer       []ChatMessage
 	questionBuffer   []QuestionEntry
@@ -116,47 +103,13 @@ type Monitor struct {
 	repeatAlerted    map[string]bool
 	handlers         []EventHandler
 	settings         Settings
+	connected        bool
 
-	// Correlation callbacks
 	CorrelateGiftQuestion func(gift GiftPayload)
 }
 
-func newTikTokClientWithRetry() (*gotiktoklive.TikTok, error) {
-	opts := []gotiktoklive.TikTokLiveOption{
-		gotiktoklive.DisableSigningLimitsValidation,
-	}
-	if signerURL := os.Getenv("TIKTOK_SIGNER_URL"); signerURL != "" {
-		opts = append(opts, gotiktoklive.SigningUrl(signerURL))
-	}
-	if apiKey := os.Getenv("TIKTOK_API_KEY"); apiKey != "" {
-		opts = append(opts, gotiktoklive.SigningApiKey(apiKey))
-	}
-
-	var lastErr error
-	for i := range maxRetries {
-		if i > 0 {
-			backoff := baseBackoff * (1 << i)
-			fmt.Printf("[Monitor] Signer not ready, retrying in %v (attempt %d/%d)...\n", backoff, i+1, maxRetries)
-			time.Sleep(backoff)
-		}
-		tk, err := gotiktoklive.NewTikTok(opts...)
-		if err == nil {
-			return tk, nil
-		}
-		lastErr = err
-	}
-	return nil, lastErr
-}
-
-// New creates a new Monitor with default settings.
 func New() (*Monitor, error) {
-	tk, err := newTikTokClientWithRetry()
-	if err != nil {
-		return nil, fmt.Errorf("create tiktok client: %w", err)
-	}
-
 	return &Monitor{
-		tiktok:        tk,
 		handlers:      make([]EventHandler, 0),
 		pinnedUsers:   make(map[string]bool),
 		processedPins: make(map[string]bool),
@@ -165,38 +118,33 @@ func New() (*Monitor, error) {
 			ModerationEnabled:   true,
 			AIModerationEnabled: true,
 			LogLevel:            "info",
-			TargetGifts:         []string{"perfume", "coração", "dino"},
+			TargetGifts:         []string{"perfume", "coracao", "dino"},
 		},
-
 	}, nil
 }
 
-// OnEvent registers an event handler.
 func (m *Monitor) OnEvent(handler EventHandler) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.handlers = append(m.handlers, handler)
 }
 
-// GetState returns the current monitor state.
 func (m *Monitor) GetState() State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return State{
-		Connected: m.live != nil,
+		Connected: m.connected,
 		Username:  m.currentUsername,
 		Settings:  m.settings,
 	}
 }
 
-// GetSettings returns current settings.
 func (m *Monitor) GetSettings() Settings {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.settings
 }
 
-// SetSettings updates monitor settings.
 func (m *Monitor) SetSettings(s Settings) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -204,154 +152,129 @@ func (m *Monitor) SetSettings(s Settings) {
 	m.settings = s
 }
 
-// StartMonitoring connects to a TikTok user's livestream.
-func (m *Monitor) StartMonitoring(ctx context.Context, username string) error {
-	m.mu.Lock()
-	if m.live != nil {
-		m.live.Close()
-		m.live = nil
-	}
-	m.currentUsername = username
-	m.chatBuffer = nil
-	m.questionBuffer = nil
-	m.pinnedUsers = make(map[string]bool)
-	m.processedPins = make(map[string]bool)
-	m.repeatAlerted = make(map[string]bool)
-	m.mu.Unlock()
-
-	live, err := m.tiktok.TrackUser(username)
+func (m *Monitor) startBridge() error {
+	bridgePath := filepath.Join("internal", "monitor", "bridge.js")
+	cmd := exec.Command("node", bridgePath)
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		m.emit(EventConnectionStatus, EventData{
-			"success": false,
-			"error":   fmt.Sprintf("Falha ao conectar: %v", err),
-		})
-		return fmt.Errorf("track user %s: %w", username, err)
+		return fmt.Errorf("stdin pipe: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("stdout pipe: %w", err)
+	}
+	cmd.Stderr = nil
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start bridge: %w", err)
 	}
 
-	m.mu.Lock()
-	m.live = live
-	m.mu.Unlock()
+	m.cmd = cmd
+	m.stdin = stdin
+	m.stdout = stdout
 
-	go m.processEvents(ctx, live)
+	go m.readBridge()
 
-	m.emit(EventConnectionStatus, EventData{
-		"success":  true,
-		"username": username,
-	})
 	return nil
 }
 
-// StopMonitoring disconnects from the current livestream.
-func (m *Monitor) StopMonitoring() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.live != nil {
-		m.live.Close()
-		m.live = nil
+func (m *Monitor) stopBridge() {
+	if m.cmd != nil {
+		m.cmd.Process.Kill()
+		m.cmd.Wait()
+		m.cmd = nil
 	}
-	m.emitLocked(EventConnectionStatus, EventData{
-		"success": false,
-		"error":   "Desconectado pelo usuário",
-	})
 }
 
-// GetChatBuffer returns a snapshot of recent chat messages.
-func (m *Monitor) GetChatBuffer() []ChatMessage {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]ChatMessage, len(m.chatBuffer))
-	copy(out, m.chatBuffer)
-	return out
+func (m *Monitor) sendBridge(cmd map[string]interface{}) error {
+	data, err := json.Marshal(cmd)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(m.stdin, "%s\n", data)
+	return err
 }
 
-// GetQuestionBuffer returns a snapshot of recent questions.
-func (m *Monitor) GetQuestionBuffer() []QuestionEntry {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]QuestionEntry, len(m.questionBuffer))
-	copy(out, m.questionBuffer)
-	return out
+type bridgeMsg struct {
+	Type string                 `json:"type"`
+	Data map[string]interface{} `json:"data"`
 }
 
-func (m *Monitor) processEvents(ctx context.Context, live *gotiktoklive.Live) {
-	defer func() {
+func (m *Monitor) readBridge() {
+	scanner := bufio.NewScanner(m.stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		var msg bridgeMsg
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			continue
+		}
+		m.handleBridgeEvent(msg.Type, msg.Data)
+	}
+	log.Println("[Monitor] Bridge process ended")
+}
+
+func (m *Monitor) handleBridgeEvent(eventType string, data EventData) {
+	switch eventType {
+	case "connection-status":
+		success, _ := data["success"].(bool)
 		m.mu.Lock()
-		if m.live == live {
-			m.live = nil
+		m.connected = success
+		if username, ok := data["username"].(string); ok {
+			m.currentUsername = username
 		}
 		m.mu.Unlock()
-	}()
+		m.emit(eventType, data)
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event, ok := <-live.Events:
-			if !ok {
-				return
-			}
-			m.handleEvent(event)
+	case "new-chat-message":
+		m.mu.Lock()
+		m.handleChatMessage(data)
+		m.mu.Unlock()
+		m.emit(eventType, data)
+
+	case "any-gift-received":
+		m.emit(eventType, data)
+
+	case "new-gift-user":
+		m.handleTargetGift(data)
+
+	case "pinned-comment":
+		m.mu.Lock()
+		user := extractFromData(data)
+		key := normalizeID(user.UniqueID)
+		m.pinnedUsers[key] = true
+		m.mu.Unlock()
+		m.emit(eventType, data)
+		if user.UniqueID != "" {
+			m.emit(EventMarkUserRed, EventData{"uniqueId": key})
 		}
+
+	case "live-user-connected", "new-follower", "new-social-event":
+		m.emit(eventType, data)
+
+	case "error":
+		log.Printf("[Bridge] Error: %v", data["message"])
 	}
 }
 
-func (m *Monitor) handleEvent(event gotiktoklive.Event) {
-	switch e := event.(type) {
-	case gotiktoklive.ChatEvent:
-		m.handleChat(e)
-	case gotiktoklive.GiftEvent:
-		m.handleGift(e)
-	case gotiktoklive.UserEvent:
-		m.handleUserEvent(e)
-	case gotiktoklive.RoomEvent:
-		m.handleRoomEvent(e)
-	case gotiktoklive.DisconnectEvent:
-		m.emit(EventConnectionStatus, EventData{
-			"success": false,
-			"error":   "Conexão encerrada pelo TikTok",
-		})
-	}
-}
-
-func (m *Monitor) handleChat(e gotiktoklive.ChatEvent) {
-	comment := strings.TrimSpace(e.Comment)
+func (m *Monitor) handleChatMessage(data EventData) {
+	comment, _ := data["comment"].(string)
+	comment = strings.TrimSpace(comment)
 	if comment == "" {
 		return
 	}
-	// Skip history messages.
-	if e.IsHistory() {
-		return
-	}
 
-	// Check if this is a pinned message.
-	if strings.HasPrefix(comment, "<pinned>: ") {
-		comment = strings.TrimPrefix(comment, "<pinned>: ")
-		m.handlePinnedChat(e, comment)
-		return
-	}
-
-	user := extractUser(e.User, e.UserIdentity)
+	user := extractFromData(data)
 	now := time.Now().UnixMilli()
 
-	m.emit(EventChatMessage, EventData{
-		"uniqueId":   user.UniqueID,
-		"nickname":   user.Nickname,
-		"comment":    comment,
-		"timestamp":  now,
-		"isFollower": user.IsFollower,
-	})
-
-	// Detect repeated messages.
 	commentLower := strings.ToLower(comment)
 	senderKey := normalizeID(user.UniqueID)
 
-	m.mu.Lock()
-	// Check repeats.
 	repeats := 0
 	for _, msg := range m.chatBuffer {
 		if normalizeID(msg.UniqueID) == senderKey &&
 			strings.ToLower(strings.TrimSpace(msg.Comment)) == commentLower &&
-			(now - msg.Timestamp) < repeatWindowMs {
+			(now-msg.Timestamp) < repeatWindowMs {
 			repeats++
 		}
 	}
@@ -360,7 +283,6 @@ func (m *Monitor) handleChat(e gotiktoklive.ChatEvent) {
 	if repeats >= repeatsRequired-1 {
 		if !m.repeatAlerted[seqKey] {
 			m.repeatAlerted[seqKey] = true
-			m.mu.Unlock()
 			m.emit(EventFlaggedMessage, EventData{
 				"uniqueId":   user.UniqueID,
 				"nickname":   user.Nickname,
@@ -369,26 +291,22 @@ func (m *Monitor) handleChat(e gotiktoklive.ChatEvent) {
 				"reason":     "Mensagem repetida",
 				"category":   "REPETICAO",
 			})
-			m.mu.Lock()
 		}
 	} else {
 		delete(m.repeatAlerted, seqKey)
 	}
 
-	// Store in chat buffer.
-	msg := ChatMessage{
+	m.chatBuffer = append(m.chatBuffer, ChatMessage{
 		UniqueID:   user.UniqueID,
 		Nickname:   user.Nickname,
 		Comment:    comment,
 		Timestamp:  now,
 		IsFollower: user.IsFollower,
-	}
-	m.chatBuffer = append(m.chatBuffer, msg)
+	})
 	if len(m.chatBuffer) > chatBufferMax {
 		m.chatBuffer = m.chatBuffer[1:]
 	}
 
-	// Track questions.
 	if looksLikeQuestion(comment) {
 		m.questionBuffer = append(m.questionBuffer, QuestionEntry{
 			UniqueID:   user.UniqueID,
@@ -399,13 +317,9 @@ func (m *Monitor) handleChat(e gotiktoklive.ChatEvent) {
 		})
 	}
 	m.pruneQuestions(now)
-	m.mu.Unlock()
 
-	// Detect keyword mentions.
 	if keyword := m.detectKeyword(comment); keyword != "" {
-		m.mu.Lock()
 		m.pinnedUsers[senderKey] = true
-		m.mu.Unlock()
 		m.emit(EventKeywordMention, EventData{
 			"uniqueId":   user.UniqueID,
 			"nickname":   user.Nickname,
@@ -418,147 +332,91 @@ func (m *Monitor) handleChat(e gotiktoklive.ChatEvent) {
 	}
 }
 
-func (m *Monitor) handlePinnedChat(e gotiktoklive.ChatEvent, comment string) {
-	msgKey := fmt.Sprintf("%d", e.MessageID)
-	m.mu.Lock()
-	if m.processedPins[msgKey] {
-		m.mu.Unlock()
-		return
-	}
-	m.processedPins[msgKey] = true
-	if len(m.processedPins) > pinnedMessagesMax {
-		// Trim old entries.
-		newMap := make(map[string]bool)
-		count := 0
-		for k := range m.processedPins {
-			if count >= 100 {
-				break
-			}
-			newMap[k] = true
-			count++
-		}
-		m.processedPins = newMap
-	}
-	m.mu.Unlock()
-
-	user := extractUser(e.User, e.UserIdentity)
-	now := time.Now().UnixMilli()
-
-	m.emit(EventPinnedComment, EventData{
-		"uniqueId":   user.UniqueID,
-		"nickname":   coalesce(user.Nickname, user.UniqueID, "Nao identificado"),
-		"comment":    coalesceStr(comment, "[sem texto identificado]"),
-		"pinId":      fmt.Sprintf("%d", e.MessageID),
-		"timestamp":  now,
-		"isFollower": user.IsFollower,
-	})
-
-	if user.UniqueID != "" {
-		key := normalizeID(user.UniqueID)
-		m.mu.Lock()
-		m.pinnedUsers[key] = true
-		m.mu.Unlock()
-		m.emit(EventMarkUserRed, EventData{"uniqueId": key})
-	}
-}
-
-func (m *Monitor) handleRoomEvent(e gotiktoklive.RoomEvent) {
-	// Room events can contain pinned messages too.
-	if e.Type == "WebcastRoomPinMessage" || strings.Contains(e.Message, "<pinned>") {
-		// Already handled via ChatEvent prefix.
-	}
-}
-
-func (m *Monitor) handleGift(e gotiktoklive.GiftEvent) {
-	if e.IsHistory() {
-		return
-	}
-
-	user := extractUser(e.User, e.UserIdentity)
+func (m *Monitor) handleTargetGift(data EventData) {
+	user := extractFromData(data)
 	uniqueID := normalizeID(user.UniqueID)
 
 	m.mu.Lock()
 	isPinned := m.pinnedUsers[uniqueID]
 	m.mu.Unlock()
 
-	isTarget := m.isTargetGift(e.Name)
+	giftName, _ := data["giftName"].(string)
+	isTarget := m.isTargetGift(giftName)
 
-	payload := EventData{
-		"uniqueId":   user.UniqueID,
-		"nickname":   user.Nickname,
-		"giftName":   e.Name,
-		"repeatCount": e.RepeatCount,
-		"repeatEnd":  e.RepeatEnd,
-		"giftType":   e.Type,
-		"isRed":      isTarget && isPinned,
-		"isFollower": user.IsFollower,
-		"timestamp":  time.Now().UnixMilli(),
-	}
+	data["isRed"] = isTarget && isPinned
 
-	// Emit for all gifts.
-	m.emit(EventAnyGift, payload)
+	m.emit(EventGiftUser, data)
 
-	// Emit for target gifts only.
-	if isTarget && isGiftCountingSettlement(e) {
-		m.emit(EventGiftUser, payload)
+	if isTarget && m.CorrelateGiftQuestion != nil {
+		repeatCount, _ := toInt(data["repeatCount"])
+		giftType, _ := toInt(data["giftType"])
+		repeatEnd, _ := data["repeatEnd"].(bool)
 
-		// Trigger correlation if callback is set.
-		if m.CorrelateGiftQuestion != nil {
-			gift := GiftPayload{
-				GiftName:    e.Name,
-				UniqueID:    user.UniqueID,
-				Nickname:    user.Nickname,
-				RepeatCount: e.RepeatCount,
-				RepeatEnd:   e.RepeatEnd,
-				GiftType:    e.Type,
-				IsFollower:  user.IsFollower,
-			}
-			go m.CorrelateGiftQuestion(gift)
+		gift := GiftPayload{
+			GiftName:    giftName,
+			UniqueID:    user.UniqueID,
+			Nickname:    user.Nickname,
+			RepeatCount: repeatCount,
+			RepeatEnd:   repeatEnd,
+			GiftType:    giftType,
+			IsFollower:  user.IsFollower,
 		}
+		go m.CorrelateGiftQuestion(gift)
 	}
 }
 
-func (m *Monitor) handleUserEvent(e gotiktoklive.UserEvent) {
-	if e.IsHistory() {
-		return
+func toInt(v interface{}) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
 	}
-	user := extractUser(e.User, nil)
-
-	switch e.Event {
-	case gotiktoklive.USER_JOIN:
-		m.emit(EventLiveUserConnected, EventData{
-			"uniqueId":   user.UniqueID,
-			"nickname":   user.Nickname,
-			"isFollower": user.IsFollower,
-		})
-	case gotiktoklive.USER_FOLLOW:
-		if user.IsFollower == nil {
-			t := true
-			user.IsFollower = &t
-		}
-		m.emit(EventNewFollower, EventData{
-			"uniqueId":   user.UniqueID,
-			"nickname":   user.Nickname,
-			"isFollower": user.IsFollower,
-		})
-	case gotiktoklive.USER_SHARE:
-		m.emit(EventNewSocialEvent, EventData{
-			"uniqueId":   user.UniqueID,
-			"nickname":   user.Nickname,
-			"isFollower": user.IsFollower,
-		})
-	}
+	return 0, false
 }
 
-// Helpers
+func (m *Monitor) StartMonitoring(ctx context.Context, username string) error {
+	if m.cmd == nil {
+		if err := m.startBridge(); err != nil {
+			return fmt.Errorf("start bridge: %w", err)
+		}
+	}
+
+	m.mu.Lock()
+	m.currentUsername = username
+	m.chatBuffer = nil
+	m.questionBuffer = nil
+	m.pinnedUsers = make(map[string]bool)
+	m.processedPins = make(map[string]bool)
+	m.repeatAlerted = make(map[string]bool)
+	m.mu.Unlock()
+
+	return m.sendBridge(map[string]interface{}{
+		"action":   "connect",
+		"username": username,
+	})
+}
+
+func (m *Monitor) StopMonitoring() {
+	if m.stdin != nil {
+		m.sendBridge(map[string]interface{}{
+			"action": "disconnect",
+		})
+	}
+	m.mu.Lock()
+	m.connected = false
+	m.mu.Unlock()
+	m.emit(EventConnectionStatus, EventData{
+		"success": false,
+		"error":   "Desconectado pelo usuário",
+	})
+}
 
 func (m *Monitor) emit(eventType string, data EventData) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.emitLocked(eventType, data)
-}
-
-func (m *Monitor) emitLocked(eventType string, data EventData) {
 	for _, h := range m.handlers {
 		h(eventType, data)
 	}
@@ -578,31 +436,44 @@ func (m *Monitor) pruneQuestions(now int64) {
 	}
 }
 
-// PruneQuestions is exported for external use (correlation).
 func (m *Monitor) PruneQuestions(now int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.pruneQuestions(now)
 }
 
-// IsPinnedUser checks if a user is in the pinned set.
 func (m *Monitor) IsPinnedUser(uid string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.pinnedUsers[normalizeID(uid)]
 }
 
-// --- Pure functions ---
+func (m *Monitor) GetChatBuffer() []ChatMessage {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]ChatMessage, len(m.chatBuffer))
+	copy(out, m.chatBuffer)
+	return out
+}
 
-func extractUser(u *gotiktoklive.User, identity *gotiktoklive.UserIdentity) UserInfo {
+func (m *Monitor) GetQuestionBuffer() []QuestionEntry {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]QuestionEntry, len(m.questionBuffer))
+	copy(out, m.questionBuffer)
+	return out
+}
+
+func extractFromData(data EventData) UserInfo {
 	info := UserInfo{}
-	if u != nil {
-		info.UniqueID = u.Username
-		info.Nickname = u.Nickname
+	if uid, ok := data["uniqueId"].(string); ok {
+		info.UniqueID = uid
 	}
-	if identity != nil {
-		isFollower := identity.IsFollower
-		info.IsFollower = &isFollower
+	if nick, ok := data["nickname"].(string); ok {
+		info.Nickname = nick
+	}
+	if f, ok := data["isFollower"].(bool); ok {
+		info.IsFollower = &f
 	}
 	return info
 }
@@ -617,7 +488,6 @@ func foldText(s string) string {
 		if r == 'ç' {
 			return 'c'
 		}
-		// Remove combining diacritical marks.
 		if r >= 0x0300 && r <= 0x036F {
 			return -1
 		}
@@ -683,14 +553,6 @@ func (m *Monitor) isTargetGift(name string) bool {
 	return false
 }
 
-func isGiftCountingSettlement(e gotiktoklive.GiftEvent) bool {
-	// GiftType 1 with repeatEnd=false is an intermediate streak — skip.
-	if e.Type == 1 && !e.RepeatEnd {
-		return false
-	}
-	return true
-}
-
 func coalesce(values ...string) string {
 	for _, v := range values {
 		if v != "" {
@@ -706,5 +568,3 @@ func coalesceStr(val, fallback string) string {
 	}
 	return val
 }
-
-
