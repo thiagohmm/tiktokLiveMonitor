@@ -132,6 +132,11 @@ func (s *Signer) handleFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Normalize path: TikTok API base already includes /webcast/,
+	// and the library appends another webcast/fetch/, resulting in
+	// /webcast/webcast/fetch/ — strip the duplicate.
+	parsed.Path = strings.Replace(parsed.Path, "/webcast/webcast/", "/webcast/", 1)
+
 	s.mu.RLock()
 	msToken := s.msToken
 	s.mu.RUnlock()
