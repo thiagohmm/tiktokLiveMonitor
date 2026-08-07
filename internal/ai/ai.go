@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -26,7 +27,7 @@ const (
 	completionPath  = "/v1/chat/completions"
 	completionTimeout = 120 * time.Second
 	queueMax        = 50
-	ctxSize         = 2048
+	ctxSize         = 16384
 )
 
 // CompletionRequest represents a queued LLM completion task.
@@ -61,6 +62,7 @@ type Manager struct {
 
 type queuedTask struct {
 	req     CompletionRequest
+	ctx     context.Context
 	resolve chan string
 	errCh   chan error
 }
@@ -104,6 +106,7 @@ func (m *Manager) Complete(ctx context.Context, req CompletionRequest) (string, 
 
 	task := queuedTask{
 		req:     req,
+		ctx:     ctx,
 		resolve: make(chan string, 1),
 		errCh:   make(chan error, 1),
 	}
@@ -276,11 +279,36 @@ func (m *Manager) processQueue(ctx context.Context) {
 		m.restartTimer = nil
 	}
 
-	task := m.queue[0]
-	m.queue = m.queue[1:]
+	// Skip cancelled tasks at dequeue.
+	var task *queuedTask
+	for len(m.queue) > 0 {
+		candidate := &m.queue[0]
+		m.queue = m.queue[1:]
+		if candidate.ctx != nil && candidate.ctx.Err() != nil {
+			log.Printf("[AI-Queue] Descartando tarefa cancelada (restam %d)", len(m.queue))
+			select {
+			case candidate.errCh <- candidate.ctx.Err():
+			default:
+			}
+			continue
+		}
+		task = candidate
+		break
+	}
+
+	if task == nil {
+		m.mu.Unlock()
+		return
+	}
+
 	m.worker.busy = true
 	w := m.worker
 	m.mu.Unlock()
+
+	taskCtx := task.ctx
+	if taskCtx == nil {
+		taskCtx = ctx
+	}
 
 	log.Printf("[AI] Processando tarefa... (Restantes na fila: %d)", len(m.queue))
 	go func() {
@@ -293,14 +321,22 @@ func (m *Manager) processQueue(ctx context.Context) {
 			m.processQueue(ctx)
 		}()
 
-		result, err := w.complete(ctx, task.req)
+		result, err := w.complete(taskCtx, task.req)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || (task.ctx != nil && errors.Is(task.ctx.Err(), context.Canceled)) {
+				log.Printf("[AI-Queue] Tarefa cancelada pelo usuário")
+				select {
+				case task.errCh <- err:
+				default:
+				}
+				return
+			}
 			log.Printf("[AI] Erro ao processar tarefa: %v", err)
 			m.mu.Lock()
 			if m.worker == w {
 				m.worker.ready = false
 			}
-			m.queue = append([]queuedTask{task}, m.queue...)
+			m.queue = append([]queuedTask{*task}, m.queue...)
 			m.mu.Unlock()
 			return
 		}
@@ -335,7 +371,18 @@ func (m *Manager) resolvePaths() (binPath, modelPath string) {
 
 	archDir := filepath.Join(m.binDir, platform, arch)
 	binPath = m.resolveLlamaPath(archDir, binName)
-	modelPath = filepath.Join(m.modelsDir, "ggml-model.gguf") // Will be overridden by caller.
+
+	// Auto-detect .gguf model files in the models directory.
+	entries, err := os.ReadDir(m.modelsDir)
+	if err == nil {
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".gguf") {
+				modelPath = filepath.Join(m.modelsDir, e.Name())
+				return binPath, modelPath
+			}
+		}
+	}
+	modelPath = filepath.Join(m.modelsDir, "ggml-model.gguf") // Fallback.
 
 	return binPath, modelPath
 }
@@ -409,10 +456,22 @@ func (w *Worker) complete(ctx context.Context, req CompletionRequest) (string, e
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, completionTimeout)
-	defer cancel()
+	// Check if parent context is already cancelled before making HTTP request.
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
+	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST",
+	// Use parent context deadline if set, otherwise apply a reasonable timeout.
+	httpCtx := ctx
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		httpCtx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
+
+	httpReq, err := http.NewRequestWithContext(httpCtx, "POST",
 		fmt.Sprintf("http://%s:%d%s", w.Host, w.Port, completionPath),
 		bytes.NewReader(data))
 	if err != nil {

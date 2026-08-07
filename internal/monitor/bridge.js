@@ -132,6 +132,33 @@ async function handleCommand(cmd) {
         case 'get-state':
             send('state', { connected: !!connection, username: currentUsername });
             break;
+        case 'fetch-gifts':
+            await handleFetchGifts();
+            break;
+    }
+}
+
+async function handleFetchGifts() {
+    if (!connection) {
+        send('gifts-list', { gifts: [] });
+        return;
+    }
+    try {
+        const gifts = await connection.fetchAvailableGifts();
+        const giftNames = [];
+        const seen = new Set();
+        if (gifts && Array.isArray(gifts)) {
+            for (const gift of gifts) {
+                const name = gift.giftName || gift.name || '';
+                if (name && !seen.has(name)) {
+                    seen.add(name);
+                    giftNames.push(name);
+                }
+            }
+        }
+        send('gifts-list', { gifts: giftNames });
+    } catch (err) {
+        send('gifts-list', { gifts: [] });
     }
 }
 
@@ -149,8 +176,26 @@ async function doConnect(username) {
         enableExtendedGiftInfo: false
     });
 
-    connection.on('connected', () => {
+    connection.on('connected', async () => {
         send('connection-status', { success: true, username });
+        // Buscar presentes disponíveis automaticamente após conectar
+        try {
+            const gifts = await connection.fetchAvailableGifts();
+            const giftNames = [];
+            const seen = new Set();
+            if (gifts && Array.isArray(gifts)) {
+                for (const gift of gifts) {
+                    const name = gift.giftName || gift.name || '';
+                    if (name && !seen.has(name)) {
+                        seen.add(name);
+                        giftNames.push(name);
+                    }
+                }
+            }
+            send('gifts-list', { gifts: giftNames });
+        } catch (err) {
+            send('gifts-list', { gifts: [] });
+        }
     });
 
     connection.on('disconnected', () => {

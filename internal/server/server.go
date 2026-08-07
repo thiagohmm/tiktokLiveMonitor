@@ -4,6 +4,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -100,6 +101,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/probe-llm", s.handleProbeLLM)
 	mux.HandleFunc("/api/worker/register", s.handleWorkerRegister)
 	mux.HandleFunc("/api/gifts", s.handleGifts)
+	mux.HandleFunc("/api/available-gifts", s.handleAvailableGifts)
 	mux.HandleFunc("/api/ask-ai", s.handleAskAI)
 
 	// Static files.
@@ -458,6 +460,19 @@ func (s *Server) handleGifts(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 }
 
+func (s *Server) handleAvailableGifts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	gifts, err := s.mon.m.FetchAvailableGifts()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, gifts)
+}
+
 func (s *Server) handleAskAI(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -488,12 +503,30 @@ func (s *Server) handleAskAI(w http.ResponseWriter, r *http.Request) {
 
 	var ctxBuilder strings.Builder
 
+	// Limitar para não estourar o contexto do modelo.
+	const maxMessages = 50
+	const maxGiftUsers = 10
+	const maxGiftTypesPerUser = 5
+	const maxMessageLen = 200
+
 	if len(allMessages) > 0 {
-		ctxBuilder.WriteString("MENSAGENS DOS USUÁRIOS NA LIVE (até 10 por usuário, sem repetidas):\n")
+		ctxBuilder.WriteString("MENSAGENS RECENTES NA LIVE:\n")
+		msgCount := 0
 		for uid, msgs := range allMessages {
+			if msgCount >= maxMessages {
+				break
+			}
 			ctxBuilder.WriteString(fmt.Sprintf("\n  %s:\n", uid))
 			for _, m := range msgs {
-				ctxBuilder.WriteString(fmt.Sprintf("    - %s\n", m.Message))
+				if msgCount >= maxMessages {
+					break
+				}
+				text := m.Message
+				if len(text) > maxMessageLen {
+					text = text[:maxMessageLen]
+				}
+				ctxBuilder.WriteString(fmt.Sprintf("    - %s\n", text))
+				msgCount++
 			}
 		}
 	} else {
@@ -504,12 +537,20 @@ func (s *Server) handleAskAI(w http.ResponseWriter, r *http.Request) {
 
 	if len(giftSummary) > 0 {
 		ctxBuilder.WriteString("PRESENTES ENVIADOS NA LIVE:\n")
+		giftIdx := 0
 		for uid, giftsMap := range giftSummary {
+			if giftIdx >= maxGiftUsers {
+				break
+			}
 			var parts []string
 			for gname, count := range giftsMap {
+				if len(parts) >= maxGiftTypesPerUser {
+					break
+				}
 				parts = append(parts, fmt.Sprintf("%s x%d", gname, count))
 			}
 			ctxBuilder.WriteString(fmt.Sprintf("- %s: %s\n", uid, strings.Join(parts, ", ")))
+			giftIdx++
 		}
 	} else {
 		ctxBuilder.WriteString("NENHUM PRESENTE REGISTRADO NA LIVE.\n")
@@ -532,6 +573,9 @@ Responda em português do Brasil de forma direta e concisa.`, ctxBuilder.String(
 
 	response, err := s.aiMgr.Complete(ctx, req)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("AI error: %v", err))
 		return
 	}
