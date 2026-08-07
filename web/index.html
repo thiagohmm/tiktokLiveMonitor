@@ -326,6 +326,7 @@
             <label for="aiQuestion" style="font-size: 0.9em; margin-bottom: 6px; display: block;">Pergunta para IA:</label>
             <input type="text" id="aiQuestion" placeholder="Ex: Quem enviou mais presentes?" style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ccc;">
             <button id="askAiBtn" style="margin-top: 10px; padding: 8px 16px; background-color: #fe2c55; color: white; border: none; border-radius: 4px; cursor: pointer;">Enviar</button>
+            <button id="cancelAiBtn" type="button" style="display: none; margin-top: 10px; padding: 8px 16px; background-color: #555; color: white; border: none; border-radius: 4px; cursor: pointer;">Cancelar</button>
             <div id="aiAnswer" style="margin-top: 10px; padding: 10px; background: #f0f0f0; border-radius: 4px; display: none; white-space: pre-wrap; word-break: break-word;"></div>
         </div>
         <div id="aiLedRow" class="ai-led-row" aria-live="polite" style="flex-wrap: wrap;">
@@ -389,7 +390,9 @@
             </div>
             <div class="section-title-actions">
                 <div style="display: flex; gap: 5px; align-items: center;">
-                    <input type="text" id="newTargetGift" placeholder="Nova meta..." style="width: 100px; padding: 4px; font-size: 0.8em; border: 1px solid #ccc; border-radius: 4px;">
+                    <select id="availableGiftSelect" style="flex: 1; padding: 4px; font-size: 0.8em; border: 1px solid #ccc; border-radius: 4px; background: white;">
+                        <option value="">Carregando presentes...</option>
+                    </select>
                     <button id="addTargetGiftBtn" class="small-btn" type="button" style="background-color: #22c55e;">+</button>
                 </div>
                 <button id="targetGiftHistoryBtn" class="small-btn" type="button">Últimos 15</button>
@@ -482,6 +485,8 @@
 
     <script src="renderer.js"></script>
     <script>
+        let askAiController = null;
+
         document.getElementById('askAiBtn').addEventListener('click', async () => {
             const questionInput = document.getElementById('aiQuestion');
             const answerDiv = document.getElementById('aiAnswer');
@@ -491,12 +496,17 @@
             answerDiv.style.display = 'block';
             answerDiv.textContent = 'Pensando...';
             document.getElementById('askAiBtn').disabled = true;
+            const cancelBtn = document.getElementById('cancelAiBtn');
+            cancelBtn.style.display = 'inline-block';
+
+            askAiController = new AbortController();
 
             try {
                 const resp = await fetch('/api/ask-ai', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ question })
+                    body: JSON.stringify({ question }),
+                    signal: askAiController.signal
                 });
                 const data = await resp.json();
                 if (data.answer) {
@@ -505,10 +515,22 @@
                     answerDiv.textContent = 'Erro: ' + data.error;
                 }
             } catch (e) {
-                answerDiv.textContent = 'Erro ao conectar com o servidor.';
+                if (e.name === 'AbortError') {
+                    answerDiv.textContent = 'Cancelado pelo usuário.';
+                } else {
+                    answerDiv.textContent = 'Erro ao conectar com o servidor.';
+                }
+            } finally {
+                cancelBtn.style.display = 'none';
+                document.getElementById('askAiBtn').disabled = false;
+                askAiController = null;
             }
+        });
 
-            document.getElementById('askAiBtn').disabled = false;
+        document.getElementById('cancelAiBtn').addEventListener('click', () => {
+            if (askAiController) {
+                askAiController.abort();
+            }
         });
 
         document.getElementById('aiQuestion').addEventListener('keydown', (e) => {

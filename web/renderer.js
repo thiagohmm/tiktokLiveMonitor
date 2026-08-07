@@ -46,7 +46,7 @@ const setupPercentage = document.getElementById('setupPercentage');
 const setupProgressBar = document.getElementById('setupProgressBar');
 const targetGiftHistoryBtn = document.getElementById('targetGiftHistoryBtn');
 const targetGiftsList = document.getElementById('targetGiftsList');
-const newTargetGiftInput = document.getElementById('newTargetGift');
+const availableGiftSelect = document.getElementById('availableGiftSelect');
 const addTargetGiftBtn = document.getElementById('addTargetGiftBtn');
 const pinnedCommentHistoryBtn = document.getElementById('pinnedCommentHistoryBtn');
 const historyModalBackdrop = document.getElementById('historyModalBackdrop');
@@ -70,6 +70,19 @@ let listenedUserId = '';
 let listenDraftValue = '';
 let liveUsers = new Map();
 let activeModalType = null;
+
+const LIVE_USERS_MAX = 200;
+let renderListenModalTimeout = null;
+
+function throttledRenderListenModal() {
+    if (renderListenModalTimeout) {
+        clearTimeout(renderListenModalTimeout);
+    }
+    renderListenModalTimeout = setTimeout(() => {
+        renderListenModal({ preserveFocus: true });
+        renderListenModalTimeout = null;
+    }, 150);
+}
 
 function normalizeListenUser(value) {
     return String(value || '').trim().replace(/^@+/, '').toLowerCase();
@@ -97,8 +110,16 @@ function rememberLiveUser(data) {
         lastSeen: Date.now()
     });
 
+    // Limitar tamanho do Map para evitar uso excessivo de memória
+    if (liveUsers.size > LIVE_USERS_MAX) {
+        const entries = Array.from(liveUsers.entries());
+        entries.sort((a, b) => (a[1].lastSeen || 0) - (b[1].lastSeen || 0));
+        const toRemove = entries.slice(0, liveUsers.size - LIVE_USERS_MAX);
+        toRemove.forEach(([key]) => liveUsers.delete(key));
+    }
+
     if (activeModalType === 'listen') {
-        renderListenModal({ preserveFocus: true });
+        throttledRenderListenModal();
     }
 }
 
@@ -273,7 +294,7 @@ function renderListenModal(options = {}) {
     input.value = listenDraftValue;
     input.addEventListener('input', () => {
         listenDraftValue = input.value;
-        renderListenModal({ preserveFocus: true });
+        throttledRenderListenModal();
     });
 
     const button = document.createElement('button');
@@ -374,7 +395,7 @@ function handleListenedMessage(data) {
     });
     trimHistory(listenedMessages);
     if (activeModalType === 'listen') {
-        renderListenModal();
+        throttledRenderListenModal();
     }
 }
 
@@ -694,6 +715,7 @@ function clearTables() {
 function handleConnectionStatus(data) {
     if (data.success) {
         applyConnectedState(data.username);
+        loadAvailableGifts();
         return;
     }
 
@@ -1348,8 +1370,27 @@ async function removeTargetGift(giftToRemove) {
     }
 }
 
+async function loadAvailableGifts() {
+    if (!availableGiftSelect) return;
+    try {
+        const response = await fetch('/api/available-gifts');
+        if (!response.ok) return;
+        const gifts = await response.json();
+        availableGiftSelect.innerHTML = '<option value="">Selecione um presente...</option>';
+        gifts.forEach(gift => {
+            const option = document.createElement('option');
+            option.value = gift;
+            option.textContent = gift;
+            availableGiftSelect.appendChild(option);
+        });
+    } catch (e) {
+        console.error('Erro ao carregar presentes disponíveis:', e);
+        availableGiftSelect.innerHTML = '<option value="">Erro ao carregar</option>';
+    }
+}
+
 async function addTargetGift() {
-    const value = newTargetGiftInput.value.trim();
+    const value = availableGiftSelect.value.trim();
     if (!value) return;
     console.log('Adding target gift:', value);
 
@@ -1359,7 +1400,6 @@ async function addTargetGift() {
         const gifts = settings.targetGifts || [];
         if (gifts.includes(value)) {
             console.log('Gift already exists in targets:', value);
-            newTargetGiftInput.value = '';
             return;
         }
 
@@ -1371,7 +1411,7 @@ async function addTargetGift() {
         });
         if (res.ok) {
             console.log('Successfully added target gift:', value);
-            newTargetGiftInput.value = '';
+            availableGiftSelect.value = '';
             renderTargetGifts();
         } else {
             console.error('Failed to add target gift:', await res.text());
@@ -1385,6 +1425,7 @@ addTargetGiftBtn.addEventListener('click', addTargetGift);
 
 async function bootstrap() {
     renderTargetGifts();
+    loadAvailableGifts();
     applyInfractionsSectionTitle(false);
 
     try {
@@ -1426,7 +1467,28 @@ async function bootstrap() {
                         aiLedText.textContent = 'Iniciando novo modelo...';
                         const setupResult = await ipcRenderer.invoke('run-setup');
                         if (setupResult) {
-                            runLlmProbeElectron();
+                            try {
+                                const cfg = await ipcRenderer.invoke('get-ui-config');
+                                if (cfg && cfg.models && modelSelect) {
+                                    modelSelect.innerHTML = '';
+                                    Object.keys(cfg.models).forEach(key => {
+                                        const opt = document.createElement('option');
+                                        opt.value = key;
+                                        opt.textContent = cfg.models[key].name;
+                                        if (key === cfg.selectedModel) opt.selected = true;
+                                        modelSelect.appendChild(opt);
+                                    });
+                                }
+                            } catch (e) {
+                                console.error('Erro ao recarregar config:', e);
+                            }
+                            const ready = await ipcRenderer.invoke('start-llm-server');
+                            if (ready && ready.llmActive) {
+                                setAiLedActive(true);
+                            } else {
+                                aiLedText.textContent = 'Modelo carregando...';
+                                _startAiLedPoll();
+                            }
                         } else {
                             aiLedText.textContent = 'Erro ao baixar modelo.';
                         }

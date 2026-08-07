@@ -34,6 +34,12 @@ type EventData map[string]interface{}
 
 type EventHandler func(eventType string, data EventData)
 
+// pendingEmit é um evento aguardando emissão fora do lock.
+type pendingEmit struct {
+	eventType string
+	data      EventData
+}
+
 type UserInfo struct {
 	UniqueID   string
 	Nickname   string
@@ -104,6 +110,7 @@ type Monitor struct {
 	handlers         []EventHandler
 	settings         Settings
 	connected        bool
+	giftsCh          chan []string
 
 	CorrelateGiftQuestion func(gift GiftPayload)
 }
@@ -114,6 +121,7 @@ func New() (*Monitor, error) {
 		pinnedUsers:   make(map[string]bool),
 		processedPins: make(map[string]bool),
 		repeatAlerted: make(map[string]bool),
+		giftsCh:       make(chan []string, 1),
 		settings: Settings{
 			ModerationEnabled:   true,
 			AIModerationEnabled: true,
@@ -228,8 +236,11 @@ func (m *Monitor) handleBridgeEvent(eventType string, data EventData) {
 
 	case "new-chat-message":
 		m.mu.Lock()
-		m.handleChatMessage(data)
+		pending := m.handleChatMessage(data)
 		m.mu.Unlock()
+		for _, p := range pending {
+			m.emit(p.eventType, p.data)
+		}
 		m.emit(eventType, data)
 
 	case "any-gift-received":
@@ -254,14 +265,33 @@ func (m *Monitor) handleBridgeEvent(eventType string, data EventData) {
 
 	case "error":
 		log.Printf("[Bridge] Error: %v", data["message"])
+
+	case "gifts-list":
+		if names, ok := data["gifts"].([]interface{}); ok {
+			result := make([]string, 0, len(names))
+			for _, n := range names {
+				if s, ok := n.(string); ok {
+					result = append(result, s)
+				}
+			}
+			select {
+			case m.giftsCh <- result:
+			default:
+			}
+		}
 	}
 }
 
-func (m *Monitor) handleChatMessage(data EventData) {
+// handleChatMessage muta o estado interno e retorna eventos pendentes.
+// DEVE ser chamada com m.mu travado. NUNCA chame m.emit aqui dentro
+// (emit trava m.mu e causaria deadlock — sync.Mutex não é reentrante).
+func (m *Monitor) handleChatMessage(data EventData) []pendingEmit {
+	var pending []pendingEmit
+
 	comment, _ := data["comment"].(string)
 	comment = strings.TrimSpace(comment)
 	if comment == "" {
-		return
+		return pending
 	}
 
 	user := extractFromData(data)
@@ -283,14 +313,14 @@ func (m *Monitor) handleChatMessage(data EventData) {
 	if repeats >= repeatsRequired-1 {
 		if !m.repeatAlerted[seqKey] {
 			m.repeatAlerted[seqKey] = true
-			m.emit(EventFlaggedMessage, EventData{
+			pending = append(pending, pendingEmit{EventFlaggedMessage, EventData{
 				"uniqueId":   user.UniqueID,
 				"nickname":   user.Nickname,
 				"isFollower": user.IsFollower,
 				"comment":    comment,
 				"reason":     "Mensagem repetida",
 				"category":   "REPETICAO",
-			})
+			}})
 		}
 	} else {
 		delete(m.repeatAlerted, seqKey)
@@ -320,16 +350,18 @@ func (m *Monitor) handleChatMessage(data EventData) {
 
 	if keyword := m.detectKeyword(comment); keyword != "" {
 		m.pinnedUsers[senderKey] = true
-		m.emit(EventKeywordMention, EventData{
+		pending = append(pending, pendingEmit{EventKeywordMention, EventData{
 			"uniqueId":   user.UniqueID,
 			"nickname":   user.Nickname,
 			"comment":    comment,
 			"keyword":    keyword,
 			"timestamp":  now,
 			"isFollower": user.IsFollower,
-		})
-		m.emit(EventMarkUserRed, EventData{"uniqueId": senderKey})
+		}})
+		pending = append(pending, pendingEmit{EventMarkUserRed, EventData{"uniqueId": senderKey}})
 	}
+
+	return pending
 }
 
 func (m *Monitor) handleTargetGift(data EventData) {
@@ -345,9 +377,13 @@ func (m *Monitor) handleTargetGift(data EventData) {
 
 	data["isRed"] = isTarget && isPinned
 
+	if !isTarget || !m.isGiftCountingSettlement(data) {
+		return
+	}
+
 	m.emit(EventGiftUser, data)
 
-	if isTarget && m.CorrelateGiftQuestion != nil {
+	if m.CorrelateGiftQuestion != nil {
 		repeatCount, _ := toInt(data["repeatCount"])
 		giftType, _ := toInt(data["giftType"])
 		repeatEnd, _ := data["repeatEnd"].(bool)
@@ -464,6 +500,28 @@ func (m *Monitor) GetQuestionBuffer() []QuestionEntry {
 	return out
 }
 
+func (m *Monitor) FetchAvailableGifts() ([]string, error) {
+	if m.stdin == nil {
+		return nil, fmt.Errorf("bridge not started")
+	}
+	// Clear any pending result
+	select {
+	case <-m.giftsCh:
+	default:
+	}
+	if err := m.sendBridge(map[string]interface{}{
+		"action": "fetch-gifts",
+	}); err != nil {
+		return nil, err
+	}
+	select {
+	case gifts := <-m.giftsCh:
+		return gifts, nil
+	case <-time.After(15 * time.Second):
+		return nil, fmt.Errorf("timeout fetching gifts")
+	}
+}
+
 func extractFromData(data EventData) UserInfo {
 	info := UserInfo{}
 	if uid, ok := data["uniqueId"].(string); ok {
@@ -551,6 +609,16 @@ func (m *Monitor) isTargetGift(name string) bool {
 		}
 	}
 	return false
+}
+
+func (m *Monitor) isGiftCountingSettlement(data EventData) bool {
+	giftType, _ := toInt(data["giftType"])
+	repeatEnd, _ := data["repeatEnd"].(bool)
+
+	if giftType == 1 && repeatEnd == false {
+		return false
+	}
+	return true
 }
 
 func coalesce(values ...string) string {
