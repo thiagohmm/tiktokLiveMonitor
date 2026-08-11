@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 )
 
 // baseSystemPrompt is the core moderation system prompt for the LLM.
@@ -32,12 +32,12 @@ Responda com EXATAMENTE UMA destas palavras-chave (maiúsculas):
 Regra de saída: uma única token, sem explicações.`
 
 // buildPromptContext builds the system prompt enriched with user feedback examples.
-func buildPromptContext(ctx context.Context, db *database.DB, limit int) (string, int, error) {
-	if db == nil {
+func buildPromptContext(ctx context.Context, repo model.Repository, limit int) (string, int, error) {
+	if repo == nil {
 		return baseSystemPrompt, 0, nil
 	}
 
-	feedbacks, err := db.GetRecentFeedbacks(limit)
+	feedbacks, err := repo.GetRecentFeedbacks(limit)
 	if err != nil {
 		return baseSystemPrompt, 0, fmt.Errorf("get feedbacks: %w", err)
 	}

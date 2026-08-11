@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/ai"
-	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 )
 
@@ -61,7 +61,7 @@ func init() {
 type Engine struct {
 	mu           sync.Mutex
 	aiManager    *ai.Manager
-	db           *database.DB
+	repo         model.Repository
 	cache        map[string]AnalysisResult
 	cooldownUntil int64
 	warmupStatus StartupStatus
@@ -69,10 +69,10 @@ type Engine struct {
 }
 
 // NewEngine creates a moderation engine.
-func NewEngine(aiMgr *ai.Manager, db *database.DB) *Engine {
+func NewEngine(aiMgr *ai.Manager, repo model.Repository) *Engine {
 	return &Engine{
 		aiManager:    aiMgr,
-		db:           db,
+		repo:         repo,
 		cache:        make(map[string]AnalysisResult),
 		warmupFlight: &sync.Mutex{},
 	}
@@ -107,7 +107,7 @@ func (e *Engine) WarmupLearning(ctx context.Context, touchLLM, force bool) (Star
 	}
 	e.mu.Unlock()
 
-	prompt, feedbackCount, err := buildPromptContext(ctx, e.db, 12)
+	prompt, feedbackCount, err := buildPromptContext(ctx, e.repo, 12)
 	if err != nil {
 		e.mu.Lock()
 		e.warmupStatus = StartupStatus{
@@ -161,7 +161,7 @@ func (e *Engine) AnalyzeMessage(ctx context.Context, comment, uniqueID, nickname
 	e.mu.Unlock()
 
 	// Build prompt and call AI.
-	prompt, _, err := buildPromptContext(ctx, e.db, 12)
+	prompt, _, err := buildPromptContext(ctx, e.repo, 12)
 	if err != nil {
 		return AnalysisResult{Flagged: false}, fmt.Errorf("build prompt: %w", err)
 	}
@@ -211,7 +211,7 @@ func (e *Engine) AnalyzeMessage(ctx context.Context, comment, uniqueID, nickname
 
 	// Log to database asynchronously.
 	go func() {
-		if err := e.db.LogAnomaly(liveName, comment, result.Flagged, result.Category, uniqueID); err != nil {
+		if err := e.repo.LogAnomaly(liveName, comment, result.Flagged, result.Category, uniqueID); err != nil {
 			log.Printf("[Database] Erro ao logar anomalia: %v", err)
 		}
 	}()

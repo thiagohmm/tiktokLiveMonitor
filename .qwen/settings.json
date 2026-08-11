@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(go *)"
+      "Bash(go *)",
+      "Agent(Explore)"
     ]
-  }
+  },
+  "$version": 4
 }

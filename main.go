@@ -7,10 +7,11 @@ import (
 	"path/filepath"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/ai"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/moderation"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
-	"github.com/thiagohmm/tiktok-live-monitor/internal/server"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/view"
 )
 
 func main() {
@@ -29,30 +30,38 @@ func main() {
 	modelsDir := filepath.Join(baseDir, "models")
 	binDir := filepath.Join(baseDir, "bin")
 
-	db, err := database.Open(baseDir)
+	// Model layer: open database repository
+	repo, err := database.Open(baseDir)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
-	defer db.Close()
+	defer repo.Close()
 	log.Println("Database initialized.")
 
+	// Service layer: AI manager
 	aiMgr := ai.NewManager(modelsDir, binDir)
 	defer aiMgr.Stop()
 
+	// Service layer: monitor
 	mon, err := monitor.New()
 	if err != nil {
 		log.Fatalf("Failed to create monitor: %v", err)
 	}
 
-	modEngine := moderation.NewEngine(aiMgr, db)
+	// Service layer: moderation engine
+	modEngine := moderation.NewEngine(aiMgr, repo)
 
-	srv := server.New(server.Config{
+	// Controller layer: orchestrate services
+	ctrl := controller.NewAppController(aiMgr, modEngine, mon, repo)
+
+	// View layer: HTTP server
+	srv := view.New(view.Config{
 		Host:      os.Getenv("HOST"),
 		Port:      3000,
 		ModelsDir: modelsDir,
 		BinDir:    binDir,
 		WebDir:    filepath.Join(baseDir, "web"),
-	}, db, aiMgr, modEngine, mon)
+	}, ctrl)
 
 	ctx := context.Background()
 	log.Println("Starting TikTok Live Monitor (Go backend)...")

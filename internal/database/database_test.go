@@ -3,6 +3,8 @@ package database
 import (
 	"os"
 	"testing"
+
+	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 )
 
 func openTestDB(t *testing.T) *DB {
@@ -481,11 +483,11 @@ func TestCleanupOldAnomalies(t *testing.T) {
 func TestValidExpected(t *testing.T) {
 	expected := []string{"NAO", "SIM_PERGUNTA", "SIM_PROSELITISMO", "SIM_ODIO", "SIM_SPAM", "SIM_GOLPE", "SIM_OUTRO"}
 	for _, v := range expected {
-		if !ValidExpected[v] {
+		if !model.ValidExpected[v] {
 			t.Errorf("expected %q to be valid", v)
 		}
 	}
-	if ValidExpected["INVALID"] {
+	if model.ValidExpected["INVALID"] {
 		t.Error("expected INVALID to be invalid")
 	}
 }
@@ -493,11 +495,11 @@ func TestValidExpected(t *testing.T) {
 func TestValidCategory(t *testing.T) {
 	categories := []string{"OK", "PERGUNTA", "PROSELITISMO", "ODIO", "SPAM", "GOLPE", "OUTRO"}
 	for _, v := range categories {
-		if !ValidCategory[v] {
+		if !model.ValidCategory[v] {
 			t.Errorf("expected %q to be valid", v)
 		}
 	}
-	if ValidCategory["INVALID"] {
+	if model.ValidCategory["INVALID"] {
 		t.Error("expected INVALID to be invalid")
 	}
 }

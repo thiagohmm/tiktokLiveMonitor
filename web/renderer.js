@@ -713,9 +713,12 @@ function clearTables() {
 }
 
 function handleConnectionStatus(data) {
+    console.log('[Frontend] handleConnectionStatus chamado:', data);
     if (data.success) {
         applyConnectedState(data.username);
         loadAvailableGifts();
+        console.log('[Frontend] handleConnectionStatus: chamando loadAllGifts()...');
+        loadAllGifts();
         return;
     }
 
@@ -1160,8 +1163,10 @@ async function loadInitialState() {
         }
 
         if (payload.connected && payload.username) {
+            console.log('[Frontend] loadInitialState: já conectado a', payload.username, '- carregando presentes...');
             usernameInput.value = payload.username;
             applyConnectedState(payload.username);
+            await loadAllGifts();
         }
     } catch (error) {
         statusDiv.innerText = 'Servidor indisponível';
@@ -1321,29 +1326,7 @@ function setupElectronIpc() {
 
 function renderTargetGifts() {
     if (!targetGiftsList) return;
-    console.log('Rendering target gifts list...');
     targetGiftsList.innerHTML = '';
-
-    fetch('/api/settings')
-        .then(r => r.json())
-        .then(settings => {
-            console.log('Current settings fetched:', settings);
-            const gifts = settings.targetGifts || [];
-            gifts.forEach(gift => {
-                const span = document.createElement('span');
-                span.style.cssText = 'background: #eee; padding: 2px 6px; border-radius: 4px; display: flex; align-items: center; gap: 4px; margin-right: 4px; margin-bottom: 4px;';
-                span.textContent = gift;
-
-                const removeBtn = document.createElement('button');
-                removeBtn.textContent = '×';
-                removeBtn.style.cssText = 'border: none; background: none; color: #999; cursor: pointer; font-weight: bold; padding: 0; margin: 0; line-height: 1;';
-                removeBtn.addEventListener('click', () => removeTargetGift(gift));
-
-                span.appendChild(removeBtn);
-                targetGiftsList.appendChild(span);
-            });
-        })
-        .catch(e => console.error('Erro ao carregar presentes alvos:', e));
 }
 
 async function removeTargetGift(giftToRemove) {
@@ -1386,6 +1369,36 @@ async function loadAvailableGifts() {
     } catch (e) {
         console.error('Erro ao carregar presentes disponíveis:', e);
         availableGiftSelect.innerHTML = '<option value="">Erro ao carregar</option>';
+    }
+}
+
+// Carrega presentes históricos do banco no frontend (pós-reconexão ou estado inicial).
+async function loadAllGifts() {
+    if (!allGiftsTableBody) {
+        console.error('[Frontend] loadAllGifts: allGiftsTableBody não encontrado.');
+        return;
+    }
+    try {
+        console.log('[Frontend] loadAllGifts: buscando presentes...');
+        const response = await fetch('/api/gifts');
+        console.log(`[Frontend] loadAllGifts: status=${response.status}`);
+        if (!response.ok) {
+            console.error('[Frontend] loadAllGifts: response não ok');
+            return;
+        }
+        const gifts = await response.json();
+        console.log(`[Frontend] loadAllGifts: ${gifts.length} presentes recebidos. Exemplo:`, gifts[0]);
+        allGiftsTableBody.innerHTML = '';
+        gifts.forEach(gift => {
+            try {
+                addAllGiftToList(gift);
+            } catch (e) {
+                console.error('[Frontend] loadAllGifts: erro ao adicionar gift:', e, gift);
+            }
+        });
+        console.log(`[Frontend] loadAllGifts: ${gifts.length} presentes renderizados.`);
+    } catch (e) {
+        console.error('[Frontend] loadAllGifts: erro:', e);
     }
 }
 
