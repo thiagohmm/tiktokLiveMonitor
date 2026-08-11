@@ -1,5 +1,5 @@
-// Package server provides the HTTP server with SSE and REST API for the TikTok Live Monitor.
-package server
+// Package view provides the HTTP server (View layer) with SSE and REST API for the TikTok Live Monitor.
+package view
 
 import (
 	"context"
@@ -12,37 +12,22 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/thiagohmm/tiktok-live-monitor/internal/ai"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/config"
-	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
-	"github.com/thiagohmm/tiktok-live-monitor/internal/moderation"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 )
 
-// Server is the HTTP application server.
-type Server struct {
-	httpServer   *http.Server
-	mon          *MonitorWrapper
-	aiMgr        *ai.Manager
-	modEngine    *moderation.Engine
-	db           *database.DB
-	sseClients   map[http.ResponseWriter]bool
-	sseMu        sync.Mutex
-	modelsDir    string
-	binDir       string
-	webDir       string
-}
-
-// MonitorWrapper adapts monitor.Monitor for server use.
-type MonitorWrapper struct {
-	m          *monitor.Monitor
-	cancelFunc context.CancelFunc
-	ctx        context.Context
+// HTTPServer is the presentation layer (View) that handles HTTP requests.
+type HTTPServer struct {
+	httpServer *http.Server
+	controller *controller.AppController
+	sseClients map[http.ResponseWriter]bool
+	sseMu      sync.Mutex
+	webDir     string
 }
 
 // Config holds server configuration.
@@ -54,25 +39,17 @@ type Config struct {
 	WebDir    string
 }
 
-// New creates a new Server.
-func New(cfg Config, db *database.DB, aiMgr *ai.Manager, modEngine *moderation.Engine, mon *monitor.Monitor) *Server {
-	return &Server{
-		mon: &MonitorWrapper{
-			m:   mon,
-			ctx: context.Background(),
-		},
-		aiMgr:      aiMgr,
-		modEngine:  modEngine,
-		db:         db,
+// New creates a new HTTP server (View).
+func New(cfg Config, ctrl *controller.AppController) *HTTPServer {
+	return &HTTPServer{
+		controller: ctrl,
 		sseClients: make(map[http.ResponseWriter]bool),
-		modelsDir:  cfg.ModelsDir,
-		binDir:     cfg.BinDir,
 		webDir:     cfg.WebDir,
 	}
 }
 
-// Start begins listening and returns a channel that closes when the server is done.
-func (s *Server) Start(ctx context.Context) error {
+// Start begins listening and returns an error when the server stops.
+func (s *HTTPServer) Start(ctx context.Context) error {
 	port := 3000
 	if p := os.Getenv("PORT"); p != "" {
 		if n, err := strconv.Atoi(p); err == nil {
@@ -86,7 +63,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 
-	// SSE.
+	// SSE endpoint.
 	mux.HandleFunc("/events", s.handleSSE)
 
 	// API endpoints.
@@ -114,43 +91,16 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Initialize config.
 	if err := config.InitConfig(s.webDir); err != nil {
-		log.Printf("[Server] Warn: config init: %v", err)
+		log.Printf("[View] Warn: config init: %v", err)
 	}
 
-	// Setup monitor event handler.
-	s.mon.m.OnEvent(func(eventType string, data monitor.EventData) {
+	// Setup monitor event handler via controller.
+	s.controller.GetMonitor().OnEvent(func(eventType string, data monitor.EventData) {
 		if eventType == monitor.EventAnyGift {
-			go func() {
-				uniqueID := data["uniqueId"]
-				nickname := data["nickname"]
-				giftName := data["giftName"]
-				repeatCount := 1
-				if rc, ok := data["repeatCount"]; ok {
-					if rcInt, ok := rc.(int); ok {
-						repeatCount = rcInt
-					}
-				}
-				giftType := 0
-				if gt, ok := data["giftType"]; ok {
-					if gtInt, ok := gt.(int); ok {
-						giftType = gtInt
-					}
-				}
-				state := s.mon.m.GetState()
-				if _, err := s.db.AddGift(state.Username, uniqueID.(string), nickname.(string), giftName.(string), repeatCount, giftType); err != nil {
-					log.Printf("[Server] Error storing gift: %v", err)
-				}
-			}()
+			go s.controller.HandleGiftEvent(data)
 		}
 		if eventType == monitor.EventChatMessage {
-			go func() {
-				uniqueID := data["uniqueId"]
-				nickname := data["nickname"]
-				comment := data["comment"]
-				if err := s.db.AddUserMessageDedup(uniqueID.(string), nickname.(string), comment.(string)); err != nil {
-					log.Printf("[Server] Error storing user message: %v", err)
-				}
-			}()
+			go s.controller.HandleChatMessageEvent(data)
 		}
 		s.broadcastSSE(eventType, data)
 	})
@@ -161,7 +111,7 @@ func (s *Server) Start(ctx context.Context) error {
 		Handler: mux,
 	}
 
-	// Graceful shutdown (on signal or context cancellation).
+	// Graceful shutdown.
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
@@ -169,21 +119,21 @@ func (s *Server) Start(ctx context.Context) error {
 		case <-sigCh:
 		case <-ctx.Done():
 		}
-		log.Println("[Server] Shutting down...")
-		s.mon.m.StopMonitoring()
-		s.aiMgr.Stop()
+		log.Println("[View] Shutting down...")
+		s.controller.StopMonitoring()
+		s.controller.Stop()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		s.httpServer.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("[Server] Running at http://%s:%d", host, port)
+	log.Printf("[View] Running at http://%s:%d", host, port)
 	return s.httpServer.ListenAndServe()
 }
 
-// --- SSE ---
+// --- SSE Handlers ---
 
-func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "SSE not supported", http.StatusInternalServerError)
@@ -196,7 +146,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	// Send initial state.
-	state := s.mon.m.GetState()
+	state := s.controller.GetState()
 	initial := map[string]interface{}{
 		"connected":    state.Connected,
 		"username":     state.Username,
@@ -217,7 +167,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	s.sseMu.Unlock()
 }
 
-func (s *Server) broadcastSSE(eventType string, data interface{}) {
+func (s *HTTPServer) broadcastSSE(eventType string, data interface{}) {
 	s.sseMu.Lock()
 	defer s.sseMu.Unlock()
 
@@ -229,7 +179,7 @@ func (s *Server) broadcastSSE(eventType string, data interface{}) {
 	}
 }
 
-func (s *Server) writeSSE(w http.ResponseWriter, event string, data interface{}) {
+func (s *HTTPServer) writeSSE(w http.ResponseWriter, event string, data interface{}) {
 	payload, err := json.Marshal(data)
 	if err != nil {
 		return
@@ -239,14 +189,14 @@ func (s *Server) writeSSE(w http.ResponseWriter, event string, data interface{})
 
 // --- API Handlers ---
 
-func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
-	state := s.mon.m.GetState()
+func (s *HTTPServer) handleState(w http.ResponseWriter, r *http.Request) {
+	state := s.controller.GetState()
 	writeJSON(w, state)
 }
 
-func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPServer) handleSettings(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
-		writeJSON(w, s.mon.m.GetSettings())
+		writeJSON(w, s.controller.GetSettings())
 		return
 	}
 	if r.Method == http.MethodPost {
@@ -255,14 +205,14 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		s.mon.m.SetSettings(settings)
+		s.controller.SetSettings(settings)
 		writeJSON(w, map[string]bool{"success": true})
 		return
 	}
 	writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 }
 
-func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPServer) handleHistory(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodDelete {
 		idStr := r.URL.Path[len("/api/history/"):]
 		id, err := strconv.ParseInt(idStr, 10, 64)
@@ -270,7 +220,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid id")
 			return
 		}
-		deleted, err := s.db.DeleteModeration(id)
+		deleted, err := s.controller.DeleteModeration(id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -279,7 +229,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	history, err := s.db.GetRecentModerations(100)
+	history, err := s.controller.GetRecentModerations(100)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -287,7 +237,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, history)
 }
 
-func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -305,24 +255,19 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Start LLM worker in background (don't block connection).
+	// Start LLM worker in background.
 	go func() {
 		ctx := context.Background()
-		llmReady, err := s.aiMgr.ProbeReady(ctx)
+		llmReady, err := s.controller.ProbeReady(ctx)
 		if err != nil {
-			log.Printf("[Server] LLM worker warmup error: %v", err)
+			log.Printf("[View] LLM worker warmup error: %v", err)
 		}
-		if _, err := s.modEngine.WarmupLearning(ctx, llmReady, false); err != nil {
-			log.Printf("[Server] Warmup warning: %v", err)
+		if err := s.controller.WarmupModeration(ctx, llmReady, false); err != nil {
+			log.Printf("[View] Warmup warning: %v", err)
 		}
 	}()
 
-	// Create a cancellable context for monitoring.
-	monCtx, cancel := context.WithCancel(context.Background())
-	s.mon.cancelFunc = cancel
-	s.mon.ctx = monCtx
-
-	if err := s.mon.m.StartMonitoring(monCtx, body.Username); err != nil {
+	if err := s.controller.StartMonitoring(context.Background(), body.Username); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -330,16 +275,13 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"success": true})
 }
 
-func (s *Server) handleDisconnect(w http.ResponseWriter, r *http.Request) {
-	if s.mon.cancelFunc != nil {
-		s.mon.cancelFunc()
-	}
-	s.mon.m.StopMonitoring()
+func (s *HTTPServer) handleDisconnect(w http.ResponseWriter, r *http.Request) {
+	s.controller.StopMonitoring()
 	writeJSON(w, map[string]bool{"success": true})
 }
 
-func (s *Server) handleClearHistory(w http.ResponseWriter, r *http.Request) {
-	deleted, err := s.db.ClearHistory()
+func (s *HTTPServer) handleClearHistory(w http.ResponseWriter, r *http.Request) {
+	deleted, err := s.controller.ClearHistory()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -347,7 +289,7 @@ func (s *Server) handleClearHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"success": true, "deleted": deleted})
 }
 
-func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPServer) handleFeedback(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Comment  string `json:"comment"`
 		Category string `json:"category"`
@@ -358,7 +300,7 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := s.db.AddFeedback(body.Comment, body.Category, body.Expected)
+	_, err := s.controller.AddFeedback(body.Comment, body.Category, body.Expected)
 	if err != nil {
 		statusCode := http.StatusInternalServerError
 		switch err.Error() {
@@ -370,18 +312,18 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Clear cache and re-warmup.
-	s.modEngine.ClearCache()
+	s.controller.ClearModerationCache()
 	ctx := r.Context()
-	llmReady, _ := s.aiMgr.ProbeReady(ctx)
-	s.modEngine.WarmupLearning(ctx, llmReady, true)
+	llmReady, _ := s.controller.ProbeReady(ctx)
+	s.controller.WarmupModeration(ctx, llmReady, true)
 
 	writeJSON(w, map[string]bool{"success": true})
 }
 
-func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPServer) handleReadiness(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	llmReady, _ := s.aiMgr.ProbeReady(ctx)
-	modStatus := s.modEngine.GetStartupStatus()
+	llmReady, _ := s.controller.ProbeReady(ctx)
+	modStatus := s.controller.GetStartupStatus()
 
 	writeJSON(w, map[string]interface{}{
 		"ready":        modStatus.Ready && llmReady,
@@ -391,8 +333,8 @@ func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleProbeLLM(w http.ResponseWriter, r *http.Request) {
-	ready, err := s.aiMgr.ProbeReady(r.Context())
+func (s *HTTPServer) handleProbeLLM(w http.ResponseWriter, r *http.Request) {
+	ready, err := s.controller.ProbeReady(r.Context())
 	if err != nil {
 		writeJSON(w, map[string]interface{}{
 			"llmActive": false,
@@ -403,7 +345,7 @@ func (s *Server) handleProbeLLM(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"llmActive": ready})
 }
 
-func (s *Server) handleWorkerRegister(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPServer) handleWorkerRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -418,11 +360,11 @@ func (s *Server) handleWorkerRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.aiMgr.RegisterWorker(body.Host, body.Port)
+	s.controller.RegisterWorker(body.Host, body.Port)
 	writeJSON(w, map[string]bool{"success": true})
 }
 
-func (s *Server) handleGifts(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPServer) handleGifts(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		limit := 100
 		if l := r.URL.Query().Get("limit"); l != "" {
@@ -432,7 +374,7 @@ func (s *Server) handleGifts(w http.ResponseWriter, r *http.Request) {
 		}
 		userID := r.URL.Query().Get("user")
 		if userID != "" {
-			gifts, err := s.db.GetGiftsByUser(userID)
+			gifts, err := s.controller.GetGiftsByUser(userID)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
@@ -440,7 +382,7 @@ func (s *Server) handleGifts(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, gifts)
 			return
 		}
-		gifts, err := s.db.GetRecentGifts(limit)
+		gifts, err := s.controller.GetRecentGifts(limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -449,7 +391,7 @@ func (s *Server) handleGifts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodDelete {
-		affected, err := s.db.ClearGifts()
+		affected, err := s.controller.ClearGifts()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -460,12 +402,12 @@ func (s *Server) handleGifts(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 }
 
-func (s *Server) handleAvailableGifts(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPServer) handleAvailableGifts(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	gifts, err := s.mon.m.FetchAvailableGifts()
+	gifts, err := s.controller.FetchAvailableGifts()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -473,7 +415,7 @@ func (s *Server) handleAvailableGifts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, gifts)
 }
 
-func (s *Server) handleAskAI(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPServer) handleAskAI(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -491,87 +433,8 @@ func (s *Server) handleAskAI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	giftSummary, err := s.db.GetGiftSummary()
-	if err != nil {
-		log.Printf("[Server] Error fetching gift summary for AI: %v", err)
-	}
-
-	allMessages, err := s.db.GetAllUserMessages()
-	if err != nil {
-		log.Printf("[Server] Error fetching user messages for AI: %v", err)
-	}
-
-	var ctxBuilder strings.Builder
-
-	// Limitar para não estourar o contexto do modelo.
-	const maxMessages = 50
-	const maxGiftUsers = 10
-	const maxGiftTypesPerUser = 5
-	const maxMessageLen = 200
-
-	if len(allMessages) > 0 {
-		ctxBuilder.WriteString("MENSAGENS RECENTES NA LIVE:\n")
-		msgCount := 0
-		for uid, msgs := range allMessages {
-			if msgCount >= maxMessages {
-				break
-			}
-			ctxBuilder.WriteString(fmt.Sprintf("\n  %s:\n", uid))
-			for _, m := range msgs {
-				if msgCount >= maxMessages {
-					break
-				}
-				text := m.Message
-				if len(text) > maxMessageLen {
-					text = text[:maxMessageLen]
-				}
-				ctxBuilder.WriteString(fmt.Sprintf("    - %s\n", text))
-				msgCount++
-			}
-		}
-	} else {
-		ctxBuilder.WriteString("NENHUMA MENSAGEM DE USUÁRIO REGISTRADA.\n")
-	}
-
-	ctxBuilder.WriteString("\n")
-
-	if len(giftSummary) > 0 {
-		ctxBuilder.WriteString("PRESENTES ENVIADOS NA LIVE:\n")
-		giftIdx := 0
-		for uid, giftsMap := range giftSummary {
-			if giftIdx >= maxGiftUsers {
-				break
-			}
-			var parts []string
-			for gname, count := range giftsMap {
-				if len(parts) >= maxGiftTypesPerUser {
-					break
-				}
-				parts = append(parts, fmt.Sprintf("%s x%d", gname, count))
-			}
-			ctxBuilder.WriteString(fmt.Sprintf("- %s: %s\n", uid, strings.Join(parts, ", ")))
-			giftIdx++
-		}
-	} else {
-		ctxBuilder.WriteString("NENHUM PRESENTE REGISTRADO NA LIVE.\n")
-	}
-
-	systemPrompt := fmt.Sprintf(`Você é um assistente que responde perguntas sobre uma live do TikTok.
-Use os dados abaixo para responder. Busque informações nos dados de mensagens e presentes.
-Se a pergunta não estiver relacionada aos dados disponíveis, diga que não encontrou informações.
-
-%s
-
-Responda em português do Brasil de forma direta e concisa.`, ctxBuilder.String())
-
 	ctx := r.Context()
-	req := ai.CompletionRequest{
-		SystemContent: systemPrompt,
-		UserContent:   body.Question,
-		MaxTokens:     512,
-	}
-
-	response, err := s.aiMgr.Complete(ctx, req)
+	response, err := s.controller.AskAI(ctx, body.Question)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return
@@ -591,7 +454,7 @@ Responda em português do Brasil de forma direta e concisa.`, ctxBuilder.String(
 func writeJSON(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(data); err != nil {
-		log.Printf("[Server] writeJSON error: %v", err)
+		log.Printf("[View] writeJSON error: %v", err)
 	}
 }
 

@@ -7,12 +7,16 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 )
 
 const (
@@ -110,6 +114,7 @@ type Monitor struct {
 	handlers         []EventHandler
 	settings         Settings
 	connected        bool
+	repo             model.Repository
 	giftsCh          chan []string
 
 	CorrelateGiftQuestion func(gift GiftPayload)
@@ -126,7 +131,7 @@ func New() (*Monitor, error) {
 			ModerationEnabled:   true,
 			AIModerationEnabled: true,
 			LogLevel:            "info",
-			TargetGifts:         []string{"perfume", "coracao", "dino"},
+			TargetGifts:         []string{},
 		},
 	}, nil
 }
@@ -160,8 +165,66 @@ func (m *Monitor) SetSettings(s Settings) {
 	m.settings = s
 }
 
+// SetRepo sets the repository used for loading today's data on connect.
+func (m *Monitor) SetRepo(repo model.Repository) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.repo = repo
+}
+
+// resolveBridgePath returns an absolute path to bridge.js.
+// It tries multiple strategies so it works whether the binary is run via
+// `go run`, as a compiled binary, or from a different working directory.
+func resolveBridgePath() (string, error) {
+	// 1. Try paths relative to the executable.
+	exe, err := os.Executable()
+	if err == nil {
+		exeDir := filepath.Dir(exe)
+		// e.g. /path/to/bin/internal/monitor/bridge.js
+		candidate := filepath.Join(exeDir, "internal", "monitor", "bridge.js")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+		// e.g. /path/to/bin/bridge.js (when the whole tree is flattened).
+		candidate = filepath.Join(exeDir, "bridge.js")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+		// e.g. /path/to/bin/../internal/monitor/bridge.js (compiled binary in parent dir).
+		parentDir := filepath.Dir(exeDir)
+		candidate = filepath.Join(parentDir, "internal", "monitor", "bridge.js")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+
+	// 2. Try relative to current working directory.
+	cwd, err := os.Getwd()
+	if err == nil {
+		candidate := filepath.Join(cwd, "internal", "monitor", "bridge.js")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+
+	// 3. Try relative to source directory (go run).
+	_, filename, _, _ := runtime.Caller(0)
+	candidate := filepath.Join(filepath.Dir(filename), "..", "monitor", "bridge.js")
+	if abs, err := filepath.Abs(candidate); err == nil {
+		if _, err := os.Stat(abs); err == nil {
+			return abs, nil
+		}
+	}
+
+	return "", fmt.Errorf("bridge.js not found in any known location")
+}
+
 func (m *Monitor) startBridge() error {
-	bridgePath := filepath.Join("internal", "monitor", "bridge.js")
+	bridgePath, err := resolveBridgePath()
+	if err != nil {
+		return fmt.Errorf("resolve bridge: %w", err)
+	}
+	log.Printf("[Monitor] Starting bridge: %s", bridgePath)
 	cmd := exec.Command("node", bridgePath)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -187,6 +250,7 @@ func (m *Monitor) startBridge() error {
 }
 
 func (m *Monitor) stopBridge() {
+	log.Println("[Monitor] Stopping bridge")
 	if m.cmd != nil {
 		m.cmd.Process.Kill()
 		m.cmd.Wait()
@@ -215,6 +279,7 @@ func (m *Monitor) readBridge() {
 		line := scanner.Text()
 		var msg bridgeMsg
 		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			log.Printf("[Monitor] Bridge JSON unmarshal error: %v (line: %s)", err, line[:min(len(line), 80)])
 			continue
 		}
 		m.handleBridgeEvent(msg.Type, msg.Data)
@@ -228,10 +293,8 @@ func (m *Monitor) handleBridgeEvent(eventType string, data EventData) {
 		success, _ := data["success"].(bool)
 		m.mu.Lock()
 		m.connected = success
-		if username, ok := data["username"].(string); ok {
-			m.currentUsername = username
-		}
 		m.mu.Unlock()
+		log.Printf("[Monitor] Bridge connection-status: success=%v username=%v", success, data["username"])
 		m.emit(eventType, data)
 
 	case "new-chat-message":
@@ -429,10 +492,58 @@ func (m *Monitor) StartMonitoring(ctx context.Context, username string) error {
 	m.repeatAlerted = make(map[string]bool)
 	m.mu.Unlock()
 
+	// Load today's data from database if repo is available.
+	if m.repo != nil {
+		m.loadTodayData()
+	}
+
 	return m.sendBridge(map[string]interface{}{
 		"action":   "connect",
 		"username": username,
 	})
+}
+
+// loadTodayData loads today's user messages and anomaly logs from the database
+// to restore the chat buffer and pinned users when reconnecting to the same live.
+func (m *Monitor) loadTodayData() {
+	now := time.Now().UnixMilli()
+
+	// Load today's user messages into chat buffer.
+	todayMsgs, err := m.repo.GetTodayUserMessages()
+	if err != nil {
+		log.Printf("[Monitor] Error loading today's messages: %v", err)
+	} else if len(todayMsgs) > 0 {
+		m.mu.Lock()
+		for _, um := range todayMsgs {
+			m.chatBuffer = append(m.chatBuffer, ChatMessage{
+				UniqueID:  um.UniqueID,
+				Nickname:  um.Username,
+				Comment:   um.Message,
+				Timestamp: now, // Use current time as approximate (exact not stored)
+			})
+		}
+		// Keep only last 500 messages (chatBufferMax).
+		if len(m.chatBuffer) > chatBufferMax {
+			m.chatBuffer = m.chatBuffer[len(m.chatBuffer)-chatBufferMax:]
+		}
+		m.mu.Unlock()
+		log.Printf("[Monitor] Loaded %d messages from today", len(todayMsgs))
+	}
+
+	// Load today's anomaly logs to restore pinned users.
+	todayAnomalies, err := m.repo.GetTodayAnomalyLogs()
+	if err != nil {
+		log.Printf("[Monitor] Error loading today's anomaly logs: %v", err)
+	} else if len(todayAnomalies) > 0 {
+		m.mu.Lock()
+		for _, al := range todayAnomalies {
+			if al.UniqueID != "" {
+				m.pinnedUsers[normalizeID(al.UniqueID)] = true
+			}
+		}
+		m.mu.Unlock()
+		log.Printf("[Monitor] Restored %d pinned users from today's anomaly logs", len(todayAnomalies))
+	}
 }
 
 func (m *Monitor) StopMonitoring() {

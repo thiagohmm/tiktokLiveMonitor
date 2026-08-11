@@ -1,4 +1,4 @@
-package server
+package view
 
 import (
 	"bytes"
@@ -12,20 +12,22 @@ import (
 	"testing"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/ai"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/moderation"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 )
 
-func setupTestServer(t *testing.T) (*Server, *database.DB, string) {
+func setupTestServer(t *testing.T) (*HTTPServer, model.Repository, string) {
 	t.Helper()
 	dir := t.TempDir()
 
-	db, err := database.Open(dir)
+	repo, err := database.Open(dir)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { repo.Close() })
 
 	aiMgr := ai.NewManager(filepath.Join(dir, "models"), filepath.Join(dir, "bin"))
 	t.Cleanup(func() { aiMgr.Stop() })
@@ -35,9 +37,11 @@ func setupTestServer(t *testing.T) (*Server, *database.DB, string) {
 		t.Skipf("skip test (TikTok API unavailable): %v", err)
 	}
 
-	modEngine := moderation.NewEngine(aiMgr, db)
+	modEngine := moderation.NewEngine(aiMgr, repo)
 
 	os.MkdirAll(filepath.Join(dir, "web"), 0755)
+
+	ctrl := controller.NewAppController(aiMgr, modEngine, mon, repo)
 
 	srv := New(Config{
 		Host:      "127.0.0.1",
@@ -45,9 +49,9 @@ func setupTestServer(t *testing.T) (*Server, *database.DB, string) {
 		ModelsDir: filepath.Join(dir, "models"),
 		BinDir:    filepath.Join(dir, "bin"),
 		WebDir:    filepath.Join(dir, "web"),
-	}, db, aiMgr, modEngine, mon)
+	}, ctrl)
 
-	return srv, db, dir
+	return srv, repo, dir
 }
 
 func TestHandleState(t *testing.T) {
@@ -279,7 +283,7 @@ func TestHandleGifts(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d", rec.Code)
 		}
-		var gifts []database.Gift
+		var gifts []model.Gift
 		if err := json.Unmarshal(rec.Body.Bytes(), &gifts); err != nil {
 			t.Fatalf("decode JSON: %v", err)
 		}
@@ -295,7 +299,7 @@ func TestHandleGifts(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d", rec.Code)
 		}
-		var gifts []database.Gift
+		var gifts []model.Gift
 		if err := json.Unmarshal(rec.Body.Bytes(), &gifts); err != nil {
 			t.Fatalf("decode JSON: %v", err)
 		}
@@ -311,7 +315,7 @@ func TestHandleGifts(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d", rec.Code)
 		}
-		var gifts []database.Gift
+		var gifts []model.Gift
 		if err := json.Unmarshal(rec.Body.Bytes(), &gifts); err != nil {
 			t.Fatalf("decode JSON: %v", err)
 		}
