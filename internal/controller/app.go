@@ -133,9 +133,9 @@ func (c *AppController) AddFeedback(comment, category, expected string) (int64, 
 	return c.repo.AddFeedback(comment, category, expected)
 }
 
-// GetRecentGifts returns recent gifts.
-func (c *AppController) GetRecentGifts(limit int) ([]model.Gift, error) {
-	return c.repo.GetRecentGifts(limit)
+// GetRecentGifts returns recent gifts for the current live.
+func (c *AppController) GetRecentGifts(liveName string, limit int) ([]model.Gift, error) {
+	return c.repo.GetRecentGifts(liveName, limit)
 }
 
 // GetGiftsByUser returns gifts for a specific user.

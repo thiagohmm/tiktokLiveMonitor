@@ -393,7 +393,7 @@ func (db *DB) AddGift(liveName, uniqueID, nickname, giftName string, repeatCount
 }
 
 // GetRecentGifts returns the latest N gifts.
-func (db *DB) GetRecentGifts(limit int) ([]model.Gift, error) {
+func (db *DB) GetRecentGifts(liveName string, limit int) ([]model.Gift, error) {
 	if limit < 1 || limit > 500 {
 		limit = 100
 	}
@@ -401,8 +401,8 @@ func (db *DB) GetRecentGifts(limit int) ([]model.Gift, error) {
 	defer db.mu.Unlock()
 
 	rows, err := db.conn.Query(
-		"SELECT id, live_name, uniqueId, nickname, gift_name, repeat_count, gift_type, timestamp FROM gifts ORDER BY timestamp DESC LIMIT ?",
-		limit,
+		"SELECT id, live_name, uniqueId, nickname, gift_name, repeat_count, gift_type, timestamp FROM gifts WHERE live_name = ? ORDER BY timestamp DESC LIMIT ?",
+		liveName, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query gifts: %w", err)
@@ -516,16 +516,17 @@ func (db *DB) GetTodayUserMessages() ([]model.UserMessage, error) {
 	return out, rows.Err()
 }
 
-// GetTodayAnomalyLogs returns all anomaly logs from today.
-func (db *DB) GetTodayAnomalyLogs() ([]model.AnomalyLog, error) {
+// GetTodayAnomalyLogs returns anomaly logs from today for the given live name.
+func (db *DB) GetTodayAnomalyLogs(liveName string) ([]model.AnomalyLog, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	rows, err := db.conn.Query(
 		`SELECT id, live_name, day, timestamp, uniqueId, comment, is_anomaly, category
 		 FROM anomaly_logs
-		 WHERE day = date('now', 'localtime')
+		 WHERE day = date('now', 'localtime') AND live_name = ?
 		 ORDER BY timestamp ASC`,
+		liveName,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query today anomaly logs: %w", err)
