@@ -1239,6 +1239,10 @@ function setupEventStream() {
         markUserRed(JSON.parse(event.data));
     });
 
+    eventSource.addEventListener('settings-update', event => {
+        renderTargetGifts();
+    });
+
     eventSource.onerror = () => {
         statusDiv.innerText = 'Reconectando ao servidor...';
         statusDiv.style.color = '#666';
@@ -1327,6 +1331,24 @@ function setupElectronIpc() {
 function renderTargetGifts() {
     if (!targetGiftsList) return;
     targetGiftsList.innerHTML = '';
+
+    fetch('/api/settings')
+        .then(r => r.json())
+        .then(settings => {
+            const gifts = settings.targetGifts || [];
+            gifts.forEach(giftName => {
+                const span = document.createElement('span');
+                span.style.cssText = 'background:#f0f0f0;padding:3px 8px;border-radius:12px;display:inline-flex;align-items:center;gap:4px;';
+                span.textContent = giftName;
+                const btn = document.createElement('button');
+                btn.textContent = '×';
+                btn.style.cssText = 'background:none;border:none;cursor:pointer;font-size:1em;line-height:1;color:#999;';
+                btn.addEventListener('click', () => removeTargetGift(giftName));
+                span.appendChild(btn);
+                targetGiftsList.appendChild(span);
+            });
+        })
+        .catch(() => {});
 }
 
 async function removeTargetGift(giftToRemove) {
