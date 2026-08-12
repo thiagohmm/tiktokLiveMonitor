@@ -326,7 +326,7 @@ func TestAddGift(t *testing.T) {
 		t.Fatalf("expected positive id, got %d", id)
 	}
 
-	gifts, err := db.GetRecentGifts(10)
+	gifts, err := db.GetRecentGifts("live1", 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestGetRecentGiftsLimit(t *testing.T) {
 		}
 	}
 
-	gifts, err := db.GetRecentGifts(5)
+	gifts, err := db.GetRecentGifts("live1", 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -451,7 +451,7 @@ func TestClearGifts(t *testing.T) {
 		t.Fatalf("expected 5 deleted, got %d", deleted)
 	}
 
-	gifts, _ := db.GetRecentGifts(10)
+	gifts, _ := db.GetRecentGifts("", 10)
 	if len(gifts) != 0 {
 		t.Fatalf("expected 0 gifts, got %d", len(gifts))
 	}

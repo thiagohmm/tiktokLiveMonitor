@@ -19,7 +19,7 @@ import (
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 )
 
-func setupTestServer(t *testing.T) (*HTTPServer, model.Repository, string) {
+func setupTestServer(t *testing.T) (*HTTPServer, model.Repository, string, *monitor.Monitor) {
 	t.Helper()
 	dir := t.TempDir()
 
@@ -51,11 +51,11 @@ func setupTestServer(t *testing.T) (*HTTPServer, model.Repository, string) {
 		WebDir:    filepath.Join(dir, "web"),
 	}, ctrl)
 
-	return srv, repo, dir
+	return srv, repo, dir, mon
 }
 
 func TestHandleState(t *testing.T) {
-	srv, _, _ := setupTestServer(t)
+	srv, _, _, _ := setupTestServer(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/state", nil)
 	rec := httptest.NewRecorder()
@@ -76,7 +76,7 @@ func TestHandleState(t *testing.T) {
 }
 
 func TestHandleSettings(t *testing.T) {
-	srv, _, _ := setupTestServer(t)
+	srv, _, _, _ := setupTestServer(t)
 
 	t.Run("GET", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
@@ -113,7 +113,7 @@ func TestHandleSettings(t *testing.T) {
 }
 
 func TestHandleHistory(t *testing.T) {
-	srv, db, _ := setupTestServer(t)
+	srv, db, _, _ := setupTestServer(t)
 
 	err := db.LogAnomaly("live1", "test msg", true, "SPAM", "user1")
 	if err != nil {
@@ -138,7 +138,7 @@ func TestHandleHistory(t *testing.T) {
 }
 
 func TestHandleHistoryDelete(t *testing.T) {
-	srv, db, _ := setupTestServer(t)
+	srv, db, _, _ := setupTestServer(t)
 
 	err := db.LogAnomaly("live1", "test msg", true, "SPAM", "user1")
 	if err != nil {
@@ -161,7 +161,7 @@ func TestHandleHistoryDelete(t *testing.T) {
 }
 
 func TestHandleConnect(t *testing.T) {
-	srv, _, _ := setupTestServer(t)
+	srv, _, _, _ := setupTestServer(t)
 
 	t.Run("missing username", func(t *testing.T) {
 		body := map[string]string{}
@@ -185,7 +185,7 @@ func TestHandleConnect(t *testing.T) {
 }
 
 func TestHandleDisconnect(t *testing.T) {
-	srv, _, _ := setupTestServer(t)
+	srv, _, _, _ := setupTestServer(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/disconnect", nil)
 	rec := httptest.NewRecorder()
@@ -197,7 +197,7 @@ func TestHandleDisconnect(t *testing.T) {
 }
 
 func TestHandleClearHistory(t *testing.T) {
-	srv, db, _ := setupTestServer(t)
+	srv, db, _, _ := setupTestServer(t)
 
 	for i := 0; i < 3; i++ {
 		_ = db.LogAnomaly("live1", "msg", false, "OK", "user1")
@@ -222,7 +222,7 @@ func TestHandleClearHistory(t *testing.T) {
 }
 
 func TestHandleFeedback(t *testing.T) {
-	srv, _, _ := setupTestServer(t)
+	srv, _, _, _ := setupTestServer(t)
 
 	t.Run("valid feedback", func(t *testing.T) {
 		body := map[string]string{
@@ -271,12 +271,13 @@ func TestHandleFeedback(t *testing.T) {
 }
 
 func TestHandleGifts(t *testing.T) {
-	srv, db, _ := setupTestServer(t)
+	srv, db, _, mon := setupTestServer(t)
 
 	_, _ = db.AddGift("live1", "user1", "User One", "Rose", 3, 0)
 	_, _ = db.AddGift("live1", "user2", "User Two", "Tiger", 1, 1)
 
 	t.Run("GET all", func(t *testing.T) {
+		mon.SetCurrentLive("live1")
 		req := httptest.NewRequest(http.MethodGet, "/api/gifts", nil)
 		rec := httptest.NewRecorder()
 		srv.handleGifts(rec, req)
@@ -347,7 +348,7 @@ func TestHandleGifts(t *testing.T) {
 }
 
 func TestHandleAskAI(t *testing.T) {
-	srv, _, _ := setupTestServer(t)
+	srv, _, _, _ := setupTestServer(t)
 
 	t.Run("missing question", func(t *testing.T) {
 		body := map[string]string{}
@@ -371,7 +372,7 @@ func TestHandleAskAI(t *testing.T) {
 }
 
 func TestHandleReadiness(t *testing.T) {
-	srv, _, _ := setupTestServer(t)
+	srv, _, _, _ := setupTestServer(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/readiness", nil)
 	rec := httptest.NewRecorder()
@@ -391,7 +392,7 @@ func TestHandleReadiness(t *testing.T) {
 }
 
 func TestHandleProbeLLM(t *testing.T) {
-	srv, _, _ := setupTestServer(t)
+	srv, _, _, _ := setupTestServer(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/probe-llm", nil)
 	rec := httptest.NewRecorder()
@@ -403,7 +404,7 @@ func TestHandleProbeLLM(t *testing.T) {
 }
 
 func TestHandleWorkerRegister(t *testing.T) {
-	srv, _, _ := setupTestServer(t)
+	srv, _, _, _ := setupTestServer(t)
 
 	t.Run("valid register", func(t *testing.T) {
 		body := map[string]interface{}{
@@ -433,7 +434,7 @@ func TestServerStartPortEnv(t *testing.T) {
 	_ = os.Setenv("PORT", "9999")
 	defer os.Unsetenv("PORT")
 
-	srv, _, _ := setupTestServer(t)
+	srv, _, _, _ := setupTestServer(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

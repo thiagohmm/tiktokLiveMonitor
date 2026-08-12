@@ -384,7 +384,8 @@ func (s *HTTPServer) handleGifts(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, gifts)
 			return
 		}
-		gifts, err := s.controller.GetRecentGifts(limit)
+		state := s.controller.GetState()
+		gifts, err := s.controller.GetRecentGifts(state.Username, limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return

@@ -30,7 +30,7 @@ type AnomalyRepository interface {
 	GetRecentModerations(limit int) ([]AnomalyLog, error)
 	GetRecentAnomalyLogs(limit int) ([]AnomalyLog, error)
 	GetAnomalyLogsByLiveName(liveName string) ([]AnomalyLog, error)
-	GetTodayAnomalyLogs() ([]AnomalyLog, error)
+	GetTodayAnomalyLogs(liveName string) ([]AnomalyLog, error)
 	ClearHistory() (int64, error)
 	DeleteModeration(id int64) (int64, error)
 	CleanupOldAnomalies() (int64, error)
@@ -47,7 +47,7 @@ type UserMessageRepository interface {
 // GiftRepository handles persistence of gifts.
 type GiftRepository interface {
 	AddGift(liveName, uniqueID, nickname, giftName string, repeatCount, giftType int) (int64, error)
-	GetRecentGifts(limit int) ([]Gift, error)
+	GetRecentGifts(liveName string, limit int) ([]Gift, error)
 	GetGiftsByUser(uniqueID string) ([]Gift, error)
 	GetGiftSummary() (map[string]map[string]int, error)
 	ClearGifts() (int64, error)

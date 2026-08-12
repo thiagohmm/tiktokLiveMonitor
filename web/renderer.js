@@ -54,6 +54,8 @@ const historyModalTitle = document.getElementById('historyModalTitle');
 const historyModalBody = document.getElementById('historyModalBody');
 const historyModalCloseBtn = document.getElementById('historyModalCloseBtn');
 const giftSearchInput = document.getElementById('giftSearchInput');
+const allGiftsSection = document.getElementById('allGiftsSection');
+const allGiftsTableContainer = document.getElementById('allGiftsTableContainer');
 
 let chart;
 let messageCount = 0;
@@ -70,6 +72,7 @@ let listenedUserId = '';
 let listenDraftValue = '';
 let liveUsers = new Map();
 let activeModalType = null;
+let isAddingTargetGift = false;
 
 const LIVE_USERS_MAX = 200;
 let renderListenModalTimeout = null;
@@ -1328,6 +1331,14 @@ function setupElectronIpc() {
     });
 }
 
+function updateAllGiftsVisibility() {
+    if (!allGiftsSection || !allGiftsTableContainer) return;
+    const hasTargetGifts = targetGiftsList && targetGiftsList.children.length > 0;
+    const hidden = hasTargetGifts;
+    allGiftsSection.style.display = hidden ? 'none' : '';
+    allGiftsTableContainer.style.display = hidden ? 'none' : '';
+}
+
 function renderTargetGifts() {
     if (!targetGiftsList) return;
     targetGiftsList.innerHTML = '';
@@ -1347,6 +1358,7 @@ function renderTargetGifts() {
                 span.appendChild(btn);
                 targetGiftsList.appendChild(span);
             });
+            updateAllGiftsVisibility();
         })
         .catch(() => {});
 }
@@ -1425,11 +1437,13 @@ async function loadAllGifts() {
 }
 
 async function addTargetGift() {
-    const value = availableGiftSelect.value.trim();
-    if (!value) return;
-    console.log('Adding target gift:', value);
-
+    if (isAddingTargetGift) return;
+    isAddingTargetGift = true;
     try {
+        const value = availableGiftSelect.value.trim();
+        if (!value) return;
+        console.log('Adding target gift:', value);
+
         const response = await fetch('/api/settings');
         const settings = await response.json();
         const gifts = settings.targetGifts || [];
@@ -1447,12 +1461,15 @@ async function addTargetGift() {
         if (res.ok) {
             console.log('Successfully added target gift:', value);
             availableGiftSelect.value = '';
-            renderTargetGifts();
+            // renderTargetGifts() is triggered by the SSE 'settings-update' event
+            // sent by the server after the POST, avoiding a race that duplicates tags.
         } else {
             console.error('Failed to add target gift:', await res.text());
         }
     } catch (e) {
         console.error('Erro ao adicionar presente alvo:', e);
+    } finally {
+        isAddingTargetGift = false;
     }
 }
 

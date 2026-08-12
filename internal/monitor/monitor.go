@@ -172,6 +172,13 @@ func (m *Monitor) SetRepo(repo model.Repository) {
 	m.repo = repo
 }
 
+// SetCurrentLive sets the current live username for gift filtering.
+func (m *Monitor) SetCurrentLive(username string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.currentUsername = username
+}
+
 // resolveBridgePath returns an absolute path to bridge.js.
 // It tries multiple strategies so it works whether the binary is run via
 // `go run`, as a compiled binary, or from a different working directory.
@@ -509,11 +516,14 @@ func (m *Monitor) loadTodayData() {
 	now := time.Now().UnixMilli()
 
 	// Load today's user messages into chat buffer.
+	m.mu.Lock()
+	currentUsername := m.currentUsername
+	m.mu.Unlock()
+
 	todayMsgs, err := m.repo.GetTodayUserMessages()
 	if err != nil {
 		log.Printf("[Monitor] Error loading today's messages: %v", err)
 	} else if len(todayMsgs) > 0 {
-		m.mu.Lock()
 		for _, um := range todayMsgs {
 			m.chatBuffer = append(m.chatBuffer, ChatMessage{
 				UniqueID:  um.UniqueID,
@@ -526,22 +536,19 @@ func (m *Monitor) loadTodayData() {
 		if len(m.chatBuffer) > chatBufferMax {
 			m.chatBuffer = m.chatBuffer[len(m.chatBuffer)-chatBufferMax:]
 		}
-		m.mu.Unlock()
 		log.Printf("[Monitor] Loaded %d messages from today", len(todayMsgs))
 	}
 
-	// Load today's anomaly logs to restore pinned users.
-	todayAnomalies, err := m.repo.GetTodayAnomalyLogs()
+	// Load today's anomaly logs to restore pinned users, filtered by current live name.
+	todayAnomalies, err := m.repo.GetTodayAnomalyLogs(currentUsername)
 	if err != nil {
 		log.Printf("[Monitor] Error loading today's anomaly logs: %v", err)
 	} else if len(todayAnomalies) > 0 {
-		m.mu.Lock()
 		for _, al := range todayAnomalies {
 			if al.UniqueID != "" {
 				m.pinnedUsers[normalizeID(al.UniqueID)] = true
 			}
 		}
-		m.mu.Unlock()
 		log.Printf("[Monitor] Restored %d pinned users from today's anomaly logs", len(todayAnomalies))
 	}
 }
