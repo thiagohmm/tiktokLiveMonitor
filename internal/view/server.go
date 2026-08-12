@@ -206,6 +206,8 @@ func (s *HTTPServer) handleSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.controller.SetSettings(settings)
+		// Broadcast updated settings to all SSE clients
+		s.broadcastSSE("settings-update", s.controller.GetSettings())
 		writeJSON(w, map[string]bool{"success": true})
 		return
 	}
