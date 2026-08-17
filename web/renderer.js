@@ -849,10 +849,6 @@ function getGiftCountFromTableRow(row) {
     return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
-function shouldSkipIntermediateStreakGift(gift) {
-    return Number(gift.giftType) === 1 && gift.repeatEnd === false;
-}
-
 function reorderAllGiftsTableByCount() {
     const rows = Array.from(allGiftsTableBody.children);
     rows.sort((a, b) => (Number(b.getAttribute('data-count')) || 0) - (Number(a.getAttribute('data-count')) || 0));
@@ -885,19 +881,17 @@ if (giftSearchInput) {
 }
 
 function addAllGiftToList(gift) {
-    if (shouldSkipIntermediateStreakGift(gift)) {
-        return;
-    }
-
     giftCount++;
     rememberLiveUser(gift);
 
     const quantity = Math.max(1, Number(gift.repeatCount) || 1);
+    const isStreakTick = Number(gift.giftType) === 1 && gift.repeatEnd === false;
     const existingRow = findAllGiftsRowForGift(gift);
 
     if (existingRow) {
         const current = getGiftCountFromTableRow(existingRow);
-        const next = current + quantity;
+        // Durante uma streak o repeatCount é acumulado; define o maior total em vez de somar.
+        const next = isStreakTick ? Math.max(current, quantity) : current + quantity;
         existingRow.setAttribute('data-count', String(next));
         const countCell = existingRow.querySelector('.gift-count-cell');
         if (countCell) {
