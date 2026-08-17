@@ -275,8 +275,19 @@ func (m *Monitor) sendBridge(cmd map[string]interface{}) error {
 }
 
 type bridgeMsg struct {
-	Type string                 `json:"type"`
-	Data map[string]interface{} `json:"data"`
+	Type string      `json:"type"`
+	Data interface{} `json:"data"`
+}
+
+func dataToEvent(raw interface{}) EventData {
+	switch v := raw.(type) {
+	case map[string]interface{}:
+		return v
+	case string:
+		return EventData{"uniqueId": v}
+	default:
+		return EventData{}
+	}
 }
 
 func (m *Monitor) readBridge() {
@@ -289,7 +300,7 @@ func (m *Monitor) readBridge() {
 			log.Printf("[Monitor] Bridge JSON unmarshal error: %v (line: %s)", err, line[:min(len(line), 80)])
 			continue
 		}
-		m.handleBridgeEvent(msg.Type, msg.Data)
+		m.handleBridgeEvent(msg.Type, dataToEvent(msg.Data))
 	}
 	log.Println("[Monitor] Bridge process ended")
 }
@@ -331,6 +342,9 @@ func (m *Monitor) handleBridgeEvent(eventType string, data EventData) {
 		}
 
 	case "live-user-connected", "new-follower", "new-social-event":
+		m.emit(eventType, data)
+
+	case "mark-user-red":
 		m.emit(eventType, data)
 
 	case "error":
