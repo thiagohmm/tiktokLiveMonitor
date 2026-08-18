@@ -1,94 +1,22 @@
 {
   "name": "tiktok-live-monitor",
   "version": "1.0.0",
-  "main": "main.js",
   "scripts": {
-    "start": "electron .",
-    "start:web": "node server.js",
     "docker:build": "docker compose build",
     "docker:up": "docker compose up",
-    "build": "electron-builder",
-    "build:win": "electron-builder --win",
-    "build:linux": "electron-builder --linux",
-    "build:mac": "electron-builder --mac",
-    "build:all": "electron-builder --win --linux --mac",
     "postinstall": "node -e \"if (!process.env.SKIP_POSTINSTALL) { require('child_process').execSync('node scripts/setup-llm.js', { stdio: 'inherit' }); }\"",
     "setup-llm": "node scripts/setup-llm.js",
     "setup-llm:linux:arm64": "node scripts/setup-llm.js linux arm64",
     "setup-llm:linux:x64": "node scripts/setup-llm.js linux x64",
-    "setup-llm:win:x64": "node scripts/setup-llm.js win x64",
-    "chat-llm": "node scripts/chat-llm.js"
+    "setup-llm:win:x64": "node scripts/setup-llm.js win x64"
   },
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "chart.js": "^4.5.1",
     "express": "^4.22.1",
-    "sqlite3": "^6.0.1",
     "tar": "^7.4.3",
     "tiktok-live-connector": "^2.1.1-beta1",
     "unzipper": "^0.12.3"
-  },
-  "devDependencies": {
-    "electron": "^41.3.0",
-    "electron-builder": "^26.8.1"
-  },
-  "build": {
-    "appId": "com.tiktok.livemonitor",
-    "productName": "TikTok Live Monitor",
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "main.js",
-      "server.js",
-      "ai.js",
-      "llm-model.js",
-      "moderation.js",
-      "moderation-prompt.js",
-      "renderer.js",
-      "index.html",
-      "package.json",
-      "node_modules/**/*"
-    ],
-    "extraResources": [
-      "models/**/*",
-      "bin/**/*",
-      "scripts/**/*",
-      "requirements-python.txt"
-    ],
-    "asar": true,
-    "win": {
-      "target": [
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
-        }
-      ]
-    },
-    "linux": {
-      "target": [
-        {
-          "target": "AppImage",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ]
-    },
-    "mac": {
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "arm64"
-          ]
-        }
-      ]
-    }
   }
 }

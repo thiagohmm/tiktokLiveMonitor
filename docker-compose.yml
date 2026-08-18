@@ -1,23 +1,12 @@
-# Roda em qualquer arquitetura que o Docker suporta:
-#   - Linux amd64 (servidores/PCs)
-#   - Linux arm64 (Raspberry Pi 4 com Raspberry Pi OS 64-bit, Mac Apple Silicon)
-#
-# Na Pi 4 (recomendado, mais rápido que cross-build via QEMU):
-#   docker compose build --build-arg SKIP_TESTS=1
-#   docker compose up -d
-#
-# Em outro host, gerando a imagem p/ transferir à Pi:
-#   docker buildx build --platform linux/arm64 --build-arg SKIP_TESTS=1 -t tiktok-live-monitor .
-#   docker save tiktok-live-monitor | ssh pi 'docker load'
-#   docker run -d --restart unless-stopped -p 3000:3000 \
-#     -v llm-models:/app/models -v llm-bin:/app/bin tiktok-live-monitor
+# Uso padrão (servidores/PCs — build nativo na arquitetura da máquina).
+# Para Raspberry Pi, use o compose dedicado:
+#   docker compose -f docker-compose.raspberry.yml up -d
 
 services:
   tiktok-live-monitor:
     build:
       context: .
-      # Multi-arch: compila p/ a arquitetura da máquina que roda o build.
-      # SKIP_TESTS acelera o build na Pi 4: configure no .env (ex. SKIP_TESTS=1).
+      # SKIP_TESTS=1 pula a etapa de `go test` no build (configure no .env).
       args:
         SKIP_TESTS: ${SKIP_TESTS:-}
     ports:
@@ -27,12 +16,6 @@ services:
       HOST: "0.0.0.0"
       PORT: "3000"
       LLAMA_SERVER_BIND: "0.0.0.0"
-      # 1 = memória mapeada do modelo (necessário na Pi 4 p/ modelos > 4 GB RAM)
-      LLAMA_USE_MMAP: "1"
-    # 512mb ajuda a carregar o modelo em sistemas com RAM limitada.
-    # Ajuste até o máximo suportado pela sua Pi:
-    #   1GB / 2GB  -> 256mb   (ou tire a chave)
-    #   4GB / 8GB  -> 512mb
     shm_size: "${LLAMA_SHM_SIZE:-512mb}"
     volumes:
       - llm-models:/app/models
@@ -43,14 +26,12 @@ services:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3000/api/state || exit 1"]
       interval: 30s
       timeout: 10s
-      # start_period alto: no primeiro boot o container baixa o GGUF e o
-      # binário llama-server (arm64 na Pi). Em conexões lentas isso pode
-      # levar 10+ minutos.
+      # No primeiro boot o container baixa o GGUF e o binário llama-server.
       start_period: 60s
       retries: 5
 
   # Opcional: worker de IA dedicado (outro host com GPU/CPU mais forte).
-  # A Pi sobe sem IA local (fallback regex) e delega ao worker.
+  # O monitor sobe sem IA local (fallback regex) e delega ao worker.
   # ai-worker:
   #   build: .
   #   command: ["sleep", "infinity"]

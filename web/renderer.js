@@ -1,18 +1,7 @@
 console.log('TikTok Live Monitor Renderer Loaded');
 
-let ipcRenderer = null;
-try {
-    if (typeof require !== 'undefined') {
-        ipcRenderer = require('electron').ipcRenderer;
-    }
-} catch {
-    ipcRenderer = null;
-}
-
-const isElectron = Boolean(ipcRenderer);
-
 function ensureBrowserChart() {
-    if (isElectron || typeof window.Chart !== 'undefined') {
+    if (typeof window.Chart !== 'undefined') {
         return Promise.resolve();
     }
     return new Promise((resolve, reject) => {
@@ -557,21 +546,12 @@ function _stopAiLedPoll() {
 
 function _startAiLedPoll() {
     _stopAiLedPoll();
-    if (isElectron) {
-        _aiLedPollTimer = setInterval(() => {
-            ipcRenderer
-                .invoke('probe-llm')
-                .then((data) => setAiLedActive(Boolean(data && data.llmActive)))
-                .catch(() => {});
-        }, 5000);
-    } else {
-        _aiLedPollTimer = setInterval(() => {
-            fetch('/api/probe-llm')
-                .then((r) => r.ok ? r.json() : { llmActive: false })
-                .then((data) => setAiLedActive(Boolean(data && data.llmActive)))
-                .catch(() => {});
-        }, 5000);
-    }
+    _aiLedPollTimer = setInterval(() => {
+        fetch('/api/probe-llm')
+            .then((r) => r.ok ? r.json() : { llmActive: false })
+            .then((data) => setAiLedActive(Boolean(data && data.llmActive)))
+            .catch(() => {});
+    }, 5000);
 }
 
 function hideAiLed() {
@@ -580,21 +560,6 @@ function hideAiLed() {
     aiLedRow.style.display = 'none';
     aiLedDot.className = 'ai-led-dot ai-led-dot-checking';
     aiLedText.textContent = 'Verificando IA…';
-}
-
-function runLlmProbeElectron() {
-    showAiLedChecking();
-    ipcRenderer
-        .invoke('probe-llm')
-        .then((data) => {
-            const active = Boolean(data && data.llmActive);
-            setAiLedActive(active);
-            if (!active) _startAiLedPoll();
-        })
-        .catch(() => {
-            setAiLedActive(false);
-            _startAiLedPoll();
-        });
 }
 
 function createChart(ChartLib) {
@@ -673,25 +638,7 @@ document.addEventListener('keydown', event => {
     }
 });
 
-if (isElectron) {
-    connectBtn.addEventListener('click', () => {
-        const user = usernameInput.value.trim().replace(/^@/, '');
-        if (!user) {
-            return;
-        }
-        connectBtn.disabled = true;
-        statusDiv.innerText = 'Conectando...';
-        statusDiv.style.color = '#666';
-        runLlmProbeElectron();
-        ipcRenderer.send('connect-tiktok', user);
-    });
-
-    disconnectBtn.addEventListener('click', () => {
-        hideAiLed();
-        ipcRenderer.send('disconnect-tiktok');
-        statusDiv.innerText = 'Desconectando...';
-    });
-} else {
+{
     connectBtn.addEventListener('click', async () => {
         const username = usernameInput.value.trim().replace(/^@/, '');
         if (!username) {
@@ -1438,87 +1385,6 @@ function setupEventStream() {
     };
 }
 
-function setupElectronIpc() {
-    ipcRenderer.on('setup-progress', (event, data) => {
-        setupProgressContainer.style.display = 'flex';
-        setupStatusText.textContent = `Baixando ${data.filename}...`;
-        setupPercentage.textContent = `${data.progress}%`;
-        setupProgressBar.style.width = `${data.progress}%`;
-        
-        if (data.progress === 100) {
-            setTimeout(() => {
-                setupProgressContainer.style.display = 'none';
-                runLlmProbeElectron();
-            }, 2000);
-        }
-    });
-
-    ipcRenderer.on('connection-status', (event, data) => {
-        if (data.success) {
-            statusDiv.innerText = `Conectado a: ${data.username}`;
-            statusDiv.style.color = 'green';
-            connectBtn.style.display = 'none';
-            connectBtn.disabled = false;
-            disconnectBtn.style.display = 'inline-block';
-            usernameInput.disabled = true;
-        } else if (data.retries) {
-            applyReconnectingState(data.retries, data.nextRetryInMs);
-        } else {
-            statusDiv.innerText = data.error === 'Desconectado pelo usuário' ? 'Desconectado' : `Erro: ${data.error}`;
-            statusDiv.style.color = data.error === 'Desconectado pelo usuário' ? '#666' : 'red';
-            connectBtn.style.display = 'inline-block';
-            connectBtn.disabled = false;
-            disconnectBtn.style.display = 'none';
-            usernameInput.disabled = false;
-            clearTables();
-        }
-    });
-
-    ipcRenderer.on('new-chat-message', (event, data) => {
-        handleNewChatMessage(data);
-    });
-
-    ipcRenderer.on('live-user-connected', (event, data) => {
-        rememberLiveUser(data);
-    });
-
-    ipcRenderer.on('new-follower', (event, data) => {
-        rememberLiveUser(data);
-    });
-
-    ipcRenderer.on('new-social-event', (event, data) => {
-        rememberLiveUser(data);
-    });
-
-    ipcRenderer.on('new-gift-user', (event, user) => {
-        addUserToList(user);
-    });
-
-    ipcRenderer.on('any-gift-received', (event, gift) => {
-        addAllGiftToList(gift);
-    });
-
-    ipcRenderer.on('pinned-comment', (event, pinnedComment) => {
-        addPinnedCommentToList(pinnedComment);
-    });
-
-    ipcRenderer.on('flagged-message', (event, data) => {
-        addFlaggedMessageToList(data);
-    });
-
-    ipcRenderer.on('gift-question-correlation', (event, data) => {
-        addCorrelationMessageToList(data);
-    });
-
-    ipcRenderer.on('keyword-mention', (event, data) => {
-        handleKeywordMention(data);
-    });
-
-    ipcRenderer.on('mark-user-red', (event, uniqueId) => {
-        markUserRed(uniqueId);
-    });
-}
-
 function updateAllGiftsVisibility() {
     if (!allGiftsSection || !allGiftsTableContainer) return;
     // Sempre manter a tabela de todos os presentes visível,
@@ -1670,7 +1536,7 @@ async function bootstrap() {
 
     try {
         await ensureBrowserChart();
-        const ChartLib = isElectron ? require('chart.js/auto') : window.Chart;
+        const ChartLib = window.Chart;
         if (!ChartLib) {
             throw new Error('Chart.js indisponível.');
         }
@@ -1682,70 +1548,8 @@ async function bootstrap() {
         // Don't return; let the rest of bootstrap run.
     }
 
-    if (isElectron) {
-        try {
-            const cfg = await ipcRenderer.invoke('get-ui-config');
-            applyInfractionsSectionTitle(Boolean(cfg && cfg.geminiConfigured));
-
-            // Popula seletor de modelos
-            if (cfg.models && modelSelect) {
-                modelSelectorContainer.style.display = 'flex';
-                modelSelect.innerHTML = '';
-                Object.keys(cfg.models).forEach(key => {
-                    const opt = document.createElement('option');
-                    opt.value = key;
-                    opt.textContent = cfg.models[key].name;
-                    if (key === cfg.selectedModel) opt.selected = true;
-                    modelSelect.appendChild(opt);
-                });
-
-                modelSelect.addEventListener('change', async () => {
-                    const newModel = modelSelect.value;
-                    const success = await ipcRenderer.invoke('change-model', newModel);
-                    if (success) {
-                        setAiLedActive(false);
-                        aiLedText.textContent = 'Iniciando novo modelo...';
-                        const setupResult = await ipcRenderer.invoke('run-setup');
-                        if (setupResult) {
-                            try {
-                                const cfg = await ipcRenderer.invoke('get-ui-config');
-                                if (cfg && cfg.models && modelSelect) {
-                                    modelSelect.innerHTML = '';
-                                    Object.keys(cfg.models).forEach(key => {
-                                        const opt = document.createElement('option');
-                                        opt.value = key;
-                                        opt.textContent = cfg.models[key].name;
-                                        if (key === cfg.selectedModel) opt.selected = true;
-                                        modelSelect.appendChild(opt);
-                                    });
-                                }
-                            } catch (e) {
-                                console.error('Erro ao recarregar config:', e);
-                            }
-                            const ready = await ipcRenderer.invoke('start-llm-server');
-                            if (ready && ready.llmActive) {
-                                setAiLedActive(true);
-                            } else {
-                                aiLedText.textContent = 'Modelo carregando...';
-                                _startAiLedPoll();
-                            }
-                        } else {
-                            aiLedText.textContent = 'Erro ao baixar modelo.';
-                        }
-                    }
-                });
-            }
-
-            runLlmProbeElectron();
-        } catch (err) {
-            console.error('Erro ao configurar UI Electron:', err);
-            applyInfractionsSectionTitle(false);
-        }
-        setupElectronIpc();
-    } else {
-        await loadInitialState();
-        setupEventStream();
-    }
+    await loadInitialState();
+    setupEventStream();
 }
 
 void bootstrap();
