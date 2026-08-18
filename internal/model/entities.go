@@ -50,6 +50,24 @@ type Gift struct {
 	Timestamp   string `json:"timestamp"`
 }
 
+// Target gift response types.
+const (
+	TargetGiftResponseManual    = "manual"
+	TargetGiftResponseAutomatic = "automatic"
+)
+
+// TargetGiftHistory tracks when a target gift was received and answered.
+type TargetGiftHistory struct {
+	ID           int64   `json:"id"`
+	LiveName     string  `json:"liveName"`
+	UniqueID     string  `json:"uniqueId"`
+	Nickname     string  `json:"nickname"`
+	GiftName     string  `json:"giftName"`
+	ReceivedAt   string  `json:"receivedAt"`
+	AnsweredAt   *string `json:"answeredAt,omitempty"`
+	ResponseType *string `json:"responseType,omitempty"`
+}
+
 // ValidExpected values for feedback.
 var ValidExpected = map[string]bool{
 	"NAO":             true,

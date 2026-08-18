@@ -18,6 +18,7 @@ import (
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/config"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 )
 
@@ -79,6 +80,8 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/worker/register", s.handleWorkerRegister)
 	mux.HandleFunc("/api/gifts", s.handleGifts)
 	mux.HandleFunc("/api/available-gifts", s.handleAvailableGifts)
+	mux.HandleFunc("/api/target-gift-history", s.handleTargetGiftHistory)
+	mux.HandleFunc("/api/target-gift-history/answer", s.handleTargetGiftHistoryAnswer)
 	mux.HandleFunc("/api/ask-ai", s.handleAskAI)
 
 	// Static files.
@@ -101,6 +104,13 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 		}
 		if eventType == monitor.EventChatMessage {
 			go s.controller.HandleChatMessageEvent(data)
+		}
+		if eventType == monitor.EventGiftUser {
+			if id, err := s.controller.RecordTargetGiftReceived(data); err != nil {
+				log.Printf("[View] Error recording target gift history: %v", err)
+			} else {
+				data["historyId"] = id
+			}
 		}
 		s.broadcastSSE(eventType, data)
 	})
@@ -416,6 +426,56 @@ func (s *HTTPServer) handleAvailableGifts(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, gifts)
+}
+
+func (s *HTTPServer) handleTargetGiftHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	items, err := s.controller.GetRecentTargetGiftHistory(limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if items == nil {
+		items = []model.TargetGiftHistory{}
+	}
+	writeJSON(w, items)
+}
+
+func (s *HTTPServer) handleTargetGiftHistoryAnswer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		ID           int64  `json:"id"`
+		ResponseType string `json:"responseType"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if body.ID <= 0 {
+		writeError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	if body.ResponseType != model.TargetGiftResponseManual && body.ResponseType != model.TargetGiftResponseAutomatic {
+		writeError(w, http.StatusBadRequest, "responseType must be manual or automatic")
+		return
+	}
+	if err := s.controller.AnswerTargetGift(body.ID, body.ResponseType); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]bool{"success": true})
 }
 
 func (s *HTTPServer) handleAskAI(w http.ResponseWriter, r *http.Request) {

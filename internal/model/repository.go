@@ -1,7 +1,10 @@
 // Package model defines repository interfaces for data access.
 package model
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 // ErrCommentRequired is returned when comment is empty.
 var ErrCommentRequired = errors.New("comment is required")
@@ -53,11 +56,26 @@ type GiftRepository interface {
 	ClearGifts() (int64, error)
 }
 
+// TargetGiftHistoryRepository tracks target gift receive/answer history.
+type TargetGiftHistoryRepository interface {
+	AddTargetGiftHistory(liveName, uniqueID, nickname, giftName string, receivedAt time.Time) (int64, error)
+	MarkTargetGiftAnswered(id int64, responseType string, answeredAt time.Time) error
+	GetRecentTargetGiftHistory(liveName string, limit int) ([]TargetGiftHistory, error)
+}
+
+// SessionRepository handles reuse or purge of live session data on connect.
+type SessionRepository interface {
+	GetLastSessionActivity(liveName string) (time.Time, bool, error)
+	DeleteSessionData(liveName string) error
+}
+
 // Repository combines all repository interfaces.
 type Repository interface {
 	FeedbackRepository
 	AnomalyRepository
 	UserMessageRepository
 	GiftRepository
+	TargetGiftHistoryRepository
+	SessionRepository
 	Close() error
 }

@@ -3,8 +3,10 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/ai"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/moderation"
@@ -148,6 +150,44 @@ func (c *AppController) ClearGifts() (int64, error) {
 	return c.repo.ClearGifts()
 }
 
+// RecordTargetGiftReceived stores a pending target gift history entry and returns its id.
+func (c *AppController) RecordTargetGiftReceived(data monitor.EventData) (int64, error) {
+	state := c.monitor.GetState()
+	liveName := state.Username
+	uniqueID, _ := data["uniqueId"].(string)
+	nickname, _ := data["nickname"].(string)
+	giftName, _ := data["giftName"].(string)
+	if uniqueID == "" || giftName == "" {
+		return 0, fmt.Errorf("uniqueId and giftName are required")
+	}
+	if nickname == "" {
+		nickname = uniqueID
+	}
+
+	receivedAt := time.Now()
+	if ts, ok := toInt64(data["timestamp"]); ok && ts > 0 {
+		// TikTok payloads use milliseconds.
+		if ts > 1_000_000_000_000 {
+			receivedAt = time.UnixMilli(ts)
+		} else {
+			receivedAt = time.Unix(ts, 0)
+		}
+	}
+
+	return c.repo.AddTargetGiftHistory(liveName, uniqueID, nickname, giftName, receivedAt)
+}
+
+// AnswerTargetGift marks a target gift history entry as answered.
+func (c *AppController) AnswerTargetGift(id int64, responseType string) error {
+	return c.repo.MarkTargetGiftAnswered(id, responseType, time.Now())
+}
+
+// GetRecentTargetGiftHistory returns recent target gift history for the current live.
+func (c *AppController) GetRecentTargetGiftHistory(limit int) ([]model.TargetGiftHistory, error) {
+	state := c.monitor.GetState()
+	return c.repo.GetRecentTargetGiftHistory(state.Username, limit)
+}
+
 // --- AI Actions ---
 
 // AskAI asks the AI a question with live context.
@@ -198,4 +238,19 @@ func (c *AppController) GetMonitor() *monitor.Monitor {
 // Stop shuts down the AI manager.
 func (c *AppController) Stop() {
 	c.aiManager.Stop()
+}
+
+func toInt64(v interface{}) (int64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return n, true
+	case int:
+		return int64(n), true
+	case float64:
+		return int64(n), true
+	case float32:
+		return int64(n), true
+	default:
+		return 0, false
+	}
 }
