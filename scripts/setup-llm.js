@@ -5,7 +5,21 @@ const { execSync } = require('child_process');
 const unzipper = require('unzipper');
 const tar = require('tar');
 
-const { GGUF_FILENAME, DOWNLOAD_URL } = require('../llm-model');
+// Registro espelhando internal/config/config.go (var Models).
+// Em Docker (Linux) o container usa as variantes E2B menores.
+const MODELS = {
+    'gemma-4b': {
+        filename: 'google_gemma-4-E4B-it-Q4_K_M.gguf',
+        url: 'https://huggingface.co/bartowski/google_gemma-4-E4B-it-GGUF/resolve/main/google_gemma-4-E4B-it-Q4_K_M.gguf',
+        dockerFilename: 'google_gemma-4-E2B-it-Q4_K_M.gguf',
+        dockerUrl: 'https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF/resolve/main/google_gemma-4-E2B-it-Q4_K_M.gguf',
+    },
+    'llama-3.2-3b': {
+        filename: 'Llama-3.2-3B-Instruct-Q4_K_M.gguf',
+        url: 'https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf',
+    },
+};
+const DEFAULT_MODEL_KEY = 'gemma-4b';
 
 /** Mesma versão em todas as plataformas (ubuntu-arm64 só existe a partir de builds recentes). */
 const LLAMA_CPP_RELEASE_TAG = 'b8999';
@@ -202,6 +216,17 @@ async function setup() {
 
     if (!fs.existsSync(MODELS_DIR)) fs.mkdirSync(MODELS_DIR, { recursive: true });
     if (!fs.existsSync(BIN_DIR)) fs.mkdirSync(BIN_DIR, { recursive: true });
+
+    // Modelo selecionado em model-config.json (mesmo arquivo lido pelo Go).
+    let modelKey = DEFAULT_MODEL_KEY;
+    try {
+        const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'model-config.json'), 'utf8'));
+        if (cfg.selectedModel && MODELS[cfg.selectedModel]) modelKey = cfg.selectedModel;
+    } catch { /* usa o padrão */ }
+    const info = MODELS[modelKey];
+    const inDocker = fs.existsSync('/.dockerenv');
+    const GGUF_FILENAME = (inDocker && info.dockerFilename) ? info.dockerFilename : info.filename;
+    const DOWNLOAD_URL = (inDocker && info.dockerUrl) ? info.dockerUrl : info.url;
 
     const modelDest = path.join(MODELS_DIR, GGUF_FILENAME);
     await downloadFile(DOWNLOAD_URL, modelDest);
