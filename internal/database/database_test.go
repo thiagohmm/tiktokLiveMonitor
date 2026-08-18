@@ -3,6 +3,7 @@ package database
 import (
 	"os"
 	"testing"
+	"time"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 )
@@ -465,9 +466,11 @@ func TestCleanupOldAnomalies(t *testing.T) {
 		t.Fatalf("insert old: %v", err)
 	}
 
-	err = db.LogAnomaly("live1", "new", false, "OK", "user1")
+	// day is stored in UTC; seed 'today' with date('now') so the test
+	// is independent of the host timezone.
+	_, err = db.conn.Exec("INSERT INTO anomaly_logs (live_name, day, comment, is_anomaly, category) VALUES ('live1', date('now'), 'new', 0, 'OK')")
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("insert new: %v", err)
 	}
 
 	var deleted int64
@@ -515,5 +518,247 @@ func TestDatabaseFilePath(t *testing.T) {
 	_, err = os.Stat(dir + "/feedback.db")
 	if err != nil {
 		t.Fatalf("expected feedback.db to exist: %v", err)
+	}
+}
+
+func countTable(t *testing.T, db *DB, query string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := db.conn.QueryRow(query, args...).Scan(&n); err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	return n
+}
+
+func TestGetLastSessionActivityEmpty(t *testing.T) {
+	db := openTestDB(t)
+
+	_, ok, err := db.GetLastSessionActivity("live1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Fatal("expected no session activity")
+	}
+}
+
+func TestGetLastSessionActivityUsesLatestAcrossTables(t *testing.T) {
+	db := openTestDB(t)
+
+	_, err := db.conn.Exec(
+		`INSERT INTO gifts (live_name, uniqueId, nickname, gift_name, timestamp) VALUES (?, ?, ?, ?, ?)`,
+		"live1", "user1", "User", "Rose", "2026-08-17 10:00:00",
+	)
+	if err != nil {
+		t.Fatalf("insert gift: %v", err)
+	}
+	_, err = db.conn.Exec(
+		`INSERT INTO anomaly_logs (live_name, day, comment, is_anomaly, category, timestamp) VALUES (?, ?, ?, ?, ?, ?)`,
+		"live1", "2026-08-17", "spam", 1, "SPAM", "2026-08-17 11:00:00",
+	)
+	if err != nil {
+		t.Fatalf("insert anomaly: %v", err)
+	}
+	_, err = db.conn.Exec(
+		`INSERT INTO user_messages (uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?)`,
+		"user1", "User", "hello", "2026-08-17 12:30:00",
+	)
+	if err != nil {
+		t.Fatalf("insert message: %v", err)
+	}
+	_, err = db.conn.Exec(
+		`INSERT INTO gifts (live_name, uniqueId, nickname, gift_name, timestamp) VALUES (?, ?, ?, ?, ?)`,
+		"other", "user2", "Other", "Tiger", "2026-08-17 23:00:00",
+	)
+	if err != nil {
+		t.Fatalf("insert other gift: %v", err)
+	}
+
+	last, ok, err := db.GetLastSessionActivity("live1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected session activity")
+	}
+	want := time.Date(2026, 8, 17, 12, 30, 0, 0, time.UTC)
+	if !last.Equal(want) {
+		t.Fatalf("expected last activity %v, got %v", want, last)
+	}
+}
+
+func TestDeleteSessionData(t *testing.T) {
+	db := openTestDB(t)
+
+	if _, err := db.AddGift("live1", "user1", "User One", "Rose", 1, 0); err != nil {
+		t.Fatalf("add gift live1: %v", err)
+	}
+	if _, err := db.AddGift("live2", "user2", "User Two", "Tiger", 1, 0); err != nil {
+		t.Fatalf("add gift live2: %v", err)
+	}
+	if err := db.LogAnomaly("live1", "spam", true, "SPAM", "user1"); err != nil {
+		t.Fatalf("log live1: %v", err)
+	}
+	if err := db.LogAnomaly("live2", "ok", false, "OK", "user2"); err != nil {
+		t.Fatalf("log live2: %v", err)
+	}
+	if err := db.AddUserMessageDedup("user1", "User One", "hello"); err != nil {
+		t.Fatalf("add message: %v", err)
+	}
+	if _, err := db.AddFeedback("example", "SPAM", "SIM_SPAM"); err != nil {
+		t.Fatalf("add feedback: %v", err)
+	}
+
+	if err := db.DeleteSessionData("live1"); err != nil {
+		t.Fatalf("delete session: %v", err)
+	}
+
+	if n := countTable(t, db, "SELECT COUNT(*) FROM gifts WHERE live_name = ?", "live1"); n != 0 {
+		t.Fatalf("expected 0 gifts for live1, got %d", n)
+	}
+	if n := countTable(t, db, "SELECT COUNT(*) FROM gifts WHERE live_name = ?", "live2"); n != 1 {
+		t.Fatalf("expected 1 gift for live2, got %d", n)
+	}
+	if n := countTable(t, db, "SELECT COUNT(*) FROM anomaly_logs WHERE live_name = ?", "live1"); n != 0 {
+		t.Fatalf("expected 0 anomalies for live1, got %d", n)
+	}
+	if n := countTable(t, db, "SELECT COUNT(*) FROM anomaly_logs WHERE live_name = ?", "live2"); n != 1 {
+		t.Fatalf("expected 1 anomaly for live2, got %d", n)
+	}
+	if n := countTable(t, db, "SELECT COUNT(*) FROM user_messages"); n != 0 {
+		t.Fatalf("expected 0 user messages, got %d", n)
+	}
+	if n := countTable(t, db, "SELECT COUNT(*) FROM false_positives"); n != 1 {
+		t.Fatalf("expected feedback to remain, got %d", n)
+	}
+}
+
+func TestSessionReuseAgeCases(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name string
+		at   time.Time
+	}{
+		{"same day under 10h", now.Add(-2 * time.Hour)},
+		{"same day over 10h", now.Add(-11 * time.Hour)},
+		{"different day", now.Add(-25 * time.Hour)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openTestDB(t)
+			_, err := db.conn.Exec(
+				`INSERT INTO gifts (live_name, uniqueId, nickname, gift_name, timestamp) VALUES (?, ?, ?, ?, ?)`,
+				"live1", "user1", "User", "Rose", tt.at.UTC().Format("2006-01-02 15:04:05"),
+			)
+			if err != nil {
+				t.Fatalf("insert gift: %v", err)
+			}
+
+			last, ok, err := db.GetLastSessionActivity("live1")
+			if err != nil {
+				t.Fatalf("last activity: %v", err)
+			}
+			if !ok {
+				t.Fatal("expected last activity")
+			}
+
+			wantKeep := sameUTCDay(now, tt.at) && now.Sub(tt.at) < 10*time.Hour
+			keep := sameUTCDay(now, last) && now.Sub(last) < 10*time.Hour
+			if keep != wantKeep {
+				t.Fatalf("keep=%v want %v (last=%v now=%v)", keep, wantKeep, last, now)
+			}
+			if keep {
+				if n := countTable(t, db, "SELECT COUNT(*) FROM gifts WHERE live_name = ?", "live1"); n != 1 {
+					t.Fatalf("expected gift to remain, got %d", n)
+				}
+				return
+			}
+			if err := db.DeleteSessionData("live1"); err != nil {
+				t.Fatalf("delete: %v", err)
+			}
+			if n := countTable(t, db, "SELECT COUNT(*) FROM gifts WHERE live_name = ?", "live1"); n != 0 {
+				t.Fatalf("expected gifts deleted, got %d", n)
+			}
+		})
+	}
+}
+
+// sameUTCDay mirrors the production rule: timestamps are stored and read in UTC.
+func sameUTCDay(a, b time.Time) bool {
+	a = a.UTC()
+	b = b.UTC()
+	return a.Year() == b.Year() && a.YearDay() == b.YearDay()
+}
+
+func TestTargetGiftHistoryFlow(t *testing.T) {
+	db := openTestDB(t)
+	receivedAt := time.Date(2026, 8, 17, 15, 30, 0, 0, time.UTC)
+
+	id, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", receivedAt)
+	if err != nil {
+		t.Fatalf("add history: %v", err)
+	}
+	if id <= 0 {
+		t.Fatalf("expected positive id, got %d", id)
+	}
+
+	items, err := db.GetRecentTargetGiftHistory("live1", 10)
+	if err != nil {
+		t.Fatalf("get history: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].GiftName != "Rosa" {
+		t.Fatalf("expected Rosa, got %q", items[0].GiftName)
+	}
+	if items[0].AnsweredAt != nil || items[0].ResponseType != nil {
+		t.Fatalf("expected pending item")
+	}
+
+	answeredAt := receivedAt.Add(2 * time.Minute)
+	if err := db.MarkTargetGiftAnswered(id, model.TargetGiftResponseManual, answeredAt); err != nil {
+		t.Fatalf("mark answered: %v", err)
+	}
+
+	items, err = db.GetRecentTargetGiftHistory("live1", 10)
+	if err != nil {
+		t.Fatalf("get history after answer: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].AnsweredAt == nil || items[0].ResponseType == nil {
+		t.Fatal("expected answered item")
+	}
+	if *items[0].ResponseType != model.TargetGiftResponseManual {
+		t.Fatalf("expected manual, got %q", *items[0].ResponseType)
+	}
+
+	// Idempotent second mark should not fail.
+	if err := db.MarkTargetGiftAnswered(id, model.TargetGiftResponseAutomatic, answeredAt.Add(time.Minute)); err != nil {
+		t.Fatalf("second mark: %v", err)
+	}
+	items, err = db.GetRecentTargetGiftHistory("live1", 10)
+	if err != nil {
+		t.Fatalf("get history after second mark: %v", err)
+	}
+	if *items[0].ResponseType != model.TargetGiftResponseManual {
+		t.Fatalf("expected original manual response to remain, got %q", *items[0].ResponseType)
+	}
+}
+
+func TestMarkTargetGiftAnsweredInvalid(t *testing.T) {
+	db := openTestDB(t)
+	if err := db.MarkTargetGiftAnswered(0, model.TargetGiftResponseManual, time.Now()); err == nil {
+		t.Fatal("expected error for invalid id")
+	}
+	id, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", time.Now())
+	if err != nil {
+		t.Fatalf("add history: %v", err)
+	}
+	if err := db.MarkTargetGiftAnswered(id, "weird", time.Now()); err == nil {
+		t.Fatal("expected error for invalid response type")
 	}
 }

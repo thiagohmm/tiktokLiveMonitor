@@ -78,6 +78,16 @@ func (db *DB) migrate() error {
 			message TEXT NOT NULL,
 			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS target_gift_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			live_name TEXT NOT NULL,
+			uniqueId TEXT NOT NULL,
+			nickname TEXT NOT NULL,
+			gift_name TEXT NOT NULL,
+			received_at DATETIME NOT NULL,
+			answered_at DATETIME,
+			response_type TEXT
+		)`,
 	}
 
 	for _, s := range stmts {
@@ -152,7 +162,7 @@ func (db *DB) GetRecentFeedbacks(limit int) ([]model.Feedback, error) {
 // LogAnomaly records a moderation decision.
 func (db *DB) LogAnomaly(liveName, comment string, isAnomaly bool, category, uniqueID string) error {
 	now := time.Now()
-	day := now.Format("2006-01-02")
+	day := now.UTC().Format("2006-01-02")
 	var anomalyInt int
 	if isAnomaly {
 		anomalyInt = 1
@@ -268,7 +278,7 @@ func (db *DB) CleanupOldAnomalies() (int64, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	result, err := db.conn.Exec("DELETE FROM anomaly_logs WHERE day < date('now', 'localtime')")
+	result, err := db.conn.Exec("DELETE FROM anomaly_logs WHERE day < date('now')")
 	if err != nil {
 		return 0, fmt.Errorf("cleanup anomalies: %w", err)
 	}
@@ -497,7 +507,7 @@ func (db *DB) GetTodayUserMessages() ([]model.UserMessage, error) {
 	rows, err := db.conn.Query(
 		`SELECT id, uniqueId, username, message, timestamp
 		 FROM user_messages
-		 WHERE date(timestamp) = date('now', 'localtime')
+		 WHERE date(timestamp) = date('now')
 		 ORDER BY timestamp ASC`,
 	)
 	if err != nil {
@@ -524,7 +534,7 @@ func (db *DB) GetTodayAnomalyLogs(liveName string) ([]model.AnomalyLog, error) {
 	rows, err := db.conn.Query(
 		`SELECT id, live_name, day, timestamp, uniqueId, comment, is_anomaly, category
 		 FROM anomaly_logs
-		 WHERE day = date('now', 'localtime') AND live_name = ?
+		 WHERE day = date('now') AND live_name = ?
 		 ORDER BY timestamp ASC`,
 		liveName,
 	)
@@ -546,7 +556,223 @@ func (db *DB) GetTodayAnomalyLogs(liveName string) ([]model.AnomalyLog, error) {
 	return out, rows.Err()
 }
 
+// --- TargetGiftHistoryRepository ---
+
+// AddTargetGiftHistory stores a pending target gift history entry.
+func (db *DB) AddTargetGiftHistory(liveName, uniqueID, nickname, giftName string, receivedAt time.Time) (int64, error) {
+	if receivedAt.IsZero() {
+		receivedAt = time.Now()
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	result, err := db.conn.Exec(
+		`INSERT INTO target_gift_history
+			(live_name, uniqueId, nickname, gift_name, received_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		liveName, uniqueID, nickname, giftName, receivedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("insert target gift history: %w", err)
+	}
+	return result.LastInsertId()
+}
+
+// MarkTargetGiftAnswered sets answered_at/response_type for a pending history entry.
+func (db *DB) MarkTargetGiftAnswered(id int64, responseType string, answeredAt time.Time) error {
+	if id <= 0 {
+		return model.ErrInvalidID
+	}
+	responseType = strings.TrimSpace(strings.ToLower(responseType))
+	if responseType != model.TargetGiftResponseManual && responseType != model.TargetGiftResponseAutomatic {
+		return fmt.Errorf("invalid response type %q", responseType)
+	}
+	if answeredAt.IsZero() {
+		answeredAt = time.Now()
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	_, err := db.conn.Exec(
+		`UPDATE target_gift_history
+		 SET answered_at = ?, response_type = ?
+		 WHERE id = ? AND answered_at IS NULL`,
+		answeredAt.UTC().Format(time.RFC3339Nano), responseType, id,
+	)
+	if err != nil {
+		return fmt.Errorf("mark target gift answered: %w", err)
+	}
+	return nil
+}
+
+// GetRecentTargetGiftHistory returns the latest N target gift history rows.
+func (db *DB) GetRecentTargetGiftHistory(liveName string, limit int) ([]model.TargetGiftHistory, error) {
+	if limit < 1 || limit > 500 {
+		limit = 50
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if strings.TrimSpace(liveName) == "" {
+		rows, err = db.conn.Query(
+			`SELECT id, live_name, uniqueId, nickname, gift_name, received_at, answered_at, response_type
+			 FROM target_gift_history
+			 ORDER BY received_at DESC
+			 LIMIT ?`,
+			limit,
+		)
+	} else {
+		rows, err = db.conn.Query(
+			`SELECT id, live_name, uniqueId, nickname, gift_name, received_at, answered_at, response_type
+			 FROM target_gift_history
+			 WHERE live_name = ?
+			 ORDER BY received_at DESC
+			 LIMIT ?`,
+			liveName, limit,
+		)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query target gift history: %w", err)
+	}
+	defer rows.Close()
+
+	var out []model.TargetGiftHistory
+	for rows.Next() {
+		var (
+			h                    model.TargetGiftHistory
+			answeredAt, respType sql.NullString
+		)
+		if err := rows.Scan(
+			&h.ID, &h.LiveName, &h.UniqueID, &h.Nickname, &h.GiftName,
+			&h.ReceivedAt, &answeredAt, &respType,
+		); err != nil {
+			return nil, fmt.Errorf("scan target gift history: %w", err)
+		}
+		if answeredAt.Valid {
+			v := answeredAt.String
+			h.AnsweredAt = &v
+		}
+		if respType.Valid {
+			v := respType.String
+			h.ResponseType = &v
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+// --- SessionRepository ---
+
+func parseSQLiteTime(s string) (time.Time, error) {
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05",
+	}
+	// Timestamps are stored in UTC (CURRENT_TIMESTAMP and writers format UTC),
+	// so parse naive values as UTC to keep day comparisons consistent.
+	for _, layout := range layouts {
+		if ts, err := time.ParseInLocation(layout, s, time.UTC); err == nil {
+			return ts, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unrecognized timestamp %q", s)
+}
+
+func (db *DB) maxTimestamp(query string, args ...any) (time.Time, bool, error) {
+	var raw sql.NullString
+	err := db.conn.QueryRow(query, args...).Scan(&raw)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if !raw.Valid || raw.String == "" {
+		return time.Time{}, false, nil
+	}
+	ts, err := parseSQLiteTime(raw.String)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return ts, true, nil
+}
+
+// GetLastSessionActivity returns the latest timestamp among gifts and
+// anomaly logs for liveName, plus all user_messages (which have no live_name).
+func (db *DB) GetLastSessionActivity(liveName string) (time.Time, bool, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	queries := []struct {
+		q    string
+		args []any
+	}{
+		{"SELECT MAX(timestamp) FROM gifts WHERE live_name = ?", []any{liveName}},
+		{"SELECT MAX(timestamp) FROM anomaly_logs WHERE live_name = ?", []any{liveName}},
+		{"SELECT MAX(timestamp) FROM user_messages", nil},
+	}
+
+	var latest time.Time
+	found := false
+	for _, q := range queries {
+		ts, ok, err := db.maxTimestamp(q.q, q.args...)
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("last session activity: %w", err)
+		}
+		if !ok {
+			continue
+		}
+		if !found || ts.After(latest) {
+			latest = ts
+			found = true
+		}
+	}
+	return latest, found, nil
+}
+
+// DeleteSessionData removes gifts and anomaly logs for liveName and all user_messages.
+func (db *DB) DeleteSessionData(liveName string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("delete session data: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM gifts WHERE live_name = ?", liveName); err != nil {
+		return fmt.Errorf("delete session gifts: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM anomaly_logs WHERE live_name = ?", liveName); err != nil {
+		return fmt.Errorf("delete session anomalies: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM user_messages"); err != nil {
+		return fmt.Errorf("delete session messages: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("delete session data: %w", err)
+	}
+	return nil
+}
+
+// ExecSQL runs a raw statement. Used by tests to seed timestamps.
+func (db *DB) ExecSQL(query string, args ...any) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	_, err := db.conn.Exec(query, args...)
+	return err
+}
+
 // --- Repository interface ---
+
+var _ model.Repository = (*DB)(nil)
 
 // Close closes the database connection.
 func (db *DB) Close() error {

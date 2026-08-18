@@ -1,6 +1,25 @@
+# Roda em qualquer arquitetura que o Docker suporta:
+#   - Linux amd64 (servidores/PCs)
+#   - Linux arm64 (Raspberry Pi 4 com Raspberry Pi OS 64-bit, Mac Apple Silicon)
+#
+# Na Pi 4 (recomendado, mais rápido que cross-build via QEMU):
+#   docker compose build --build-arg SKIP_TESTS=1
+#   docker compose up -d
+#
+# Em outro host, gerando a imagem p/ transferir à Pi:
+#   docker buildx build --platform linux/arm64 --build-arg SKIP_TESTS=1 -t tiktok-live-monitor .
+#   docker save tiktok-live-monitor | ssh pi 'docker load'
+#   docker run -d --restart unless-stopped -p 3000:3000 \
+#     -v llm-models:/app/models -v llm-bin:/app/bin tiktok-live-monitor
+
 services:
   tiktok-live-monitor:
-    build: .
+    build:
+      context: .
+      # Multi-arch: compila p/ a arquitetura da máquina que roda o build.
+      # SKIP_TESTS acelera o build na Pi 4: configure no .env (ex. SKIP_TESTS=1).
+      args:
+        SKIP_TESTS: ${SKIP_TESTS:-}
     ports:
       - "${PORT:-3000}:3000"
       - "${LLAMA_PORT:-8080}:8080"
@@ -8,29 +27,36 @@ services:
       HOST: "0.0.0.0"
       PORT: "3000"
       LLAMA_SERVER_BIND: "0.0.0.0"
+      # 1 = memória mapeada do modelo (necessário na Pi 4 p/ modelos > 4 GB RAM)
       LLAMA_USE_MMAP: "1"
-    shm_size: "512mb"
+    # 512mb ajuda a carregar o modelo em sistemas com RAM limitada.
+    # Ajuste até o máximo suportado pela sua Pi:
+    #   1GB / 2GB  -> 256mb   (ou tire a chave)
+    #   4GB / 8GB  -> 512mb
+    shm_size: "${LLAMA_SHM_SIZE:-512mb}"
     volumes:
       - llm-models:/app/models
       - llm-bin:/app/bin
       - feedback-data:/app
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://127.0.0.1:3000/api/state"]
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3000/api/state || exit 1"]
       interval: 30s
       timeout: 10s
-      start_period: 30s
+      # start_period alto: no primeiro boot o container baixa o GGUF e o
+      # binário llama-server (arm64 na Pi). Em conexões lentas isso pode
+      # levar 10+ minutos.
+      start_period: 60s
       retries: 5
 
-  # Optional AI worker - runs llama-server on a separate machine with GPU.
-  # Uncomment and configure if you have a dedicated GPU node.
+  # Opcional: worker de IA dedicado (outro host com GPU/CPU mais forte).
+  # A Pi sobe sem IA local (fallback regex) e delega ao worker.
   # ai-worker:
   #   build: .
-  #   command: /bin/sh -c "echo 'Worker mode: spawn llama-server manually' && sleep infinity"
+  #   command: ["sleep", "infinity"]
   #   environment:
   #     MASTER_URL: "http://tiktok-live-monitor:3000"
   #     WORKER_PORT: "8081"
-  #   shm_size: "512mb"
   #   volumes:
   #     - llm-models:/app/models
   #     - llm-bin:/app/bin

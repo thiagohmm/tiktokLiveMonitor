@@ -1,6 +1,17 @@
 # Multi-stage build: Go backend
-# Stage 1: Build Go binary
-FROM golang:1.26-bookworm AS builder
+# Multi-arch: linux/amd64 (servidores) e linux/arm64 (Raspberry Pi 4 64-bit, Mac Apple Silicon).
+#
+#   Build nativo (na Pi, no Mac, ou num servidor):
+#       docker build .                (ou: docker compose build)
+#
+#   Cross-build (ex.: montar no Mac/PC p/ transferir à Pi):
+#       docker buildx build --platform linux/arm64 -t tiktok-live-monitor .
+#       docker save tiktok-live-monitor | ssh pi 'docker load'
+#
+#   Dica para Pi 4: --build-arg SKIP_TESTS=1 deixa o build mais rápido.
+
+ARG TARGETPLATFORM
+FROM --platform=$TARGETPLATFORM golang:1.26-bookworm AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -8,13 +19,17 @@ RUN go mod download
 
 COPY . .
 
-# Run tests before building
-RUN CGO_ENABLED=1 go test ./internal/... -count=1 -timeout 60s
+# Etapa de testes; pula com --build-arg SKIP_TESTS=1 (recomendado na Pi 4)
+ARG SKIP_TESTS=0
+RUN if [ "$SKIP_TESTS" = "1" ]; then echo "SKIP_TESTS=1: pulando testes"; \
+    else CGO_ENABLED=1 go test ./internal/... -count=1 -timeout 60s; fi
 
-RUN CGO_ENABLED=1 go build -o /tiktok-live-monitor ./cmd/tiktok-live-monitor/
+# CGO (go-sqlite3) exige toolchain nativa da arquitetura alvo:
+# build nativo = rápida; via buildx/QEMU = mais lenta mas funcional.
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=$TARGETARCH go build -o /tiktok-live-monitor .
 
-# Stage 2: Minimal runtime
-FROM debian:bookworm-slim
+# Stage 2: Minimal runtime (multi-arch)
+FROM --platform=$TARGETPLATFORM debian:bookworm-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

@@ -201,13 +201,110 @@ function createFollowerBadge(isFollower) {
     return null;
 }
 
-function renderGiftHistory() {
-    historyModalTitle.textContent = 'Últimos 15 Presentes Alvos';
-    historyModalBody.replaceChildren(createModalList(targetGiftHistory, (row, item) => {
+function formatSaoPauloDateTime(value) {
+    if (value == null || value === '') {
+        return '—';
+    }
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return '—';
+    }
+    return new Intl.DateTimeFormat('pt-BR', {
+        timeZone: 'America/Sao_Paulo',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+    }).format(date);
+}
+
+function targetGiftResponseLabel(responseType) {
+    if (responseType === 'manual') {
+        return 'Respondido manualmente';
+    }
+    if (responseType === 'automatic') {
+        return 'Respondido automaticamente';
+    }
+    return 'Pendente';
+}
+
+function targetGiftResponseClass(responseType) {
+    if (responseType === 'manual' || responseType === 'automatic') {
+        return responseType;
+    }
+    return 'pending';
+}
+
+async function markTargetGiftAnswered(historyId, responseType) {
+    const id = Number(historyId);
+    if (!Number.isFinite(id) || id <= 0) {
+        return;
+    }
+    try {
+        await fetch('/api/target-gift-history/answer', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, responseType })
+        });
+    } catch (error) {
+        console.error('[Frontend] Falha ao registrar resposta do presente alvo:', error);
+    }
+}
+
+async function loadTargetGiftHistoryFromApi() {
+    try {
+        const response = await fetch('/api/target-gift-history?limit=50');
+        if (!response.ok) {
+            throw new Error(`status ${response.status}`);
+        }
+        const items = await response.json();
+        return Array.isArray(items) ? items : [];
+    } catch (error) {
+        console.error('[Frontend] Falha ao carregar histórico de presentes alvos:', error);
+        return [];
+    }
+}
+
+async function renderGiftHistory() {
+    historyModalTitle.textContent = 'Histórico de Presentes Alvos';
+    historyModalBody.replaceChildren();
+
+    const loading = document.createElement('p');
+    loading.className = 'modal-empty';
+    loading.textContent = 'Carregando histórico...';
+    historyModalBody.appendChild(loading);
+
+    const items = await loadTargetGiftHistoryFromApi();
+    if (activeModalType !== 'target-gifts') {
+        return;
+    }
+
+    historyModalBody.replaceChildren(createModalList(items, (row, item) => {
         renderUserLine(row, item.nickname, item.uniqueId, item.isFollower);
+
         const gift = document.createElement('span');
         gift.textContent = item.giftName || 'Presente Alvo';
         row.appendChild(gift);
+
+        const meta = document.createElement('div');
+        meta.className = 'modal-item-meta';
+
+        const received = document.createElement('span');
+        received.textContent = `Recebido: ${formatSaoPauloDateTime(item.receivedAt)} (SP)`;
+        meta.appendChild(received);
+
+        const answered = document.createElement('span');
+        answered.textContent = `Respondido: ${formatSaoPauloDateTime(item.answeredAt)} (SP)`;
+        meta.appendChild(answered);
+        row.appendChild(meta);
+
+        const status = document.createElement('span');
+        status.className = `modal-item-status ${targetGiftResponseClass(item.responseType)}`;
+        status.textContent = targetGiftResponseLabel(item.responseType);
+        row.appendChild(status);
     }));
 }
 
@@ -355,13 +452,7 @@ function closeHistoryModal() {
 }
 
 function addTargetGiftToHistory(user) {
-    targetGiftHistory.unshift({
-        uniqueId: user.uniqueId || '',
-        nickname: user.nickname || user.uniqueId || 'Nao identificado',
-        giftName: user.giftName || 'Presente Alvo',
-        timestamp: user.timestamp || Date.now()
-    });
-    trimHistory(targetGiftHistory);
+    // Persistido no backend; o modal carrega de /api/target-gift-history.
     if (activeModalType === 'target-gifts') {
         renderGiftHistory();
     }
@@ -656,9 +747,51 @@ if (isElectron) {
     });
 }
 
-targetExpirationMinutesInput.addEventListener('change', () => {
+const EXPIRATION_STORAGE_KEY = 'targetExpirationMinutes';
+
+function loadTargetExpirationMinutes() {
+    if (!targetExpirationMinutesInput) {
+        return;
+    }
+    try {
+        const stored = Number(localStorage.getItem(EXPIRATION_STORAGE_KEY));
+        if (Number.isFinite(stored) && stored > 0) {
+            targetExpirationMinutesInput.value = String(Math.floor(stored));
+        }
+    } catch {
+        // ignore storage errors
+    }
+}
+
+function persistTargetExpirationMinutes() {
+    if (!targetExpirationMinutesInput) {
+        return;
+    }
+    const minutes = getTargetExpirationMinutes();
+    targetExpirationMinutesInput.value = String(minutes);
+    try {
+        localStorage.setItem(EXPIRATION_STORAGE_KEY, String(minutes));
+    } catch {
+        // ignore storage errors
+    }
+}
+
+function onExpirationMinutesChanged(shouldPersist) {
+    const minutes = Number(targetExpirationMinutesInput?.value);
+    if (!Number.isFinite(minutes) || minutes <= 0) {
+        return;
+    }
+    if (shouldPersist) {
+        persistTargetExpirationMinutes();
+    }
     resetTargetGiftTimers();
-});
+}
+
+loadTargetExpirationMinutes();
+if (targetExpirationMinutesInput) {
+    targetExpirationMinutesInput.addEventListener('input', () => onExpirationMinutesChanged(false));
+    targetExpirationMinutesInput.addEventListener('change', () => onExpirationMinutesChanged(true));
+}
 
 function setConnectingState() {
     connectBtn.disabled = true;
@@ -725,12 +858,31 @@ function handleConnectionStatus(data) {
         return;
     }
 
+    // Reconexão automática em andamento: mantém o estado atual visível
+    // sem limpar as tabelas.
+    if (data.retries) {
+        applyReconnectingState(data.retries, data.nextRetryInMs);
+        return;
+    }
+
     applyDisconnectedState(data.error || 'Falha ao conectar.');
+}
+
+function applyReconnectingState(retries, nextRetryInMs) {
+    const secs = Math.max(0, Math.round((nextRetryInMs || 0) / 1000));
+    statusDiv.innerText = `Reconectando (tentativa ${retries}, em ${secs}s)...`;
+    statusDiv.style.color = 'orange';
+    // Mantém os botões no estado conectado; o usuário ainda pode parar.
+    connectBtn.style.display = 'none';
+    disconnectBtn.style.display = 'inline-block';
+    disconnectBtn.disabled = false;
 }
 
 function addUserToList(user) {
     rememberLiveUser(user);
     addTargetGiftToHistory(user);
+
+    const historyId = user.historyId != null ? String(user.historyId) : '';
 
     const existingRow = Array.from(userTableBody.querySelectorAll('.user-row')).find(row => {
         return String(row.getAttribute('data-id')).toLowerCase() === String(user.uniqueId).toLowerCase() &&
@@ -738,6 +890,13 @@ function addUserToList(user) {
     });
 
     if (existingRow) {
+        const previousHistoryId = existingRow.dataset.historyId;
+        if (previousHistoryId && previousHistoryId !== historyId) {
+            markTargetGiftAnswered(previousHistoryId, 'automatic');
+        }
+        if (historyId) {
+            existingRow.dataset.historyId = historyId;
+        }
         userTableBody.prepend(existingRow);
         if (user.isRed) {
             existingRow.classList.add('red');
@@ -749,6 +908,9 @@ function addUserToList(user) {
     const tr = document.createElement('tr');
     tr.className = 'user-row';
     tr.setAttribute('data-id', user.uniqueId);
+    if (historyId) {
+        tr.dataset.historyId = historyId;
+    }
 
     if (user.isRed) {
         tr.classList.add('red');
@@ -788,23 +950,48 @@ function addUserToList(user) {
     startAutoRemoveTimer(user.uniqueId, user.giftName, tr);
 }
 
-function startAutoRemoveTimer(uniqueId, giftName, element) {
+function startAutoRemoveTimer(uniqueId, giftName, element, options = {}) {
+    const refreshStart = options.refreshStart !== false;
     const timerKey = `${uniqueId}-${giftName}`;
 
     if (autoRemoveTimers[timerKey]) {
         clearTimeout(autoRemoveTimers[timerKey]);
+        delete autoRemoveTimers[timerKey];
+    }
+
+    if (refreshStart || !element.dataset.addedAt) {
+        element.dataset.addedAt = String(Date.now());
+    }
+
+    const addedAt = Number(element.dataset.addedAt) || Date.now();
+    const remainingMs = getTargetExpirationMs() - (Date.now() - addedAt);
+
+    if (remainingMs <= 0) {
+        markTargetGiftAnswered(element.dataset.historyId, 'automatic');
+        element.remove();
+        if (activeModalType === 'target-gifts') {
+            renderGiftHistory();
+        }
+        return;
     }
 
     autoRemoveTimers[timerKey] = setTimeout(() => {
+        markTargetGiftAnswered(element.dataset.historyId, 'automatic');
         element.remove();
         delete autoRemoveTimers[timerKey];
-    }, getTargetExpirationMs());
+        if (activeModalType === 'target-gifts') {
+            renderGiftHistory();
+        }
+    }, remainingMs);
+}
+
+function getTargetExpirationMinutes() {
+    const minutes = Number(targetExpirationMinutesInput?.value);
+    return Number.isFinite(minutes) && minutes > 0 ? Math.floor(minutes) : 4;
 }
 
 function getTargetExpirationMs() {
-    const minutes = Number(targetExpirationMinutesInput.value);
-    const validMinutes = Number.isFinite(minutes) && minutes > 0 ? minutes : 4;
-    return validMinutes * 60 * 1000;
+    return getTargetExpirationMinutes() * 60 * 1000;
 }
 
 function resetTargetGiftTimers() {
@@ -812,7 +999,8 @@ function resetTargetGiftTimers() {
         const uniqueId = row.getAttribute('data-id');
         const giftName = row.querySelector('.gift-name-cell')?.innerText;
         if (uniqueId && giftName) {
-            startAutoRemoveTimer(uniqueId, giftName, row);
+            // Mantém o horário original do presente e só reaplica o prazo atual.
+            startAutoRemoveTimer(uniqueId, giftName, row, { refreshStart: false });
         }
     });
 }
@@ -1146,7 +1334,11 @@ function removeUser(uniqueId, giftName, button) {
 
     const tr = button.closest('.user-row');
     if (tr) {
+        markTargetGiftAnswered(tr.dataset.historyId, 'manual');
         tr.remove();
+        if (activeModalType === 'target-gifts') {
+            renderGiftHistory();
+        }
     }
 }
 
@@ -1269,6 +1461,8 @@ function setupElectronIpc() {
             connectBtn.disabled = false;
             disconnectBtn.style.display = 'inline-block';
             usernameInput.disabled = true;
+        } else if (data.retries) {
+            applyReconnectingState(data.retries, data.nextRetryInMs);
         } else {
             statusDiv.innerText = data.error === 'Desconectado pelo usuário' ? 'Desconectado' : `Erro: ${data.error}`;
             statusDiv.style.color = data.error === 'Desconectado pelo usuário' ? '#666' : 'red';
@@ -1327,10 +1521,10 @@ function setupElectronIpc() {
 
 function updateAllGiftsVisibility() {
     if (!allGiftsSection || !allGiftsTableContainer) return;
-    const hasTargetGifts = targetGiftsList && targetGiftsList.children.length > 0;
-    const hidden = hasTargetGifts;
-    allGiftsSection.style.display = hidden ? 'none' : '';
-    allGiftsTableContainer.style.display = hidden ? 'none' : '';
+    // Sempre manter a tabela de todos os presentes visível,
+    // mesmo quando há presentes alvos configurados.
+    allGiftsSection.style.display = '';
+    allGiftsTableContainer.style.display = '';
 }
 
 function renderTargetGifts() {

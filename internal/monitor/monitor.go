@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,18 +21,18 @@ import (
 )
 
 const (
-	EventChatMessage          = "new-chat-message"
-	EventGiftUser             = "new-gift-user"
-	EventAnyGift              = "any-gift-received"
-	EventPinnedComment        = "pinned-comment"
-	EventFlaggedMessage       = "flagged-message"
-	EventGiftQuestionCorr     = "gift-question-correlation"
-	EventKeywordMention       = "keyword-mention"
-	EventMarkUserRed          = "mark-user-red"
-	EventConnectionStatus     = "connection-status"
-	EventLiveUserConnected    = "live-user-connected"
-	EventNewFollower          = "new-follower"
-	EventNewSocialEvent       = "new-social-event"
+	EventChatMessage       = "new-chat-message"
+	EventGiftUser          = "new-gift-user"
+	EventAnyGift           = "any-gift-received"
+	EventPinnedComment     = "pinned-comment"
+	EventFlaggedMessage    = "flagged-message"
+	EventGiftQuestionCorr  = "gift-question-correlation"
+	EventKeywordMention    = "keyword-mention"
+	EventMarkUserRed       = "mark-user-red"
+	EventConnectionStatus  = "connection-status"
+	EventLiveUserConnected = "live-user-connected"
+	EventNewFollower       = "new-follower"
+	EventNewSocialEvent    = "new-social-event"
 )
 
 type EventData map[string]interface{}
@@ -84,14 +85,16 @@ type Settings struct {
 }
 
 type State struct {
-	Connected bool     `json:"connected"`
-	Username  string   `json:"username"`
-	Settings  Settings `json:"settings"`
+	Connected         bool     `json:"connected"`
+	Username          string   `json:"username"`
+	Settings          Settings `json:"settings"`
+	ReconnectAttempts int      `json:"reconnectAttempts,omitempty"`
 }
 
 const (
 	chatBufferMax             = 500
 	questionBufferMax         = 300
+	sessionReuseMaxAge        = 10 * time.Hour
 	questionCorrelationWindow = 3 * time.Minute
 	correlationForwardCount   = 2
 	correlationForwardDelay   = 4 * time.Second
@@ -100,22 +103,37 @@ const (
 	repeatsRequired           = 3
 )
 
+// Ajustáveis (var) para permitir testes com backoff acelerado.
+var (
+	reconnectBaseDelay = time.Second
+	reconnectMaxDelay  = 30 * time.Second
+	reconnectJitterPct = 0.2
+)
+
 type Monitor struct {
-	mu               sync.Mutex
-	cmd              *exec.Cmd
-	stdin            io.WriteCloser
-	stdout           io.ReadCloser
-	currentUsername  string
-	chatBuffer       []ChatMessage
-	questionBuffer   []QuestionEntry
-	pinnedUsers      map[string]bool
-	processedPins    map[string]bool
-	repeatAlerted    map[string]bool
-	handlers         []EventHandler
-	settings         Settings
-	connected        bool
-	repo             model.Repository
-	giftsCh          chan []string
+	mu              sync.Mutex
+	cmd             *exec.Cmd
+	stdin           io.WriteCloser
+	stdout          io.ReadCloser
+	currentUsername string
+	chatBuffer      []ChatMessage
+	questionBuffer  []QuestionEntry
+	pinnedUsers     map[string]bool
+	processedPins   map[string]bool
+	repeatAlerted   map[string]bool
+	handlers        []EventHandler
+	settings        Settings
+	connected       bool
+	repo            model.Repository
+	giftsCh         chan []string
+
+	bridgeEnded       chan struct{}
+	reconnectKick     chan struct{}
+	reconnectAttempts int
+	userStopped       bool
+	supCancel         context.CancelFunc
+	supDone           chan struct{}
+	supStopCh         chan struct{}
 
 	CorrelateGiftQuestion func(gift GiftPayload)
 }
@@ -127,6 +145,7 @@ func New() (*Monitor, error) {
 		processedPins: make(map[string]bool),
 		repeatAlerted: make(map[string]bool),
 		giftsCh:       make(chan []string, 1),
+		reconnectKick: make(chan struct{}, 1),
 		settings: Settings{
 			ModerationEnabled:   true,
 			AIModerationEnabled: true,
@@ -146,9 +165,10 @@ func (m *Monitor) GetState() State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return State{
-		Connected: m.connected,
-		Username:  m.currentUsername,
-		Settings:  m.settings,
+		Connected:         m.connected,
+		Username:          m.currentUsername,
+		Settings:          m.settings,
+		ReconnectAttempts: m.reconnectAttempts,
 	}
 }
 
@@ -247,9 +267,12 @@ func (m *Monitor) startBridge() error {
 		return fmt.Errorf("start bridge: %w", err)
 	}
 
+	m.mu.Lock()
 	m.cmd = cmd
 	m.stdin = stdin
 	m.stdout = stdout
+	m.bridgeEnded = make(chan struct{})
+	m.mu.Unlock()
 
 	go m.readBridge()
 
@@ -257,11 +280,155 @@ func (m *Monitor) startBridge() error {
 }
 
 func (m *Monitor) stopBridge() {
+	m.mu.Lock()
+	if m.cmd == nil {
+		m.mu.Unlock()
+		return
+	}
+	cmd := m.cmd
+	m.cmd = nil
+	m.stdin = nil
+	m.stdout = nil
+	m.mu.Unlock()
+
 	log.Println("[Monitor] Stopping bridge")
-	if m.cmd != nil {
-		m.cmd.Process.Kill()
-		m.cmd.Wait()
-		m.cmd = nil
+	if err := cmd.Process.Kill(); err == nil {
+		cmd.Wait()
+	}
+}
+
+// backoffDelay computes the delay before reconnect attempt n (1-indexed):
+// exponential growth from reconnectBaseDelay capped at reconnectMaxDelay,
+// with a random jitter of up to reconnectJitterPct.
+func backoffDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	shift := attempt - 1
+	if shift > 30 {
+		shift = 30
+	}
+	d := time.Duration(1<<uint(shift)) * reconnectBaseDelay
+	if d > reconnectMaxDelay {
+		d = reconnectMaxDelay
+	}
+	jitter := time.Duration(rand.Float64() * reconnectJitterPct * float64(d))
+	return d + jitter
+}
+
+// startSupervisor starts the reconnect supervisor goroutine (idempotent).
+func (m *Monitor) startSupervisor(ctx context.Context) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.supDone != nil {
+		return
+	}
+	supCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	stopCh := make(chan struct{})
+	m.supCancel = cancel
+	m.supDone = done
+	m.supStopCh = stopCh
+	go m.runSupervisor(supCtx, stopCh, done)
+}
+
+// stopSupervisor cancels the supervisor and waits for it to exit.
+func (m *Monitor) stopSupervisor() {
+	m.mu.Lock()
+	cancel := m.supCancel
+	done := m.supDone
+	stopCh := m.supStopCh
+	m.supCancel = nil
+	m.supDone = nil
+	m.supStopCh = nil
+	m.mu.Unlock()
+
+	if cancel == nil {
+		return
+	}
+	select {
+	case <-stopCh:
+	default:
+		close(stopCh)
+	}
+	cancel()
+	<-done
+}
+
+// runSupervisor watches the bridge process and reconnect kicks. When the
+// bridge dies or reports a lost connection, it restarts the bridge and
+// re-sends "connect" with exponential backoff and jitter.
+func (m *Monitor) runSupervisor(ctx context.Context, stopCh, done chan struct{}) {
+	defer close(done)
+
+	for {
+		m.mu.Lock()
+		ended := m.bridgeEnded
+		username := m.currentUsername
+		stopped := m.userStopped
+		m.mu.Unlock()
+
+		if stopped {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-stopCh:
+			return
+		case <-ended:
+			// bridge process ended unexpectedly
+		case <-m.reconnectKick:
+			// bridge alive but connection dropped
+		}
+
+		m.mu.Lock()
+		stopped = m.userStopped
+		m.reconnectAttempts++
+		attempt := m.reconnectAttempts
+		username = m.currentUsername
+		m.mu.Unlock()
+
+		if stopped || username == "" {
+			return
+		}
+
+		delay := backoffDelay(attempt)
+		log.Printf("[Monitor] Reconnecting to %s (attempt %d, next in %s)", username, attempt, delay)
+		m.emit(EventConnectionStatus, EventData{
+			"success":       false,
+			"error":         fmt.Sprintf("Conexão perdida. Reconectando (tentativa %d, próxima em %s)...", attempt, delay.Round(time.Second)),
+			"retries":       attempt,
+			"nextRetryInMs": delay.Milliseconds(),
+		})
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-stopCh:
+			return
+		case <-time.After(delay):
+		}
+
+		m.mu.Lock()
+		stopped = m.userStopped
+		m.mu.Unlock()
+		if stopped {
+			return
+		}
+
+		m.stopBridge()
+		if err := m.startBridge(); err != nil {
+			log.Printf("[Monitor] Failed to restart bridge: %v", err)
+			continue // loops back: waits and retries with longer backoff
+		}
+		if err := m.sendBridge(map[string]interface{}{
+			"action":   "connect",
+			"username": username,
+		}); err != nil {
+			log.Printf("[Monitor] Failed to send connect after bridge restart: %v", err)
+		}
 	}
 }
 
@@ -291,6 +458,13 @@ func dataToEvent(raw interface{}) EventData {
 }
 
 func (m *Monitor) readBridge() {
+	m.mu.Lock()
+	ended := m.bridgeEnded
+	m.mu.Unlock()
+	if ended != nil {
+		defer close(ended)
+	}
+
 	scanner := bufio.NewScanner(m.stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -311,9 +485,19 @@ func (m *Monitor) handleBridgeEvent(eventType string, data EventData) {
 		success, _ := data["success"].(bool)
 		m.mu.Lock()
 		m.connected = success
+		if success {
+			m.reconnectAttempts = 0
+		}
+		stopped := m.userStopped
 		m.mu.Unlock()
 		log.Printf("[Monitor] Bridge connection-status: success=%v username=%v", success, data["username"])
 		m.emit(eventType, data)
+		if !success && !stopped {
+			select {
+			case m.reconnectKick <- struct{}{}:
+			default:
+			}
+		}
 
 	case "new-chat-message":
 		m.mu.Lock()
@@ -498,11 +682,17 @@ func toInt(v interface{}) (int, bool) {
 }
 
 func (m *Monitor) StartMonitoring(ctx context.Context, username string) error {
+	m.mu.Lock()
+	m.userStopped = false
+	m.reconnectAttempts = 0
+	m.mu.Unlock()
+
 	if m.cmd == nil {
 		if err := m.startBridge(); err != nil {
 			return fmt.Errorf("start bridge: %w", err)
 		}
 	}
+	m.startSupervisor(ctx)
 
 	m.mu.Lock()
 	m.currentUsername = username
@@ -513,9 +703,8 @@ func (m *Monitor) StartMonitoring(ctx context.Context, username string) error {
 	m.repeatAlerted = make(map[string]bool)
 	m.mu.Unlock()
 
-	// Load today's data from database if repo is available.
 	if m.repo != nil {
-		m.loadTodayData()
+		m.restoreOrPurgeSessionData()
 	}
 
 	return m.sendBridge(map[string]interface{}{
@@ -524,12 +713,49 @@ func (m *Monitor) StartMonitoring(ctx context.Context, username string) error {
 	})
 }
 
+// sessionReusable is true when last activity is on the same UTC calendar day
+// and less than sessionReuseMaxAge before now.
+// Timestamps are stored and read in UTC, so compare days in UTC.
+func sessionReusable(last, now time.Time) bool {
+	if last.IsZero() {
+		return false
+	}
+	last = last.UTC()
+	now = now.UTC()
+	if last.Year() != now.Year() || last.YearDay() != now.YearDay() {
+		return false
+	}
+	return now.Sub(last) < sessionReuseMaxAge
+}
+
+// restoreOrPurgeSessionData reloads today's session if it is still reusable;
+// otherwise it deletes gifts, messages and anomaly logs for this live.
+func (m *Monitor) restoreOrPurgeSessionData() {
+	m.mu.Lock()
+	liveName := m.currentUsername
+	m.mu.Unlock()
+
+	last, ok, err := m.repo.GetLastSessionActivity(liveName)
+	if err != nil {
+		log.Printf("[Monitor] Error reading last session activity: %v", err)
+		return
+	}
+	if ok && sessionReusable(last, time.Now()) {
+		m.loadTodayData()
+		return
+	}
+	if err := m.repo.DeleteSessionData(liveName); err != nil {
+		log.Printf("[Monitor] Error deleting stale session data: %v", err)
+		return
+	}
+	log.Printf("[Monitor] Purged session data for %s", liveName)
+}
+
 // loadTodayData loads today's user messages and anomaly logs from the database
 // to restore the chat buffer and pinned users when reconnecting to the same live.
 func (m *Monitor) loadTodayData() {
 	now := time.Now().UnixMilli()
 
-	// Load today's user messages into chat buffer.
 	m.mu.Lock()
 	currentUsername := m.currentUsername
 	m.mu.Unlock()
@@ -538,44 +764,52 @@ func (m *Monitor) loadTodayData() {
 	if err != nil {
 		log.Printf("[Monitor] Error loading today's messages: %v", err)
 	} else if len(todayMsgs) > 0 {
+		m.mu.Lock()
 		for _, um := range todayMsgs {
 			m.chatBuffer = append(m.chatBuffer, ChatMessage{
 				UniqueID:  um.UniqueID,
 				Nickname:  um.Username,
 				Comment:   um.Message,
-				Timestamp: now, // Use current time as approximate (exact not stored)
+				Timestamp: now,
 			})
 		}
-		// Keep only last 500 messages (chatBufferMax).
 		if len(m.chatBuffer) > chatBufferMax {
 			m.chatBuffer = m.chatBuffer[len(m.chatBuffer)-chatBufferMax:]
 		}
+		m.mu.Unlock()
 		log.Printf("[Monitor] Loaded %d messages from today", len(todayMsgs))
 	}
 
-	// Load today's anomaly logs to restore pinned users, filtered by current live name.
 	todayAnomalies, err := m.repo.GetTodayAnomalyLogs(currentUsername)
 	if err != nil {
 		log.Printf("[Monitor] Error loading today's anomaly logs: %v", err)
-	} else if len(todayAnomalies) > 0 {
-		for _, al := range todayAnomalies {
-			if al.UniqueID != "" {
-				m.pinnedUsers[normalizeID(al.UniqueID)] = true
-			}
-		}
-		log.Printf("[Monitor] Restored %d pinned users from today's anomaly logs", len(todayAnomalies))
+		return
 	}
+	if len(todayAnomalies) == 0 {
+		return
+	}
+	m.mu.Lock()
+	for _, al := range todayAnomalies {
+		if al.UniqueID != "" {
+			m.pinnedUsers[normalizeID(al.UniqueID)] = true
+		}
+	}
+	m.mu.Unlock()
+	log.Printf("[Monitor] Restored %d pinned users from today's anomaly logs", len(todayAnomalies))
 }
 
 func (m *Monitor) StopMonitoring() {
+	m.mu.Lock()
+	m.userStopped = true
+	m.connected = false
+	m.mu.Unlock()
+	m.stopSupervisor()
+
 	if m.stdin != nil {
 		m.sendBridge(map[string]interface{}{
 			"action": "disconnect",
 		})
 	}
-	m.mu.Lock()
-	m.connected = false
-	m.mu.Unlock()
 	m.emit(EventConnectionStatus, EventData{
 		"success": false,
 		"error":   "Desconectado pelo usuário",
