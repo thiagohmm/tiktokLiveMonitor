@@ -4,6 +4,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -11,17 +12,27 @@ import (
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// DB wraps the SQLite connection with thread-safe access and implements model.Repository.
+// DB wraps the database connection (SQLite or Postgres) with thread-safe
+// access and implements model.Repository.
 type DB struct {
-	conn *sql.DB
-	mu   sync.Mutex
+	conn      *sql.DB
+	mu        sync.Mutex
+	isSupabase bool // true when the backend is Postgres (Supabase)
 }
 
-// Open creates or opens the SQLite database at the given directory.
+// Open opens the persistence backend. When SUPABASE_DB_URL is set it
+// connects to Postgres (the schema must already exist, see
+// supabase/schema.sql); otherwise it falls back to the local SQLite
+// database at the given directory.
 func Open(dir string) (*DB, error) {
+	if dsn := os.Getenv("SUPABASE_DB_URL"); dsn != "" {
+		return openSupabase(dsn)
+	}
+
 	dbPath := filepath.Join(dir, "feedback.db")
 	conn, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL")
 	if err != nil {
@@ -37,6 +48,22 @@ func Open(dir string) (*DB, error) {
 	}
 
 	return db, nil
+}
+
+// openSupabase opens a Postgres connection (Supabase). The schema is
+// created manually (supabase/schema.sql) instead of via migrate().
+func openSupabase(dsn string) (*DB, error) {
+	conn, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open postgres: %w", err)
+	}
+
+	if err := conn.Ping(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("ping postgres: %w", err)
+	}
+
+	return &DB{conn: conn, isSupabase: true}, nil
 }
 
 func (db *DB) migrate() error {
@@ -102,6 +129,9 @@ func (db *DB) migrate() error {
 
 // AddFeedback stores a user-provided classification example.
 func (db *DB) AddFeedback(comment, category, expected string) (int64, error) {
+	if db.isSupabase {
+		return db.addSupFeedback(comment, category, expected)
+	}
 	comment = strings.TrimSpace(comment)
 	category = strings.TrimSpace(strings.ToUpper(category))
 	expected = strings.TrimSpace(strings.ToUpper(expected))
@@ -131,6 +161,9 @@ func (db *DB) AddFeedback(comment, category, expected string) (int64, error) {
 
 // GetRecentFeedbacks returns the latest N feedback entries.
 func (db *DB) GetRecentFeedbacks(limit int) ([]model.Feedback, error) {
+	if db.isSupabase {
+		return db.getSupRecentFeedbacks(limit)
+	}
 	if limit < 1 || limit > 200 {
 		limit = 10
 	}
@@ -161,6 +194,9 @@ func (db *DB) GetRecentFeedbacks(limit int) ([]model.Feedback, error) {
 
 // LogAnomaly records a moderation decision.
 func (db *DB) LogAnomaly(liveName, comment string, isAnomaly bool, category, uniqueID string) error {
+	if db.isSupabase {
+		return db.logSupAnomaly(liveName, comment, isAnomaly, category, uniqueID)
+	}
 	now := time.Now()
 	day := now.UTC().Format("2006-01-02")
 	var anomalyInt int
@@ -184,6 +220,9 @@ func (db *DB) LogAnomaly(liveName, comment string, isAnomaly bool, category, uni
 
 // GetRecentModerations returns the latest N moderation records.
 func (db *DB) GetRecentModerations(limit int) ([]model.AnomalyLog, error) {
+	if db.isSupabase {
+		return db.getSupRecentModerations(limit)
+	}
 	if limit < 1 || limit > 500 {
 		limit = 100
 	}
@@ -216,11 +255,17 @@ func (db *DB) GetRecentModerations(limit int) ([]model.AnomalyLog, error) {
 
 // GetRecentAnomalyLogs retrieves the most recent anomaly logs.
 func (db *DB) GetRecentAnomalyLogs(limit int) ([]model.AnomalyLog, error) {
+	if db.isSupabase {
+		return db.getSupRecentAnomalyLogs(limit)
+	}
 	return db.GetRecentModerations(limit)
 }
 
 // GetAnomalyLogsByLiveName retrieves logs for a specific live name.
 func (db *DB) GetAnomalyLogsByLiveName(liveName string) ([]model.AnomalyLog, error) {
+	if db.isSupabase {
+		return db.getSupAnomalyLogsByLiveName(liveName)
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -248,6 +293,9 @@ func (db *DB) GetAnomalyLogsByLiveName(liveName string) ([]model.AnomalyLog, err
 
 // ClearHistory removes all anomaly logs.
 func (db *DB) ClearHistory() (int64, error) {
+	if db.isSupabase {
+		return db.clearSupHistory()
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -260,6 +308,9 @@ func (db *DB) ClearHistory() (int64, error) {
 
 // DeleteModeration removes a single anomaly log by ID.
 func (db *DB) DeleteModeration(id int64) (int64, error) {
+	if db.isSupabase {
+		return db.deleteSupModeration(id)
+	}
 	if id <= 0 {
 		return 0, model.ErrInvalidID
 	}
@@ -275,6 +326,9 @@ func (db *DB) DeleteModeration(id int64) (int64, error) {
 
 // CleanupOldAnomalies removes records older than today.
 func (db *DB) CleanupOldAnomalies() (int64, error) {
+	if db.isSupabase {
+		return db.cleanupSupOldAnomalies()
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -289,6 +343,9 @@ func (db *DB) CleanupOldAnomalies() (int64, error) {
 
 // AddUserMessageDedup stores a user message only if it's unique for that user, keeping max 10.
 func (db *DB) AddUserMessageDedup(uniqueID, username, message string) error {
+	if db.isSupabase {
+		return db.addSupUserMessageDedup(uniqueID, username, message)
+	}
 	uniqueID = strings.ToLower(strings.TrimSpace(uniqueID))
 	message = strings.ToLower(strings.TrimSpace(message))
 	username = strings.TrimSpace(username)
@@ -334,6 +391,9 @@ func (db *DB) AddUserMessageDedup(uniqueID, username, message string) error {
 
 // GetUserMessages returns all unique messages for a specific user.
 func (db *DB) GetUserMessages(uniqueID string) ([]model.UserMessage, error) {
+	if db.isSupabase {
+		return db.getSupUserMessages(uniqueID)
+	}
 	uniqueID = strings.ToLower(strings.TrimSpace(uniqueID))
 	if uniqueID == "" {
 		return nil, model.ErrUniqueIDRequired
@@ -363,6 +423,9 @@ func (db *DB) GetUserMessages(uniqueID string) ([]model.UserMessage, error) {
 
 // GetAllUserMessages returns all user messages grouped by user.
 func (db *DB) GetAllUserMessages() (map[string][]model.UserMessage, error) {
+	if db.isSupabase {
+		return db.getAllSupUserMessages()
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -389,6 +452,9 @@ func (db *DB) GetAllUserMessages() (map[string][]model.UserMessage, error) {
 
 // AddGift stores a gift received during a live stream.
 func (db *DB) AddGift(liveName, uniqueID, nickname, giftName string, repeatCount, giftType int) (int64, error) {
+	if db.isSupabase {
+		return db.addSupGift(liveName, uniqueID, nickname, giftName, repeatCount, giftType)
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -404,6 +470,9 @@ func (db *DB) AddGift(liveName, uniqueID, nickname, giftName string, repeatCount
 
 // GetRecentGifts returns the latest N gifts.
 func (db *DB) GetRecentGifts(liveName string, limit int) ([]model.Gift, error) {
+	if db.isSupabase {
+		return db.getSupRecentGifts(liveName, limit)
+	}
 	if limit < 1 || limit > 500 {
 		limit = 100
 	}
@@ -432,6 +501,9 @@ func (db *DB) GetRecentGifts(liveName string, limit int) ([]model.Gift, error) {
 
 // GetGiftsByUser returns all gifts for a specific user.
 func (db *DB) GetGiftsByUser(uniqueID string) ([]model.Gift, error) {
+	if db.isSupabase {
+		return db.getSupGiftsByUser(uniqueID)
+	}
 	uniqueID = strings.ToLower(strings.TrimSpace(uniqueID))
 	if uniqueID == "" {
 		return nil, model.ErrUniqueIDRequired
@@ -461,6 +533,9 @@ func (db *DB) GetGiftsByUser(uniqueID string) ([]model.Gift, error) {
 
 // GetGiftSummary returns a summary of gifts grouped by user for the current live.
 func (db *DB) GetGiftSummary() (map[string]map[string]int, error) {
+	if db.isSupabase {
+		return db.getSupGiftSummary()
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -489,6 +564,9 @@ func (db *DB) GetGiftSummary() (map[string]map[string]int, error) {
 
 // ClearGifts removes all gift records.
 func (db *DB) ClearGifts() (int64, error) {
+	if db.isSupabase {
+		return db.clearSupGifts()
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -501,6 +579,9 @@ func (db *DB) ClearGifts() (int64, error) {
 
 // GetTodayUserMessages returns all user messages from today.
 func (db *DB) GetTodayUserMessages() ([]model.UserMessage, error) {
+	if db.isSupabase {
+		return db.getSupTodayUserMessages()
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -528,6 +609,9 @@ func (db *DB) GetTodayUserMessages() ([]model.UserMessage, error) {
 
 // GetTodayAnomalyLogs returns anomaly logs from today for the given live name.
 func (db *DB) GetTodayAnomalyLogs(liveName string) ([]model.AnomalyLog, error) {
+	if db.isSupabase {
+		return db.getSupTodayAnomalyLogs(liveName)
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -560,6 +644,9 @@ func (db *DB) GetTodayAnomalyLogs(liveName string) ([]model.AnomalyLog, error) {
 
 // AddTargetGiftHistory stores a pending target gift history entry.
 func (db *DB) AddTargetGiftHistory(liveName, uniqueID, nickname, giftName string, receivedAt time.Time) (int64, error) {
+	if db.isSupabase {
+		return db.addSupTargetGiftHistory(liveName, uniqueID, nickname, giftName, receivedAt)
+	}
 	if receivedAt.IsZero() {
 		receivedAt = time.Now()
 	}
@@ -580,6 +667,9 @@ func (db *DB) AddTargetGiftHistory(liveName, uniqueID, nickname, giftName string
 
 // MarkTargetGiftAnswered sets answered_at/response_type for a pending history entry.
 func (db *DB) MarkTargetGiftAnswered(id int64, responseType string, answeredAt time.Time) error {
+	if db.isSupabase {
+		return db.markSupTargetGiftAnswered(id, responseType, answeredAt)
+	}
 	if id <= 0 {
 		return model.ErrInvalidID
 	}
@@ -608,6 +698,9 @@ func (db *DB) MarkTargetGiftAnswered(id int64, responseType string, answeredAt t
 
 // GetRecentTargetGiftHistory returns the latest N target gift history rows.
 func (db *DB) GetRecentTargetGiftHistory(liveName string, limit int) ([]model.TargetGiftHistory, error) {
+	if db.isSupabase {
+		return db.getSupRecentTargetGiftHistory(liveName, limit)
+	}
 	if limit < 1 || limit > 500 {
 		limit = 50
 	}
@@ -706,6 +799,9 @@ func (db *DB) maxTimestamp(query string, args ...any) (time.Time, bool, error) {
 // GetLastSessionActivity returns the latest timestamp among gifts and
 // anomaly logs for liveName, plus all user_messages (which have no live_name).
 func (db *DB) GetLastSessionActivity(liveName string) (time.Time, bool, error) {
+	if db.isSupabase {
+		return db.supGetLastSessionActivity(liveName)
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -738,6 +834,9 @@ func (db *DB) GetLastSessionActivity(liveName string) (time.Time, bool, error) {
 
 // DeleteSessionData removes gifts and anomaly logs for liveName and all user_messages.
 func (db *DB) DeleteSessionData(liveName string) error {
+	if db.isSupabase {
+		return db.supDeleteSessionData(liveName)
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -764,6 +863,9 @@ func (db *DB) DeleteSessionData(liveName string) error {
 
 // ExecSQL runs a raw statement. Used by tests to seed timestamps.
 func (db *DB) ExecSQL(query string, args ...any) error {
+	if db.isSupabase {
+		return db.ExecSupSQL(query, args...)
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	_, err := db.conn.Exec(query, args...)

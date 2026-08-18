@@ -559,7 +559,7 @@
             askAiController = new AbortController();
 
             try {
-                const resp = await fetch('/api/ask-ai', {
+                const resp = await fetch((window.__API_BASE__ || '') + '/api/ask-ai', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ question }),

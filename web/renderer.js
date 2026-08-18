@@ -1,12 +1,20 @@
 console.log('TikTok Live Monitor Renderer Loaded');
 
+// Base da API: quando a UI está servida pela Vercel (domínio próprio) e a
+// backend roda em outro host, defina em index.html antes do renderer.js:
+//   <script>window.__API_BASE__ = 'https://minha-app.vercel.app'</script>
+// Sem a variável, as requisições usam o host da página (mesmo domínio).
+const API_BASE = (window.__API_BASE__ || '').replace(/\/$/, '');
+const api = (path) => API_BASE + path;
+
 function ensureBrowserChart() {
     if (typeof window.Chart !== 'undefined') {
         return Promise.resolve();
     }
     return new Promise((resolve, reject) => {
         const script = document.createElement('script');
-        script.src = `${window.location.origin}/vendor/chart.js`;
+        // CDN (jsDelivr) porque o asset /vendor/chart.js só existe no backend Go.
+        script.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.js';
         script.onload = () => resolve();
         script.onerror = () => reject(new Error('Não foi possível carregar Chart.js.'));
         document.head.appendChild(script);
@@ -233,7 +241,7 @@ async function markTargetGiftAnswered(historyId, responseType) {
         return;
     }
     try {
-        await fetch('/api/target-gift-history/answer', {
+        await fetch(api('/api/target-gift-history/answer'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id, responseType })
@@ -245,7 +253,7 @@ async function markTargetGiftAnswered(historyId, responseType) {
 
 async function loadTargetGiftHistoryFromApi() {
     try {
-        const response = await fetch('/api/target-gift-history?limit=50');
+        const response = await fetch(api('/api/target-gift-history?limit=50'));
         if (!response.ok) {
             throw new Error(`status ${response.status}`);
         }
@@ -547,7 +555,7 @@ function _stopAiLedPoll() {
 function _startAiLedPoll() {
     _stopAiLedPoll();
     _aiLedPollTimer = setInterval(() => {
-        fetch('/api/probe-llm')
+        fetch(api('/api/probe-llm'))
             .then((r) => r.ok ? r.json() : { llmActive: false })
             .then((data) => setAiLedActive(Boolean(data && data.llmActive)))
             .catch(() => {});
@@ -647,7 +655,7 @@ document.addEventListener('keydown', event => {
 
         setConnectingState();
         showAiLedChecking();
-        const probePromise = fetch('/api/probe-llm')
+        const probePromise = fetch(api('/api/probe-llm'))
             .then(async (r) => {
                 if (!r.ok) return { llmActive: false };
                 return r.json();
@@ -655,7 +663,7 @@ document.addEventListener('keydown', event => {
             .catch(() => ({ llmActive: false }));
 
         try {
-            const response = await fetch('/api/connect', {
+            const response = await fetch(api('/api/connect'), {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -687,7 +695,7 @@ document.addEventListener('keydown', event => {
         statusDiv.innerText = 'Desconectando...';
 
         try {
-            await fetch('/api/disconnect', { method: 'POST' });
+            await fetch(api('/api/disconnect'), { method: 'POST' });
         } catch (error) {
             applyDisconnectedState(error.message);
         }
@@ -1291,7 +1299,7 @@ function removeUser(uniqueId, giftName, button) {
 
 async function loadInitialState() {
     try {
-        const response = await fetch('/api/state');
+        const response = await fetch(api('/api/state'));
         const payload = await response.json();
 
         if (typeof payload.aiConfigured === 'boolean') {
@@ -1311,7 +1319,7 @@ async function loadInitialState() {
 }
 
 function setupEventStream() {
-    const eventSource = new EventSource('/events');
+    const eventSource = new EventSource(api('/events'));
 
     eventSource.addEventListener('server-state', event => {
         const data = JSON.parse(event.data);
@@ -1397,7 +1405,7 @@ function renderTargetGifts() {
     if (!targetGiftsList) return;
     targetGiftsList.innerHTML = '';
 
-    fetch('/api/settings')
+    fetch(api('/api/settings'))
         .then(r => r.json())
         .then(settings => {
             const gifts = settings.targetGifts || [];
@@ -1420,12 +1428,12 @@ function renderTargetGifts() {
 async function removeTargetGift(giftToRemove) {
     console.log('Removing target gift:', giftToRemove);
     try {
-        const response = await fetch('/api/settings');
+        const response = await fetch(api('/api/settings'));
         const settings = await response.json();
         const gifts = settings.targetGifts || [];
         const updatedGifts = gifts.filter(g => g !== giftToRemove);
 
-        const res = await fetch('/api/settings', {
+        const res = await fetch(api('/api/settings'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ...settings, targetGifts: updatedGifts })
@@ -1444,7 +1452,7 @@ async function removeTargetGift(giftToRemove) {
 async function loadAvailableGifts() {
     if (!availableGiftSelect) return;
     try {
-        const response = await fetch('/api/available-gifts');
+        const response = await fetch(api('/api/available-gifts'));
         if (!response.ok) return;
         const gifts = await response.json();
         availableGiftSelect.innerHTML = '<option value="">Selecione um presente...</option>';
@@ -1468,7 +1476,7 @@ async function loadAllGifts() {
     }
     try {
         console.log('[Frontend] loadAllGifts: buscando presentes...');
-        const response = await fetch('/api/gifts');
+        const response = await fetch(api('/api/gifts'));
         console.log(`[Frontend] loadAllGifts: status=${response.status}`);
         if (!response.ok) {
             console.error('[Frontend] loadAllGifts: response não ok');
@@ -1498,7 +1506,7 @@ async function addTargetGift() {
         if (!value) return;
         console.log('Adding target gift:', value);
 
-        const response = await fetch('/api/settings');
+        const response = await fetch(api('/api/settings'));
         const settings = await response.json();
         const gifts = settings.targetGifts || [];
         if (gifts.includes(value)) {
@@ -1507,7 +1515,7 @@ async function addTargetGift() {
         }
 
         const updatedGifts = [...gifts, value];
-        const res = await fetch('/api/settings', {
+        const res = await fetch(api('/api/settings'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ...settings, targetGifts: updatedGifts })

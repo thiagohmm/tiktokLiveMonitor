@@ -18,5 +18,13 @@
     "tar": "^7.4.3",
     "tiktok-live-connector": "^2.1.1-beta1",
     "unzipper": "^0.12.3"
+  },
+  "vercel": {
+    "rewrites": [
+      {
+        "source": "/:path*",
+        "destination": "/"
+      }
+    ]
   }
 }

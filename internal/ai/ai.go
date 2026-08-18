@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -58,6 +60,9 @@ type Manager struct {
 	restartTimer *time.Timer
 	modelsDir   string
 	binDir      string
+	external    bool // LLM_ENDPOINT set: use a remote OpenAI-compatible server instead of spawning llama-server
+	extHost     string
+	extPort     int
 }
 
 type queuedTask struct {
@@ -69,10 +74,45 @@ type queuedTask struct {
 
 // NewManager creates a new AI Manager.
 func NewManager(modelsDir, binDir string) *Manager {
-	return &Manager{
+	m := &Manager{
 		modelsDir: modelsDir,
 		binDir:    binDir,
 	}
+	if host, port, ok := llmEndpointFromEnv(); ok {
+		m.external = true
+		m.extHost = host
+		m.extPort = port
+		log.Printf("[AI-Queue] LLM externo configurado via LLM_ENDPOINT: %s:%d", host, port)
+	}
+	return m
+}
+
+// llmEndpointFromEnv parses the LLM_ENDPOINT env var (e.g.
+// "http://host:8080", "https://host" or "host:8080") into host/port.
+func llmEndpointFromEnv() (host string, port int, ok bool) {
+	raw := strings.TrimSpace(os.Getenv("LLM_ENDPOINT"))
+	if raw == "" {
+		return "", 0, false
+	}
+	secure := strings.HasPrefix(raw, "https://")
+	v := strings.TrimPrefix(strings.TrimPrefix(raw, "https://"), "http://")
+	v = strings.TrimSuffix(v, "/")
+	if i := strings.Index(v, "/"); i >= 0 {
+		v = v[:i]
+	}
+	if h, p, err := net.SplitHostPort(v); err == nil {
+		if n, err2 := strconv.Atoi(p); err2 == nil {
+			return h, n, true
+		}
+		if secure {
+			return h, 443, true
+		}
+		return h, basePort, true
+	}
+	if secure {
+		return v, 443, true
+	}
+	return v, basePort, true
 }
 
 // ProbeReady checks if the LLM worker is healthy.
@@ -177,6 +217,35 @@ func (m *Manager) spawnLocal(ctx context.Context) error {
 		m.isRestarting = false
 		m.mu.Unlock()
 	}()
+
+	// Remote LLM via LLM_ENDPOINT: no local process is spawned.
+	if m.external {
+		w := &Worker{
+			Host:     m.extHost,
+			Port:     m.extPort,
+			IsLocal:  false,
+			ready:    false,
+			lastSeen: time.Now(),
+		}
+		for i := 0; i < healthMaxTries; i++ {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(healthRetryMs * time.Millisecond):
+			}
+			if w.checkHealth(ctx) {
+				log.Printf("[AI-Queue] LLM externo pronto em %s:%d", w.Host, w.Port)
+				m.mu.Lock()
+				m.worker = w
+				m.mu.Unlock()
+				return nil
+			}
+		}
+		m.mu.Lock()
+		m.worker = w // Keep worker even if not fully ready.
+		m.mu.Unlock()
+		return nil
+	}
 
 	binPath, modelPath := m.resolvePaths()
 	if _, err := os.Stat(binPath); err != nil {
@@ -433,7 +502,9 @@ func (w *Worker) checkHealth(ctx context.Context) bool {
 	}
 	resp.Body.Close()
 
-	w.ready = resp.StatusCode == 200
+	// 404 means the server is up but the /health route is missing
+	// (non-llama-server OpenAI-compatible endpoints).
+	w.ready = resp.StatusCode == 200 || resp.StatusCode == 404
 	return w.ready
 }
 

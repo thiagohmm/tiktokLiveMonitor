@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -118,7 +119,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	addr := fmt.Sprintf("%s:%d", host, port)
 	s.httpServer = &http.Server{
 		Addr:    addr,
-		Handler: mux,
+		Handler: corsMiddleware(mux),
 	}
 
 	// Graceful shutdown.
@@ -139,6 +140,31 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 
 	log.Printf("[View] Running at http://%s:%d", host, port)
 	return s.httpServer.ListenAndServe()
+}
+
+// corsMiddleware adds CORS headers so the UI can run on another origin
+// (ex.: hospedada na Vercel apontando para esta API). Defina CORS_ORIGIN
+// para restringir a origem permitida (padrão: "*").
+func corsMiddleware(next http.Handler) http.Handler {
+	origin := os.Getenv("CORS_ORIGIN")
+	if origin == "" {
+		origin = "*"
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if o := r.Header.Get("Origin"); o != "" {
+			if origin == "*" || strings.Contains(origin, o) {
+				w.Header().Set("Access-Control-Allow-Origin", o)
+				w.Header().Set("Vary", "Origin")
+			}
+		}
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // --- SSE Handlers ---
