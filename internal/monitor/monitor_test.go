@@ -442,6 +442,8 @@ func TestIsGiftCountingSettlement(t *testing.T) {
 		{"streak ended bool", EventData{"giftType": float64(1), "repeatEnd": true}, true},
 		{"streak in progress number", EventData{"giftType": float64(1), "repeatEnd": float64(0)}, false},
 		{"streak ended number", EventData{"giftType": float64(1), "repeatEnd": float64(1)}, true},
+		{"missing repeatEnd defaults settled", EventData{"giftType": float64(1)}, true},
+		{"missing repeatEnd non-streak", EventData{"giftType": float64(0)}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

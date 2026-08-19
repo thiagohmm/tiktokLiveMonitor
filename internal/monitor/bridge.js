@@ -427,7 +427,7 @@ async function doConnect(username) {
                 }
             }
 
-            if (giftType !== 1 || repeatEnd) {
+            if (repeatEnd) {
                 send('new-gift-user', payload);
             }
         } catch (err) {

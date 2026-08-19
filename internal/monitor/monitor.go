@@ -1131,6 +1131,9 @@ func (m *Monitor) isGiftCountingSettlement(data EventData) bool {
 	if giftType != 1 {
 		return true
 	}
+	if _, ok := data["repeatEnd"]; !ok {
+		return true
+	}
 	return truthy(data["repeatEnd"])
 }
 

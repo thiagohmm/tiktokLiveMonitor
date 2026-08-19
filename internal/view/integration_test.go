@@ -399,6 +399,7 @@ func TestHandleGiftEventStoresJSONNumbersAndNestedName(t *testing.T) {
 		"giftName":    "Rose",
 		"repeatCount": float64(5),
 		"giftType":    float64(1),
+		"repeatEnd":   true,
 	})
 	srv.controller.HandleGiftEvent(monitor.EventData{
 		"uniqueId": nil,
@@ -426,6 +427,39 @@ func TestHandleGiftEventStoresJSONNumbersAndNestedName(t *testing.T) {
 	}
 	if byName["Dino"].UniqueID != "unknown" {
 		t.Fatalf("expected unknown uniqueId, got %q", byName["Dino"].UniqueID)
+	}
+}
+
+func TestHandleGiftEventSkipsStreakInProgress(t *testing.T) {
+	srv, db, _, mon := setupTestServer(t)
+	mon.SetCurrentLive("live1")
+
+	srv.controller.HandleGiftEvent(monitor.EventData{
+		"uniqueId":    "user1",
+		"nickname":    "User One",
+		"giftName":    "Rose",
+		"repeatCount": float64(3),
+		"giftType":    float64(1),
+		"repeatEnd":   false,
+	})
+	srv.controller.HandleGiftEvent(monitor.EventData{
+		"uniqueId":    "user1",
+		"nickname":    "User One",
+		"giftName":    "Rose",
+		"repeatCount": float64(3),
+		"giftType":    float64(1),
+		"repeatEnd":   true,
+	})
+
+	gifts, err := db.GetRecentGifts("live1", 10)
+	if err != nil {
+		t.Fatalf("get gifts: %v", err)
+	}
+	if len(gifts) != 1 {
+		t.Fatalf("expected 1 stored gift after streak settlement, got %d", len(gifts))
+	}
+	if gifts[0].RepeatCount != 3 {
+		t.Fatalf("expected repeatCount 3, got %d", gifts[0].RepeatCount)
 	}
 }
 

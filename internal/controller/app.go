@@ -277,6 +277,9 @@ func (c *AppController) HandleGiftEvent(data monitor.EventData) {
 		nickname = uniqueID
 	}
 	giftName := resolveGiftName(data)
+	if isGiftStreakInProgress(data) {
+		return
+	}
 	repeatCount := eventInt(data, "repeatCount", 1)
 	if repeatCount < 1 {
 		repeatCount = 1
@@ -342,6 +345,11 @@ func toInt64(v interface{}) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func isGiftStreakInProgress(data monitor.EventData) bool {
+	ended := eventBoolPtr(data, "repeatEnd")
+	return ended != nil && !*ended
 }
 
 func eventInt(data monitor.EventData, key string, fallback int) int {
