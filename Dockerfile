@@ -29,7 +29,7 @@ RUN if [ "$SKIP_TESTS" = "1" ]; then echo "SKIP_TESTS=1: pulando testes"; \
 RUN CGO_ENABLED=1 GOOS=linux GOARCH=$TARGETARCH go build -o /tiktok-live-monitor .
 
 # Stage 2: Minimal runtime (multi-arch)
-FROM --platform=$TARGETPLATFORM debian:bookworm-slim
+FROM --platform=$TARGETPLATFORM debian:trixie-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
