@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -178,6 +179,15 @@ func (m *Manager) spawnLocal(ctx context.Context) error {
 		m.mu.Unlock()
 	}()
 
+	// Terminate any previous local server so it frees port 8080 before we
+	// spawn a replacement (avoids "port is not free" + orphan processes).
+	m.mu.Lock()
+	if m.worker != nil && m.worker.IsLocal {
+		m.worker.kill()
+		m.worker = nil
+	}
+	m.mu.Unlock()
+
 	binPath, modelPath := m.resolvePaths()
 	if _, err := os.Stat(binPath); err != nil {
 		return fmt.Errorf("llama-server binary not found at %s: %w", binPath, err)
@@ -219,6 +229,7 @@ func (m *Manager) spawnLocal(ctx context.Context) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start llama-server: %w", err)
 	}
+	go cmd.Wait() // Reap the child when it exits (prevents zombie processes).
 
 	w := &Worker{
 		Host:    bindHost,
@@ -334,7 +345,15 @@ func (m *Manager) processQueue(ctx context.Context) {
 			log.Printf("[AI] Erro ao processar tarefa: %v", err)
 			m.mu.Lock()
 			if m.worker == w {
-				m.worker.ready = false
+				if w.IsLocal && !w.processDead() {
+					// Worker is still running: transient error (e.g. a slow
+					// generation that timed out). Retry WITHOUT restarting the
+					// server, otherwise every ask triggers a full model reload.
+					log.Printf("[AI-Queue] Worker ainda ativo; erro transitório, mantendo sem restart.")
+				} else {
+					log.Printf("[AI-Queue] Worker morto; marcado para restart.")
+					w.ready = false
+				}
 			}
 			m.queue = append([]queuedTask{*task}, m.queue...)
 			m.mu.Unlock()
@@ -463,11 +482,12 @@ func (w *Worker) complete(ctx context.Context, req CompletionRequest) (string, e
 	default:
 	}
 
-	// Use parent context deadline if set, otherwise apply a reasonable timeout.
+	// Use parent context deadline if set, otherwise apply the completion
+	// timeout (120s): local CPU generation can legitimately take that long.
 	httpCtx := ctx
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
-		httpCtx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		httpCtx, cancel = context.WithTimeout(ctx, completionTimeout)
 		defer cancel()
 	}
 
@@ -517,6 +537,16 @@ func (w *Worker) kill() {
 		w.Process.Process.Kill()
 		w.Process = nil
 	}
+}
+
+// processDead reports whether the local worker process has exited.
+func (w *Worker) processDead() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.Process == nil || w.Process.Process == nil {
+		return true
+	}
+	return w.Process.Process.Signal(syscall.Signal(0)) != nil
 }
 
 func numCPU() int {

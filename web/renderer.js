@@ -348,7 +348,7 @@ async function renderGiftHistory() {
 }
 
 async function renderPinnedCommentHistory() {
-    historyModalTitle.textContent = 'Últimos 15 Comentários Fixados';
+    historyModalTitle.textContent = 'Histórico de Comentários Fixados';
     historyModalBody.replaceChildren();
 
     const loading = document.createElement('p');
@@ -1085,6 +1085,20 @@ function getGiftCountFromTableRow(row) {
     return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
+function isGiftStreakInProgress(gift) {
+    const v = gift ? gift.repeatEnd : undefined;
+    return v === false || v === 0 || v === 'false' || v === '0';
+}
+
+function committedGiftCountFromRow(row) {
+    const raw = row.getAttribute('data-committed');
+    if (raw == null || raw === '') {
+        return getGiftCountFromTableRow(row);
+    }
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
 function reorderAllGiftsTableByCount() {
     const rows = Array.from(allGiftsTableBody.children);
     rows.sort((a, b) => (Number(b.getAttribute('data-count')) || 0) - (Number(a.getAttribute('data-count')) || 0));
@@ -1121,13 +1135,16 @@ function addAllGiftToList(gift) {
     rememberLiveUser(gift);
 
     const quantity = Math.max(1, Number(gift.repeatCount) || 1);
-    const isStreakTick = Number(gift.giftType) === 1 && gift.repeatEnd === false;
+    const inProgress = isGiftStreakInProgress(gift);
     const existingRow = findAllGiftsRowForGift(gift);
 
     if (existingRow) {
-        const current = getGiftCountFromTableRow(existingRow);
-        // Durante uma streak o repeatCount é acumulado; define o maior total em vez de somar.
-        const next = isStreakTick ? Math.max(current, quantity) : current + quantity;
+        const committed = committedGiftCountFromRow(existingRow);
+        // Combo em andamento: mostra committed + repeatCount. No fim, soma só o combo (não o total já exibido).
+        const nextCommitted = inProgress ? committed : committed + quantity;
+        const nextPending = inProgress ? quantity : 0;
+        const next = nextCommitted + nextPending;
+        existingRow.setAttribute('data-committed', String(nextCommitted));
         existingRow.setAttribute('data-count', String(next));
         const countCell = existingRow.querySelector('.gift-count-cell');
         if (countCell) {
@@ -1143,13 +1160,18 @@ function addAllGiftToList(gift) {
         return;
     }
 
+    const committed = inProgress ? 0 : quantity;
+    const pending = inProgress ? quantity : 0;
+    const total = committed + pending;
+
     const tr = document.createElement('tr');
     tr.className = 'gift-row';
     tr.setAttribute('data-id', gift.uniqueId);
     tr.setAttribute('data-user-id', gift.uniqueId);
     tr.setAttribute('data-gift-id', gift.giftId != null && gift.giftId !== '' ? String(gift.giftId) : '');
     tr.setAttribute('data-gift-name', gift.giftName || '');
-    tr.setAttribute('data-count', String(quantity));
+    tr.setAttribute('data-committed', String(committed));
+    tr.setAttribute('data-count', String(total));
     tr.setAttribute('data-target-gift', gift.isTargetGift ? 'true' : 'false');
 
     if (gift.isRed) {
@@ -1175,7 +1197,7 @@ function addAllGiftToList(gift) {
 
     const countTd = document.createElement('td');
     countTd.className = 'gift-count-cell';
-    countTd.textContent = String(quantity);
+    countTd.textContent = String(total);
     tr.appendChild(countTd);
 
     allGiftsTableBody.appendChild(tr);
@@ -1698,7 +1720,7 @@ async function loadPendingTargetGifts() {
 
 async function loadPinnedCommentsFromApi() {
     try {
-        const response = await fetch('/api/pinned-comments?limit=15');
+        const response = await fetch('/api/pinned-comments?limit=50');
         if (!response.ok) {
             throw new Error(`status ${response.status}`);
         }

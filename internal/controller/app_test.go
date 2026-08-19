@@ -59,6 +59,26 @@ func TestEventIntFromJSONFloat(t *testing.T) {
 	}
 }
 
+func TestIsGiftStreakInProgress(t *testing.T) {
+	tests := []struct {
+		name string
+		data monitor.EventData
+		want bool
+	}{
+		{"missing repeatEnd", monitor.EventData{}, false},
+		{"repeatEnd true", monitor.EventData{"repeatEnd": true}, false},
+		{"repeatEnd false", monitor.EventData{"repeatEnd": false}, true},
+		{"repeatEnd 0", monitor.EventData{"repeatEnd": float64(0)}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isGiftStreakInProgress(tt.data); got != tt.want {
+				t.Fatalf("isGiftStreakInProgress() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEventStringNilSafe(t *testing.T) {
 	data := monitor.EventData{"uniqueId": nil, "userId": "abc"}
 	if got := eventString(data, "uniqueId", "userId"); got != "abc" {
