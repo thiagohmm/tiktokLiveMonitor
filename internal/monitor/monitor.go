@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,7 @@ const (
 	EventLiveUserConnected = "live-user-connected"
 	EventNewFollower       = "new-follower"
 	EventNewSocialEvent    = "new-social-event"
+	EventGiftsList         = "gifts-list"
 )
 
 type EventData map[string]interface{}
@@ -126,6 +128,7 @@ type Monitor struct {
 	connected       bool
 	repo            model.Repository
 	giftsCh         chan []string
+	availableGifts  []string
 
 	bridgeEnded       chan struct{}
 	reconnectKick     chan struct{}
@@ -135,7 +138,8 @@ type Monitor struct {
 	supDone           chan struct{}
 	supStopCh         chan struct{}
 
-	CorrelateGiftQuestion func(gift GiftPayload)
+	// LLMCorrelate is an optional fallback when the heuristic finds no match.
+	LLMCorrelate func(ctx context.Context, gift GiftPayload, candidates []QuestionEntry) *QuestionEntry
 }
 
 func New() (*Monitor, error) {
@@ -251,8 +255,11 @@ func (m *Monitor) startBridge() error {
 	if err != nil {
 		return fmt.Errorf("resolve bridge: %w", err)
 	}
-	log.Printf("[Monitor] Starting bridge: %s", bridgePath)
+	workDir := resolveNodeWorkDir(bridgePath)
+	log.Printf("[Monitor] Starting bridge: %s (workdir=%s)", bridgePath, workDir)
 	cmd := exec.Command("node", bridgePath)
+	cmd.Dir = workDir
+	cmd.Env = append(os.Environ(), "NODE_PATH="+filepath.Join(workDir, "node_modules"))
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("stdin pipe: %w", err)
@@ -261,11 +268,21 @@ func (m *Monitor) startBridge() error {
 	if err != nil {
 		return fmt.Errorf("stdout pipe: %w", err)
 	}
-	cmd.Stderr = nil
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("stderr pipe: %w", err)
+	}
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start bridge: %w", err)
 	}
+
+	go func() {
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			log.Printf("[Bridge stderr] %s", scanner.Text())
+		}
+	}()
 
 	m.mu.Lock()
 	m.cmd = cmd
@@ -277,6 +294,31 @@ func (m *Monitor) startBridge() error {
 	go m.readBridge()
 
 	return nil
+}
+
+func resolveNodeWorkDir(bridgePath string) string {
+	candidates := make([]string, 0, 6)
+	if cwd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, cwd)
+	}
+	dir := filepath.Dir(bridgePath)
+	for i := 0; i < 5; i++ {
+		candidates = append(candidates, dir)
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(filepath.Join(candidate, "node_modules", "tiktok-live-connector")); err == nil {
+			return candidate
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		return cwd
+	}
+	return filepath.Dir(bridgePath)
 }
 
 func (m *Monitor) stopBridge() {
@@ -437,7 +479,13 @@ func (m *Monitor) sendBridge(cmd map[string]interface{}) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(m.stdin, "%s\n", data)
+	m.mu.Lock()
+	stdin := m.stdin
+	m.mu.Unlock()
+	if stdin == nil {
+		return fmt.Errorf("bridge stdin is not available")
+	}
+	_, err = fmt.Fprintf(stdin, "%s\n", data)
 	return err
 }
 
@@ -534,18 +582,15 @@ func (m *Monitor) handleBridgeEvent(eventType string, data EventData) {
 	case "error":
 		log.Printf("[Bridge] Error: %v", data["message"])
 
-	case "gifts-list":
-		if names, ok := data["gifts"].([]interface{}); ok {
-			result := make([]string, 0, len(names))
-			for _, n := range names {
-				if s, ok := n.(string); ok {
-					result = append(result, s)
-				}
-			}
-			select {
-			case m.giftsCh <- result:
-			default:
-			}
+	case EventGiftsList:
+		names := parseGiftNames(data)
+		m.cacheAvailableGifts(names)
+		select {
+		case m.giftsCh <- names:
+		default:
+		}
+		if len(names) > 0 {
+			m.emit(EventGiftsList, EventData{"gifts": names})
 		}
 	}
 }
@@ -556,7 +601,7 @@ func (m *Monitor) handleBridgeEvent(eventType string, data EventData) {
 func (m *Monitor) handleChatMessage(data EventData) []pendingEmit {
 	var pending []pendingEmit
 
-	comment, _ := data["comment"].(string)
+	comment := asString(data["comment"])
 	comment = strings.TrimSpace(comment)
 	if comment == "" {
 		return pending
@@ -640,7 +685,10 @@ func (m *Monitor) handleTargetGift(data EventData) {
 	isPinned := m.pinnedUsers[uniqueID]
 	m.mu.Unlock()
 
-	giftName, _ := data["giftName"].(string)
+	giftName := asString(data["giftName"])
+	if giftName == "" {
+		giftName = asString(data["name"])
+	}
 	isTarget := m.isTargetGift(giftName)
 
 	data["isRed"] = isTarget && isPinned
@@ -651,22 +699,20 @@ func (m *Monitor) handleTargetGift(data EventData) {
 
 	m.emit(EventGiftUser, data)
 
-	if m.CorrelateGiftQuestion != nil {
-		repeatCount, _ := toInt(data["repeatCount"])
-		giftType, _ := toInt(data["giftType"])
-		repeatEnd, _ := data["repeatEnd"].(bool)
+	repeatCount, _ := toInt(data["repeatCount"])
+	giftType, _ := toInt(data["giftType"])
+	repeatEnd := truthy(data["repeatEnd"])
 
-		gift := GiftPayload{
-			GiftName:    giftName,
-			UniqueID:    user.UniqueID,
-			Nickname:    user.Nickname,
-			RepeatCount: repeatCount,
-			RepeatEnd:   repeatEnd,
-			GiftType:    giftType,
-			IsFollower:  user.IsFollower,
-		}
-		go m.CorrelateGiftQuestion(gift)
+	gift := GiftPayload{
+		GiftName:    giftName,
+		UniqueID:    user.UniqueID,
+		Nickname:    user.Nickname,
+		RepeatCount: repeatCount,
+		RepeatEnd:   repeatEnd,
+		GiftType:    giftType,
+		IsFollower:  user.IsFollower,
 	}
+	go m.correlateGiftWithQuestion(gift)
 }
 
 func toInt(v interface{}) (int, bool) {
@@ -772,9 +818,20 @@ func (m *Monitor) loadTodayData() {
 				Comment:   um.Message,
 				Timestamp: now,
 			})
+			if looksLikeQuestion(um.Message) {
+				m.questionBuffer = append(m.questionBuffer, QuestionEntry{
+					UniqueID:  um.UniqueID,
+					Nickname:  um.Username,
+					Comment:   um.Message,
+					Timestamp: now,
+				})
+			}
 		}
 		if len(m.chatBuffer) > chatBufferMax {
 			m.chatBuffer = m.chatBuffer[len(m.chatBuffer)-chatBufferMax:]
+		}
+		if len(m.questionBuffer) > questionBufferMax {
+			m.questionBuffer = m.questionBuffer[len(m.questionBuffer)-questionBufferMax:]
 		}
 		m.mu.Unlock()
 		log.Printf("[Monitor] Loaded %d messages from today", len(todayMsgs))
@@ -818,8 +875,9 @@ func (m *Monitor) StopMonitoring() {
 
 func (m *Monitor) emit(eventType string, data EventData) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, h := range m.handlers {
+	handlers := append([]EventHandler(nil), m.handlers...)
+	m.mu.Unlock()
+	for _, h := range handlers {
 		h(eventType, data)
 	}
 }
@@ -867,39 +925,130 @@ func (m *Monitor) GetQuestionBuffer() []QuestionEntry {
 }
 
 func (m *Monitor) FetchAvailableGifts() ([]string, error) {
-	if m.stdin == nil {
-		return nil, fmt.Errorf("bridge not started")
+	if cached := m.CachedAvailableGifts(); len(cached) > 0 {
+		return cached, nil
 	}
-	// Clear any pending result
-	select {
-	case <-m.giftsCh:
-	default:
+	m.mu.Lock()
+	stdin := m.stdin
+	m.mu.Unlock()
+	if stdin != nil {
+		go m.requestAvailableGifts()
 	}
+	return []string{}, nil
+}
+
+func (m *Monitor) requestAvailableGifts() {
 	if err := m.sendBridge(map[string]interface{}{
 		"action": "fetch-gifts",
 	}); err != nil {
-		return nil, err
+		log.Printf("[Monitor] request available gifts: %v", err)
 	}
-	select {
-	case gifts := <-m.giftsCh:
-		return gifts, nil
-	case <-time.After(15 * time.Second):
-		return nil, fmt.Errorf("timeout fetching gifts")
+}
+
+// CachedAvailableGifts returns a copy of the last non-empty gift catalog.
+func (m *Monitor) CachedAvailableGifts() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.availableGifts) == 0 {
+		return nil
+	}
+	out := make([]string, len(m.availableGifts))
+	copy(out, m.availableGifts)
+	return out
+}
+
+func (m *Monitor) cacheAvailableGifts(names []string) {
+	if len(names) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.availableGifts = append([]string(nil), names...)
+}
+
+func parseGiftNames(data EventData) []string {
+	raw, ok := data["gifts"]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch names := raw.(type) {
+	case []string:
+		out := make([]string, 0, len(names))
+		for _, s := range names {
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []interface{}:
+		out := make([]string, 0, len(names))
+		for _, n := range names {
+			if s, ok := n.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
 	}
 }
 
 func extractFromData(data EventData) UserInfo {
-	info := UserInfo{}
-	if uid, ok := data["uniqueId"].(string); ok {
-		info.UniqueID = uid
+	info := UserInfo{
+		UniqueID: asString(data["uniqueId"]),
+		Nickname: asString(data["nickname"]),
 	}
-	if nick, ok := data["nickname"].(string); ok {
-		info.Nickname = nick
+	if info.Nickname == "" {
+		info.Nickname = info.UniqueID
 	}
-	if f, ok := data["isFollower"].(bool); ok {
-		info.IsFollower = &f
+	if f, ok := parseFollowerFlag(data["isFollower"]); ok {
+		info.IsFollower = f
 	}
 	return info
+}
+
+func asString(v interface{}) string {
+	switch n := v.(type) {
+	case string:
+		return strings.TrimSpace(n)
+	case float64:
+		return strconv.FormatInt(int64(n), 10)
+	case json.Number:
+		return strings.TrimSpace(n.String())
+	case int:
+		return strconv.Itoa(n)
+	case int64:
+		return strconv.FormatInt(n, 10)
+	default:
+		return ""
+	}
+}
+
+func parseFollowerFlag(v interface{}) (*bool, bool) {
+	switch n := v.(type) {
+	case bool:
+		b := n
+		return &b, true
+	case float64:
+		if n == 1 || n == 2 {
+			b := true
+			return &b, true
+		}
+		if n == 0 {
+			b := false
+			return &b, true
+		}
+	case string:
+		switch strings.TrimSpace(strings.ToLower(n)) {
+		case "true", "1", "2":
+			b := true
+			return &b, true
+		case "false", "0":
+			b := false
+			return &b, true
+		}
+	}
+	return nil, false
 }
 
 func normalizeID(value string) string {
@@ -979,12 +1128,28 @@ func (m *Monitor) isTargetGift(name string) bool {
 
 func (m *Monitor) isGiftCountingSettlement(data EventData) bool {
 	giftType, _ := toInt(data["giftType"])
-	repeatEnd, _ := data["repeatEnd"].(bool)
+	if giftType != 1 {
+		return true
+	}
+	return truthy(data["repeatEnd"])
+}
 
-	if giftType == 1 && repeatEnd == false {
+func truthy(v interface{}) bool {
+	switch n := v.(type) {
+	case bool:
+		return n
+	case float64:
+		return n != 0
+	case int:
+		return n != 0
+	case int64:
+		return n != 0
+	case string:
+		s := strings.TrimSpace(strings.ToLower(n))
+		return s != "" && s != "false" && s != "0"
+	default:
 		return false
 	}
-	return true
 }
 
 func coalesce(values ...string) string {

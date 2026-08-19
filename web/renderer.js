@@ -80,6 +80,56 @@ function normalizeListenUser(value) {
     return String(value || '').trim().replace(/^@+/, '').toLowerCase();
 }
 
+function normalizeFollowerFlag(value) {
+    if (value === true || value === 1 || value === '1' || value === 'true') {
+        return true;
+    }
+    if (value === false || value === 0 || value === '0' || value === 'false') {
+        return false;
+    }
+    return null;
+}
+
+function mergeFollowerStatus(previous, next) {
+    const incoming = normalizeFollowerFlag(next);
+    const current = normalizeFollowerFlag(previous);
+    if (incoming === true) {
+        return true;
+    }
+    if (incoming === false && current !== true) {
+        return false;
+    }
+    if (current != null) {
+        return current;
+    }
+    return incoming;
+}
+
+function followerStatusForDisplay(data) {
+    const key = normalizeListenUser((data && (data.uniqueId || data.nickname)) || '');
+    const stored = key ? liveUsers.get(key) : null;
+    if (stored && stored.isFollower != null) {
+        return stored.isFollower;
+    }
+    return normalizeFollowerFlag(data && data.isFollower);
+}
+
+function ensureFollowerBadge(userTd, data) {
+    if (!userTd) {
+        return;
+    }
+    const badge = createFollowerBadge(followerStatusForDisplay(data));
+    if (!badge) {
+        return;
+    }
+    const existing = userTd.querySelector('.badge-follower, .badge-not-follower');
+    if (existing) {
+        existing.replaceWith(badge);
+        return;
+    }
+    userTd.appendChild(badge);
+}
+
 function rememberLiveUser(data) {
     if (!data) {
         return;
@@ -87,7 +137,6 @@ function rememberLiveUser(data) {
 
     const uniqueId = String(data.uniqueId || '').trim().replace(/^@+/, '');
     const nickname = String(data.nickname || uniqueId || '').trim();
-    const isFollower = data.isFollower;
     const key = normalizeListenUser(uniqueId || nickname);
 
     if (!key) {
@@ -98,7 +147,7 @@ function rememberLiveUser(data) {
     liveUsers.set(key, {
         uniqueId: uniqueId || previous.uniqueId || '',
         nickname: nickname || previous.nickname || uniqueId || 'Nao identificado',
-        isFollower: isFollower !== undefined ? isFollower : previous.isFollower,
+        isFollower: mergeFollowerStatus(previous.isFollower, data.isFollower),
         lastSeen: Date.now()
     });
 
@@ -175,13 +224,14 @@ function renderUserLine(row, nickname, uniqueId, isFollower) {
 }
 
 function createFollowerBadge(isFollower) {
-    if (isFollower === true) {
+    const flag = normalizeFollowerFlag(isFollower);
+    if (flag === true) {
         const span = document.createElement('span');
         span.className = 'badge badge-follower';
         span.textContent = 'Segue';
         return span;
     }
-    if (isFollower === false) {
+    if (flag === false) {
         const span = document.createElement('span');
         span.className = 'badge badge-not-follower';
         span.textContent = 'Não Segue';
@@ -297,14 +347,33 @@ async function renderGiftHistory() {
     }));
 }
 
-function renderPinnedCommentHistory() {
+async function renderPinnedCommentHistory() {
     historyModalTitle.textContent = 'Últimos 15 Comentários Fixados';
-    historyModalBody.replaceChildren(createModalList(pinnedCommentHistory, (row, item) => {
+    historyModalBody.replaceChildren();
+
+    const loading = document.createElement('p');
+    loading.className = 'modal-empty';
+    loading.textContent = 'Carregando histórico...';
+    historyModalBody.appendChild(loading);
+
+    const items = await loadPinnedCommentsFromApi();
+    if (activeModalType !== 'pinned-comments') {
+        return;
+    }
+
+    historyModalBody.replaceChildren(createModalList(items, (row, item) => {
         renderUserLine(row, item.nickname, item.uniqueId, item.isFollower);
 
         const comment = document.createElement('span');
         comment.textContent = item.comment || '[sem texto identificado]';
         row.appendChild(comment);
+
+        const meta = document.createElement('div');
+        meta.className = 'modal-item-meta';
+        const when = document.createElement('span');
+        when.textContent = `${formatSaoPauloDateTime(item.timestamp)} (SP)`;
+        meta.appendChild(when);
+        row.appendChild(meta);
     }));
 }
 
@@ -447,15 +516,7 @@ function addTargetGiftToHistory(user) {
     }
 }
 
-function addPinnedCommentToHistory(pinnedComment) {
-    pinnedCommentHistory.unshift({
-        uniqueId: pinnedComment.uniqueId || '',
-        nickname: pinnedComment.nickname || pinnedComment.uniqueId || 'Nao identificado',
-        comment: pinnedComment.comment || '[sem texto identificado]',
-        timestamp: pinnedComment.timestamp || Date.now(),
-        isFollower: pinnedComment.isFollower
-    });
-    trimHistory(pinnedCommentHistory);
+function addPinnedCommentToHistory() {
     if (activeModalType === 'pinned-comments') {
         renderPinnedCommentHistory();
     }
@@ -800,8 +861,10 @@ function handleConnectionStatus(data) {
     if (data.success) {
         applyConnectedState(data.username);
         loadAvailableGifts();
-        console.log('[Frontend] handleConnectionStatus: chamando loadAllGifts()...');
+        console.log('[Frontend] handleConnectionStatus: restaurando históricos...');
         loadAllGifts();
+        loadPendingTargetGifts();
+        loadPinnedComments();
         return;
     }
 
@@ -825,11 +888,26 @@ function applyReconnectingState(retries, nextRetryInMs) {
     disconnectBtn.disabled = false;
 }
 
-function addUserToList(user) {
+function addUserToList(user, options = {}) {
     rememberLiveUser(user);
-    addTargetGiftToHistory(user);
+    if (!options.fromHistory) {
+        addTargetGiftToHistory(user);
+    }
 
     const historyId = user.historyId != null ? String(user.historyId) : '';
+
+    if (historyId) {
+        const existingByHistory = Array.from(userTableBody.querySelectorAll('.user-row')).find(row => {
+            return row.dataset.historyId === historyId;
+        });
+        if (existingByHistory) {
+            applyTargetGiftReceivedAt(existingByHistory, user.receivedAt, options.fromHistory);
+            startAutoRemoveTimer(user.uniqueId, user.giftName, existingByHistory, {
+                refreshStart: !options.fromHistory
+            });
+            return;
+        }
+    }
 
     const existingRow = Array.from(userTableBody.querySelectorAll('.user-row')).find(row => {
         return String(row.getAttribute('data-id')).toLowerCase() === String(user.uniqueId).toLowerCase() &&
@@ -837,9 +915,11 @@ function addUserToList(user) {
     });
 
     if (existingRow) {
-        const previousHistoryId = existingRow.dataset.historyId;
-        if (previousHistoryId && previousHistoryId !== historyId) {
-            markTargetGiftAnswered(previousHistoryId, 'automatic');
+        if (!options.fromHistory) {
+            const previousHistoryId = existingRow.dataset.historyId;
+            if (previousHistoryId && previousHistoryId !== historyId) {
+                markTargetGiftAnswered(previousHistoryId, 'automatic');
+            }
         }
         if (historyId) {
             existingRow.dataset.historyId = historyId;
@@ -848,7 +928,10 @@ function addUserToList(user) {
         if (user.isRed) {
             existingRow.classList.add('red');
         }
-        startAutoRemoveTimer(user.uniqueId, user.giftName, existingRow);
+        applyTargetGiftReceivedAt(existingRow, user.receivedAt, options.fromHistory);
+        startAutoRemoveTimer(user.uniqueId, user.giftName, existingRow, {
+            refreshStart: !options.fromHistory
+        });
         return;
     }
 
@@ -869,7 +952,7 @@ function addUserToList(user) {
     userSpan.textContent = user.nickname;
     userTd.appendChild(userSpan);
 
-    const badge = createFollowerBadge(user.isFollower);
+    const badge = createFollowerBadge(followerStatusForDisplay(user));
     if (badge) {
         userTd.appendChild(badge);
     }
@@ -893,8 +976,21 @@ function addUserToList(user) {
     actionTd.appendChild(actionBtn);
     tr.appendChild(actionTd);
 
+    applyTargetGiftReceivedAt(tr, user.receivedAt, options.fromHistory);
     userTableBody.prepend(tr);
-    startAutoRemoveTimer(user.uniqueId, user.giftName, tr);
+    startAutoRemoveTimer(user.uniqueId, user.giftName, tr, {
+        refreshStart: !options.fromHistory
+    });
+}
+
+function applyTargetGiftReceivedAt(element, receivedAt, fromHistory) {
+    if (!fromHistory || !receivedAt || element.dataset.addedAt) {
+        return;
+    }
+    const ts = new Date(receivedAt).getTime();
+    if (Number.isFinite(ts)) {
+        element.dataset.addedAt = String(ts);
+    }
 }
 
 function startAutoRemoveTimer(uniqueId, giftName, element, options = {}) {
@@ -966,10 +1062,15 @@ function normalizedGiftNameFromPayload(gift) {
 
 function findAllGiftsRowForGift(gift) {
     const uid = normalizeUserIdForGift(gift.uniqueId);
+    const giftId = gift.giftId != null && gift.giftId !== '' ? String(gift.giftId) : '';
     const name = normalizedGiftNameFromPayload(gift);
     return Array.from(allGiftsTableBody.querySelectorAll('tr')).find(row => {
         if (normalizeUserIdForGift(row.getAttribute('data-user-id')) !== uid) {
             return false;
+        }
+        const rowGiftId = row.getAttribute('data-gift-id') || '';
+        if (giftId && rowGiftId) {
+            return rowGiftId === giftId;
         }
         return normalizedGiftNameInTable(row) === name;
     });
@@ -1035,8 +1136,9 @@ function addAllGiftToList(gift) {
         if (gift.isRed) {
             existingRow.classList.add('red');
         }
+        ensureFollowerBadge(existingRow.querySelector('td'), gift);
         reorderAllGiftsTableByCount();
-        trimAllGiftsTable(50);
+        trimAllGiftsTable(200);
         applyGiftFilter();
         return;
     }
@@ -1060,7 +1162,7 @@ function addAllGiftToList(gift) {
     userSpan.textContent = gift.nickname;
     userTd.appendChild(userSpan);
 
-    const badge = createFollowerBadge(gift.isFollower);
+    const badge = createFollowerBadge(followerStatusForDisplay(gift));
     if (badge) {
         userTd.appendChild(badge);
     }
@@ -1078,18 +1180,39 @@ function addAllGiftToList(gift) {
 
     allGiftsTableBody.appendChild(tr);
     reorderAllGiftsTableByCount();
-    trimAllGiftsTable(50);
+    trimAllGiftsTable(200);
     applyGiftFilter();
 }
 
-function addPinnedCommentToList(pinnedComment) {
+function pinnedCommentKey(pinnedComment) {
+    if (pinnedComment.pinId) {
+        return `pin:${pinnedComment.pinId}`;
+    }
+    if (pinnedComment.id) {
+        return `id:${pinnedComment.id}`;
+    }
+    return `${String(pinnedComment.uniqueId || '').toLowerCase()}|${pinnedComment.comment || ''}|${pinnedComment.timestamp || ''}`;
+}
+
+function addPinnedCommentToList(pinnedComment, options = {}) {
     rememberLiveUser(pinnedComment);
-    addPinnedCommentToHistory(pinnedComment);
+    if (!options.fromHistory) {
+        addPinnedCommentToHistory();
+    }
+
+    const key = pinnedCommentKey(pinnedComment);
+    const existing = Array.from(pinnedCommentsTableBody.querySelectorAll('.pinned-comment-row')).find(row => {
+        return row.dataset.pinKey === key;
+    });
+    if (existing) {
+        return;
+    }
 
     const timerKey = `${pinnedComment.pinId || pinnedComment.timestamp || Date.now()}-${Math.random()}`;
     const tr = document.createElement('tr');
     tr.className = 'pinned-comment-row';
     tr.setAttribute('data-id', pinnedComment.uniqueId || '');
+    tr.dataset.pinKey = key;
 
     const userTd = document.createElement('td');
     const userSpan = document.createElement('span');
@@ -1097,7 +1220,7 @@ function addPinnedCommentToList(pinnedComment) {
     userSpan.innerText = pinnedComment.nickname || pinnedComment.uniqueId || 'Nao identificado';
     userTd.appendChild(userSpan);
 
-    const badge = createFollowerBadge(pinnedComment.isFollower);
+    const badge = createFollowerBadge(followerStatusForDisplay(pinnedComment));
     if (badge) {
         userTd.appendChild(badge);
     }
@@ -1110,10 +1233,12 @@ function addPinnedCommentToList(pinnedComment) {
     tr.appendChild(commentTd);
     pinnedCommentsTableBody.prepend(tr);
 
-    pinnedCommentTimers[timerKey] = setTimeout(() => {
-        tr.remove();
-        delete pinnedCommentTimers[timerKey];
-    }, 50 * 1000);
+    if (!options.fromHistory) {
+        pinnedCommentTimers[timerKey] = setTimeout(() => {
+            tr.remove();
+            delete pinnedCommentTimers[timerKey];
+        }, 50 * 1000);
+    }
 
     if (pinnedCommentsTableBody.children.length > 50) {
         pinnedCommentsTableBody.lastChild.remove();
@@ -1124,6 +1249,8 @@ function addFlaggedMessageToList(data) {
     if (!correlationMessagesTableBody) {
         return;
     }
+
+    rememberLiveUser(data);
 
     const category = String(data.category || '').toUpperCase();
     if (!['REPETICAO', 'CORRELACAO'].includes(category)) {
@@ -1149,7 +1276,7 @@ function addFlaggedMessageToList(data) {
     spanUser.textContent = data.nickname != null ? String(data.nickname) : '';
     tdUser.appendChild(spanUser);
 
-    const badge = createFollowerBadge(data.isFollower);
+    const badge = createFollowerBadge(followerStatusForDisplay(data));
     if (badge) {
         tdUser.appendChild(badge);
     }
@@ -1302,7 +1429,11 @@ async function loadInitialState() {
             console.log('[Frontend] loadInitialState: já conectado a', payload.username, '- carregando presentes...');
             usernameInput.value = payload.username;
             applyConnectedState(payload.username);
-            await loadAllGifts();
+            await Promise.all([
+                loadAllGifts(),
+                loadPendingTargetGifts(),
+                loadPinnedComments()
+            ]);
         }
     } catch (error) {
         statusDiv.innerText = 'Servidor indisponível';
@@ -1347,24 +1478,48 @@ function setupEventStream() {
     });
 
     eventSource.addEventListener('new-gift-user', event => {
-        addUserToList(JSON.parse(event.data));
+        try {
+            addUserToList(JSON.parse(event.data));
+        } catch (error) {
+            console.error('[Frontend] Falha ao registrar presente alvo:', error, event.data);
+        }
     });
 
     eventSource.addEventListener('any-gift-received', event => {
-        addAllGiftToList(JSON.parse(event.data));
+        try {
+            addAllGiftToList(JSON.parse(event.data));
+        } catch (error) {
+            console.error('[Frontend] Falha ao registrar presente:', error, event.data);
+        }
+    });
+
+    eventSource.addEventListener('gifts-list', event => {
+        const data = JSON.parse(event.data);
+        populateAvailableGifts(data.gifts || data);
     });
 
     eventSource.addEventListener('pinned-comment', event => {
-        addPinnedCommentToList(JSON.parse(event.data));
+        try {
+            addPinnedCommentToList(JSON.parse(event.data));
+        } catch (error) {
+            console.error('[Frontend] Falha ao registrar comentário fixado:', error, event.data);
+        }
     });
 
     eventSource.addEventListener('flagged-message', event => {
-        addFlaggedMessageToList(JSON.parse(event.data));
+        try {
+            addFlaggedMessageToList(JSON.parse(event.data));
+        } catch (error) {
+            console.error('[Frontend] Falha ao registrar alerta:', error, event.data);
+        }
     });
 
     eventSource.addEventListener('gift-question-correlation', event => {
-        const data = JSON.parse(event.data);
-        addCorrelationMessageToList(data);
+        try {
+            addCorrelationMessageToList(JSON.parse(event.data));
+        } catch (error) {
+            console.error('[Frontend] Falha ao registrar correlação:', error, event.data);
+        }
     });
 
     eventSource.addEventListener('keyword-mention', event => {
@@ -1447,16 +1602,28 @@ async function loadAvailableGifts() {
         const response = await fetch('/api/available-gifts');
         if (!response.ok) return;
         const gifts = await response.json();
-        availableGiftSelect.innerHTML = '<option value="">Selecione um presente...</option>';
-        gifts.forEach(gift => {
-            const option = document.createElement('option');
-            option.value = gift;
-            option.textContent = gift;
-            availableGiftSelect.appendChild(option);
-        });
+        populateAvailableGifts(gifts);
     } catch (e) {
         console.error('Erro ao carregar presentes disponíveis:', e);
-        availableGiftSelect.innerHTML = '<option value="">Erro ao carregar</option>';
+    }
+}
+
+function populateAvailableGifts(gifts) {
+    if (!availableGiftSelect || !Array.isArray(gifts) || gifts.length === 0) {
+        return;
+    }
+    const current = availableGiftSelect.value;
+    const unique = [...new Set(gifts.map(gift => String(gift || '').trim()).filter(Boolean))];
+    unique.sort((a, b) => a.localeCompare(b, 'pt'));
+    availableGiftSelect.innerHTML = '<option value="">Selecione um presente...</option>';
+    unique.forEach(gift => {
+        const option = document.createElement('option');
+        option.value = gift;
+        option.textContent = gift;
+        availableGiftSelect.appendChild(option);
+    });
+    if (current && unique.includes(current)) {
+        availableGiftSelect.value = current;
     }
 }
 
@@ -1464,6 +1631,9 @@ async function loadAvailableGifts() {
 async function loadAllGifts() {
     if (!allGiftsTableBody) {
         console.error('[Frontend] loadAllGifts: allGiftsTableBody não encontrado.');
+        return;
+    }
+    if (allGiftsTableBody.children.length > 0) {
         return;
     }
     try {
@@ -1475,6 +1645,13 @@ async function loadAllGifts() {
             return;
         }
         const gifts = await response.json();
+        if (!Array.isArray(gifts)) {
+            console.error('[Frontend] loadAllGifts: payload inválido', gifts);
+            return;
+        }
+        if (allGiftsTableBody.children.length > 0) {
+            return;
+        }
         console.log(`[Frontend] loadAllGifts: ${gifts.length} presentes recebidos. Exemplo:`, gifts[0]);
         allGiftsTableBody.innerHTML = '';
         gifts.forEach(gift => {
@@ -1487,6 +1664,64 @@ async function loadAllGifts() {
         console.log(`[Frontend] loadAllGifts: ${gifts.length} presentes renderizados.`);
     } catch (e) {
         console.error('[Frontend] loadAllGifts: erro:', e);
+    }
+}
+
+async function loadPendingTargetGifts() {
+    if (!userTableBody) {
+        return;
+    }
+    try {
+        const response = await fetch('/api/target-gift-history?pending=1&limit=50');
+        if (!response.ok) {
+            console.error('[Frontend] loadPendingTargetGifts: status', response.status);
+            return;
+        }
+        const items = await response.json();
+        if (!Array.isArray(items)) {
+            return;
+        }
+        items.slice().reverse().forEach(item => {
+            addUserToList({
+                uniqueId: item.uniqueId,
+                nickname: item.nickname,
+                giftName: item.giftName,
+                historyId: item.id,
+                receivedAt: item.receivedAt
+            }, { fromHistory: true });
+        });
+        console.log(`[Frontend] loadPendingTargetGifts: ${items.length} pendentes restaurados.`);
+    } catch (e) {
+        console.error('[Frontend] loadPendingTargetGifts: erro:', e);
+    }
+}
+
+async function loadPinnedCommentsFromApi() {
+    try {
+        const response = await fetch('/api/pinned-comments?limit=15');
+        if (!response.ok) {
+            throw new Error(`status ${response.status}`);
+        }
+        const items = await response.json();
+        return Array.isArray(items) ? items : [];
+    } catch (error) {
+        console.error('[Frontend] Falha ao carregar histórico de comentários fixados:', error);
+        return [];
+    }
+}
+
+async function loadPinnedComments() {
+    if (!pinnedCommentsTableBody) {
+        return;
+    }
+    try {
+        const items = await loadPinnedCommentsFromApi();
+        items.slice().reverse().forEach(item => {
+            addPinnedCommentToList(item, { fromHistory: true });
+        });
+        console.log(`[Frontend] loadPinnedComments: ${items.length} comentários restaurados.`);
+    } catch (e) {
+        console.error('[Frontend] loadPinnedComments: erro:', e);
     }
 }
 
@@ -1531,7 +1766,6 @@ addTargetGiftBtn.addEventListener('click', addTargetGift);
 
 async function bootstrap() {
     renderTargetGifts();
-    loadAvailableGifts();
     applyInfractionsSectionTitle(false);
 
     try {

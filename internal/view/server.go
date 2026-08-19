@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -82,6 +83,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/available-gifts", s.handleAvailableGifts)
 	mux.HandleFunc("/api/target-gift-history", s.handleTargetGiftHistory)
 	mux.HandleFunc("/api/target-gift-history/answer", s.handleTargetGiftHistoryAnswer)
+	mux.HandleFunc("/api/pinned-comments", s.handlePinnedComments)
 	mux.HandleFunc("/api/ask-ai", s.handleAskAI)
 
 	// Static files.
@@ -110,6 +112,11 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 				log.Printf("[View] Error recording target gift history: %v", err)
 			} else {
 				data["historyId"] = id
+			}
+		}
+		if eventType == monitor.EventPinnedComment {
+			if _, err := s.controller.RecordPinnedComment(data); err != nil {
+				log.Printf("[View] Error recording pinned comment: %v", err)
 			}
 		}
 		s.broadcastSSE(eventType, data)
@@ -378,7 +385,7 @@ func (s *HTTPServer) handleWorkerRegister(w http.ResponseWriter, r *http.Request
 
 func (s *HTTPServer) handleGifts(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
-		limit := 100
+		limit := 200
 		if l := r.URL.Query().Get("limit"); l != "" {
 			if n, err := strconv.Atoi(l); err == nil && n > 0 {
 				limit = n
@@ -391,6 +398,9 @@ func (s *HTTPServer) handleGifts(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
+			if gifts == nil {
+				gifts = []model.Gift{}
+			}
 			writeJSON(w, gifts)
 			return
 		}
@@ -399,6 +409,9 @@ func (s *HTTPServer) handleGifts(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
+		}
+		if gifts == nil {
+			gifts = []model.Gift{}
 		}
 		writeJSON(w, gifts)
 		return
@@ -422,8 +435,11 @@ func (s *HTTPServer) handleAvailableGifts(w http.ResponseWriter, r *http.Request
 	}
 	gifts, err := s.controller.FetchAvailableGifts()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		log.Printf("[View] available-gifts: %v", err)
+		gifts = []string{}
+	}
+	if gifts == nil {
+		gifts = []string{}
 	}
 	writeJSON(w, gifts)
 }
@@ -439,7 +455,16 @@ func (s *HTTPServer) handleTargetGiftHistory(w http.ResponseWriter, r *http.Requ
 			limit = n
 		}
 	}
-	items, err := s.controller.GetRecentTargetGiftHistory(limit)
+	pending := r.URL.Query().Get("pending")
+	var (
+		items []model.TargetGiftHistory
+		err   error
+	)
+	if pending == "1" || strings.EqualFold(pending, "true") {
+		items, err = s.controller.GetPendingTargetGiftHistory(limit)
+	} else {
+		items, err = s.controller.GetRecentTargetGiftHistory(limit)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -476,6 +501,28 @@ func (s *HTTPServer) handleTargetGiftHistoryAnswer(w http.ResponseWriter, r *htt
 		return
 	}
 	writeJSON(w, map[string]bool{"success": true})
+}
+
+func (s *HTTPServer) handlePinnedComments(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	limit := 15
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	items, err := s.controller.GetRecentPinnedComments(limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if items == nil {
+		items = []model.PinnedComment{}
+	}
+	writeJSON(w, items)
 }
 
 func (s *HTTPServer) handleAskAI(w http.ResponseWriter, r *http.Request) {

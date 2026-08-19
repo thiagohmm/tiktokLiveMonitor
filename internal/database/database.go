@@ -88,6 +88,19 @@ func (db *DB) migrate() error {
 			answered_at DATETIME,
 			response_type TEXT
 		)`,
+		`CREATE TABLE IF NOT EXISTS pinned_comments (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			live_name TEXT NOT NULL,
+			uniqueId TEXT NOT NULL,
+			nickname TEXT NOT NULL,
+			comment TEXT NOT NULL,
+			pin_id TEXT,
+			is_follower INTEGER,
+			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_pinned_comments_pin
+			ON pinned_comments(live_name, pin_id)
+			WHERE pin_id IS NOT NULL AND pin_id != ''`,
 	}
 
 	for _, s := range stmts {
@@ -419,7 +432,7 @@ func (db *DB) GetRecentGifts(liveName string, limit int) ([]model.Gift, error) {
 	}
 	defer rows.Close()
 
-	var out []model.Gift
+	out := make([]model.Gift, 0)
 	for rows.Next() {
 		var g model.Gift
 		if err := rows.Scan(&g.ID, &g.LiveName, &g.UniqueID, &g.Nickname, &g.GiftName, &g.RepeatCount, &g.GiftType, &g.Timestamp); err != nil {
@@ -452,9 +465,12 @@ func (db *DB) GetGiftsByUser(uniqueID string) ([]model.Gift, error) {
 	for rows.Next() {
 		var g model.Gift
 		if err := rows.Scan(&g.ID, &g.LiveName, &g.UniqueID, &g.Nickname, &g.GiftName, &g.RepeatCount, &g.GiftType, &g.Timestamp); err != nil {
-			return nil, fmt.Errorf("scan gift: %w", err)
+			return nil, fmt.Errorf("scan gift by user: %w", err)
 		}
 		out = append(out, g)
+	}
+	if out == nil {
+		out = []model.Gift{}
 	}
 	return out, rows.Err()
 }
@@ -641,27 +657,196 @@ func (db *DB) GetRecentTargetGiftHistory(liveName string, limit int) ([]model.Ta
 	}
 	defer rows.Close()
 
-	var out []model.TargetGiftHistory
+	out := make([]model.TargetGiftHistory, 0)
 	for rows.Next() {
-		var (
-			h                    model.TargetGiftHistory
-			answeredAt, respType sql.NullString
-		)
-		if err := rows.Scan(
-			&h.ID, &h.LiveName, &h.UniqueID, &h.Nickname, &h.GiftName,
-			&h.ReceivedAt, &answeredAt, &respType,
-		); err != nil {
-			return nil, fmt.Errorf("scan target gift history: %w", err)
-		}
-		if answeredAt.Valid {
-			v := answeredAt.String
-			h.AnsweredAt = &v
-		}
-		if respType.Valid {
-			v := respType.String
-			h.ResponseType = &v
+		h, err := scanTargetGiftHistory(rows)
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+// GetPendingTargetGiftHistory returns unanswered target gift rows, newest first.
+func (db *DB) GetPendingTargetGiftHistory(liveName string, limit int) ([]model.TargetGiftHistory, error) {
+	if limit < 1 || limit > 500 {
+		limit = 50
+	}
+	liveName = strings.TrimSpace(liveName)
+	if liveName == "" {
+		return []model.TargetGiftHistory{}, nil
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	rows, err := db.conn.Query(
+		`SELECT id, live_name, uniqueId, nickname, gift_name, received_at, answered_at, response_type
+		 FROM target_gift_history
+		 WHERE live_name = ? AND answered_at IS NULL
+		 ORDER BY received_at DESC
+		 LIMIT ?`,
+		liveName, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query pending target gifts: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]model.TargetGiftHistory, 0)
+	for rows.Next() {
+		h, err := scanTargetGiftHistory(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+func scanTargetGiftHistory(rows *sql.Rows) (model.TargetGiftHistory, error) {
+	var (
+		h                    model.TargetGiftHistory
+		answeredAt, respType sql.NullString
+	)
+	if err := rows.Scan(
+		&h.ID, &h.LiveName, &h.UniqueID, &h.Nickname, &h.GiftName,
+		&h.ReceivedAt, &answeredAt, &respType,
+	); err != nil {
+		return model.TargetGiftHistory{}, fmt.Errorf("scan target gift history: %w", err)
+	}
+	if answeredAt.Valid {
+		v := answeredAt.String
+		h.AnsweredAt = &v
+	}
+	if respType.Valid {
+		v := respType.String
+		h.ResponseType = &v
+	}
+	return h, nil
+}
+
+// --- PinnedCommentRepository ---
+
+// AddPinnedComment stores a pinned comment. Duplicate pin_id for the same live is ignored.
+func (db *DB) AddPinnedComment(liveName, uniqueID, nickname, comment, pinID string, isFollower *bool, at time.Time) (int64, error) {
+	comment = strings.TrimSpace(comment)
+	if comment == "" {
+		return 0, model.ErrCommentRequired
+	}
+	if uniqueID == "" {
+		uniqueID = "unknown"
+	}
+	if nickname == "" {
+		nickname = uniqueID
+	}
+	pinID = strings.TrimSpace(pinID)
+	if at.IsZero() {
+		at = time.Now()
+	}
+
+	var follower any
+	if isFollower != nil {
+		if *isFollower {
+			follower = 1
+		} else {
+			follower = 0
+		}
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if pinID != "" {
+		var existing int64
+		err := db.conn.QueryRow(
+			`SELECT id FROM pinned_comments WHERE live_name = ? AND pin_id = ?`,
+			liveName, pinID,
+		).Scan(&existing)
+		if err == nil {
+			return existing, nil
+		}
+		if err != sql.ErrNoRows {
+			return 0, fmt.Errorf("lookup pinned comment: %w", err)
+		}
+	}
+
+	result, err := db.conn.Exec(
+		`INSERT INTO pinned_comments
+			(live_name, uniqueId, nickname, comment, pin_id, is_follower, timestamp)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		liveName, uniqueID, nickname, comment, nullIfEmpty(pinID), follower, at.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("insert pinned comment: %w", err)
+	}
+	return result.LastInsertId()
+}
+
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// GetRecentPinnedComments returns the latest N pinned comments.
+func (db *DB) GetRecentPinnedComments(liveName string, limit int) ([]model.PinnedComment, error) {
+	if limit < 1 || limit > 200 {
+		limit = 15
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if strings.TrimSpace(liveName) == "" {
+		rows, err = db.conn.Query(
+			`SELECT id, live_name, uniqueId, nickname, comment, pin_id, is_follower, timestamp
+			 FROM pinned_comments
+			 ORDER BY timestamp DESC
+			 LIMIT ?`,
+			limit,
+		)
+	} else {
+		rows, err = db.conn.Query(
+			`SELECT id, live_name, uniqueId, nickname, comment, pin_id, is_follower, timestamp
+			 FROM pinned_comments
+			 WHERE live_name = ?
+			 ORDER BY timestamp DESC
+			 LIMIT ?`,
+			liveName, limit,
+		)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query pinned comments: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]model.PinnedComment, 0)
+	for rows.Next() {
+		var (
+			c        model.PinnedComment
+			pinID    sql.NullString
+			follower sql.NullInt64
+		)
+		if err := rows.Scan(
+			&c.ID, &c.LiveName, &c.UniqueID, &c.Nickname, &c.Comment,
+			&pinID, &follower, &c.Timestamp,
+		); err != nil {
+			return nil, fmt.Errorf("scan pinned comment: %w", err)
+		}
+		if pinID.Valid {
+			c.PinID = pinID.String
+		}
+		if follower.Valid {
+			b := follower.Int64 != 0
+			c.IsFollower = &b
+		}
+		out = append(out, c)
 	}
 	return out, rows.Err()
 }
@@ -716,6 +901,8 @@ func (db *DB) GetLastSessionActivity(liveName string) (time.Time, bool, error) {
 		{"SELECT MAX(timestamp) FROM gifts WHERE live_name = ?", []any{liveName}},
 		{"SELECT MAX(timestamp) FROM anomaly_logs WHERE live_name = ?", []any{liveName}},
 		{"SELECT MAX(timestamp) FROM user_messages", nil},
+		{"SELECT MAX(timestamp) FROM pinned_comments WHERE live_name = ?", []any{liveName}},
+		{"SELECT MAX(received_at) FROM target_gift_history WHERE live_name = ?", []any{liveName}},
 	}
 
 	var latest time.Time
@@ -755,6 +942,12 @@ func (db *DB) DeleteSessionData(liveName string) error {
 	}
 	if _, err := tx.Exec("DELETE FROM user_messages"); err != nil {
 		return fmt.Errorf("delete session messages: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM pinned_comments WHERE live_name = ?", liveName); err != nil {
+		return fmt.Errorf("delete session pinned comments: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM target_gift_history WHERE live_name = ?", liveName); err != nil {
+		return fmt.Errorf("delete session target gift history: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("delete session data: %w", err)

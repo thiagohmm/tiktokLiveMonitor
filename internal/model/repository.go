@@ -61,6 +61,13 @@ type TargetGiftHistoryRepository interface {
 	AddTargetGiftHistory(liveName, uniqueID, nickname, giftName string, receivedAt time.Time) (int64, error)
 	MarkTargetGiftAnswered(id int64, responseType string, answeredAt time.Time) error
 	GetRecentTargetGiftHistory(liveName string, limit int) ([]TargetGiftHistory, error)
+	GetPendingTargetGiftHistory(liveName string, limit int) ([]TargetGiftHistory, error)
+}
+
+// PinnedCommentRepository tracks comments pinned during a live.
+type PinnedCommentRepository interface {
+	AddPinnedComment(liveName, uniqueID, nickname, comment, pinID string, isFollower *bool, at time.Time) (int64, error)
+	GetRecentPinnedComments(liveName string, limit int) ([]PinnedComment, error)
 }
 
 // SessionRepository handles reuse or purge of live session data on connect.
@@ -76,6 +83,7 @@ type Repository interface {
 	UserMessageRepository
 	GiftRepository
 	TargetGiftHistoryRepository
+	PinnedCommentRepository
 	SessionRepository
 	Close() error
 }
