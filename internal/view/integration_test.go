@@ -10,12 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/ai"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
-	"github.com/thiagohmm/tiktok-live-monitor/internal/moderation"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/moderation"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 )
 
@@ -345,6 +346,208 @@ func TestHandleGifts(t *testing.T) {
 			t.Fatalf("expected 405, got %d", rec.Code)
 		}
 	})
+}
+
+func TestHandleGiftsEmptyReturnsArray(t *testing.T) {
+	srv, _, _, mon := setupTestServer(t)
+	mon.SetCurrentLive("nobody")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gifts", nil)
+	rec := httptest.NewRecorder()
+	srv.handleGifts(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var gifts []model.Gift
+	if err := json.Unmarshal(rec.Body.Bytes(), &gifts); err != nil {
+		t.Fatalf("decode JSON: %v body=%s", err, rec.Body.String())
+	}
+	if gifts == nil {
+		t.Fatal("expected empty array, got null")
+	}
+	if len(gifts) != 0 {
+		t.Fatalf("expected 0 gifts, got %d", len(gifts))
+	}
+}
+
+func TestHandleAvailableGiftsWithoutBridgeReturnsArray(t *testing.T) {
+	srv, _, _, _ := setupTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/available-gifts", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAvailableGifts(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var gifts []string
+	if err := json.Unmarshal(rec.Body.Bytes(), &gifts); err != nil {
+		t.Fatalf("decode JSON: %v body=%s", err, rec.Body.String())
+	}
+	if gifts == nil {
+		t.Fatal("expected empty array, got null")
+	}
+}
+
+func TestHandleGiftEventStoresJSONNumbersAndNestedName(t *testing.T) {
+	srv, db, _, mon := setupTestServer(t)
+	mon.SetCurrentLive("live1")
+
+	srv.controller.HandleGiftEvent(monitor.EventData{
+		"uniqueId":    "user1",
+		"nickname":    "User One",
+		"giftName":    "Rose",
+		"repeatCount": float64(5),
+		"giftType":    float64(1),
+	})
+	srv.controller.HandleGiftEvent(monitor.EventData{
+		"uniqueId": nil,
+		"nickname": nil,
+		"giftDetails": map[string]interface{}{
+			"giftName": "Dino",
+		},
+		"repeatCount": float64(2),
+	})
+
+	gifts, err := db.GetRecentGifts("live1", 10)
+	if err != nil {
+		t.Fatalf("get gifts: %v", err)
+	}
+	if len(gifts) != 2 {
+		t.Fatalf("expected 2 gifts, got %d", len(gifts))
+	}
+
+	byName := map[string]model.Gift{}
+	for _, g := range gifts {
+		byName[g.GiftName] = g
+	}
+	if byName["Rose"].RepeatCount != 5 {
+		t.Fatalf("expected Rose repeatCount 5, got %d", byName["Rose"].RepeatCount)
+	}
+	if byName["Dino"].UniqueID != "unknown" {
+		t.Fatalf("expected unknown uniqueId, got %q", byName["Dino"].UniqueID)
+	}
+}
+
+func TestHandlePinnedComments(t *testing.T) {
+	srv, db, _, mon := setupTestServer(t)
+
+	t.Run("empty array", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/pinned-comments", nil)
+		rec := httptest.NewRecorder()
+		srv.handlePinnedComments(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		var items []model.PinnedComment
+		if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil {
+			t.Fatalf("decode JSON: %v body=%s", err, rec.Body.String())
+		}
+		if items == nil {
+			t.Fatal("expected empty array, got null")
+		}
+		if len(items) != 0 {
+			t.Fatalf("expected 0 items, got %d", len(items))
+		}
+	})
+
+	t.Run("wrong method", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/pinned-comments", nil)
+		rec := httptest.NewRecorder()
+		srv.handlePinnedComments(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("expected 405, got %d", rec.Code)
+		}
+	})
+
+	t.Run("GET recent for live", func(t *testing.T) {
+		mon.SetCurrentLive("live1")
+		if _, err := db.AddPinnedComment("live1", "user1", "User One", "olá", "pin-1", nil, time.Now()); err != nil {
+			t.Fatalf("add pinned: %v", err)
+		}
+		if _, err := db.AddPinnedComment("live2", "user2", "User Two", "outra", "pin-2", nil, time.Now()); err != nil {
+			t.Fatalf("add other live: %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodGet, "/api/pinned-comments?limit=15", nil)
+		rec := httptest.NewRecorder()
+		srv.handlePinnedComments(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		var items []model.PinnedComment
+		if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil {
+			t.Fatalf("decode JSON: %v", err)
+		}
+		if len(items) != 1 || items[0].Comment != "olá" {
+			t.Fatalf("expected live1 comment, got %+v", items)
+		}
+	})
+}
+
+func TestRecordPinnedCommentStoresEvent(t *testing.T) {
+	srv, db, _, mon := setupTestServer(t)
+	mon.SetCurrentLive("live1")
+
+	id, err := srv.controller.RecordPinnedComment(monitor.EventData{
+		"uniqueId":   "user1",
+		"nickname":   "User One",
+		"comment":    "fixado",
+		"pinId":      "abc",
+		"isFollower": true,
+		"timestamp":  float64(1750000000000),
+	})
+	if err != nil {
+		t.Fatalf("record pinned: %v", err)
+	}
+	if id <= 0 {
+		t.Fatalf("expected positive id, got %d", id)
+	}
+
+	items, err := db.GetRecentPinnedComments("live1", 10)
+	if err != nil {
+		t.Fatalf("get pinned: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(items))
+	}
+	if items[0].Comment != "fixado" || items[0].PinID != "abc" {
+		t.Fatalf("unexpected comment %+v", items[0])
+	}
+	if items[0].IsFollower == nil || !*items[0].IsFollower {
+		t.Fatal("expected isFollower true")
+	}
+}
+
+func TestHandleTargetGiftHistoryPending(t *testing.T) {
+	srv, db, _, mon := setupTestServer(t)
+	mon.SetCurrentLive("live1")
+
+	pendingID, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", time.Now())
+	if err != nil {
+		t.Fatalf("add pending: %v", err)
+	}
+	answeredID, err := db.AddTargetGiftHistory("live1", "user2", "User Two", "Dino", time.Now())
+	if err != nil {
+		t.Fatalf("add answered: %v", err)
+	}
+	if err := db.MarkTargetGiftAnswered(answeredID, model.TargetGiftResponseManual, time.Now()); err != nil {
+		t.Fatalf("mark answered: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/target-gift-history?pending=1", nil)
+	rec := httptest.NewRecorder()
+	srv.handleTargetGiftHistory(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var items []model.TargetGiftHistory
+	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != pendingID {
+		t.Fatalf("expected only pending id %d, got %+v", pendingID, items)
+	}
 }
 
 func TestHandleAskAI(t *testing.T) {

@@ -68,15 +68,27 @@ type TargetGiftHistory struct {
 	ResponseType *string `json:"responseType,omitempty"`
 }
 
+// PinnedComment is a comment pinned during a live stream.
+type PinnedComment struct {
+	ID         int64  `json:"id"`
+	LiveName   string `json:"liveName"`
+	UniqueID   string `json:"uniqueId"`
+	Nickname   string `json:"nickname"`
+	Comment    string `json:"comment"`
+	PinID      string `json:"pinId,omitempty"`
+	IsFollower *bool  `json:"isFollower,omitempty"`
+	Timestamp  string `json:"timestamp"`
+}
+
 // ValidExpected values for feedback.
 var ValidExpected = map[string]bool{
-	"NAO":             true,
-	"SIM_PERGUNTA":    true,
+	"NAO":              true,
+	"SIM_PERGUNTA":     true,
 	"SIM_PROSELITISMO": true,
-	"SIM_ODIO":        true,
-	"SIM_SPAM":        true,
-	"SIM_GOLPE":       true,
-	"SIM_OUTRO":       true,
+	"SIM_ODIO":         true,
+	"SIM_SPAM":         true,
+	"SIM_GOLPE":        true,
+	"SIM_OUTRO":        true,
 }
 
 // ValidCategory values for feedback.

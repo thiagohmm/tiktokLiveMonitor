@@ -285,3 +285,170 @@ func TestCoalesceStr(t *testing.T) {
 		}
 	}
 }
+
+func TestParseGiftNames(t *testing.T) {
+	tests := []struct {
+		name string
+		data EventData
+		want []string
+	}{
+		{
+			name: "interface slice",
+			data: EventData{"gifts": []interface{}{"Rose", "", "Dino"}},
+			want: []string{"Rose", "Dino"},
+		},
+		{
+			name: "string slice",
+			data: EventData{"gifts": []string{"Rose"}},
+			want: []string{"Rose"},
+		},
+		{
+			name: "missing",
+			data: EventData{},
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseGiftNames(tt.data)
+			if len(got) != len(tt.want) {
+				t.Fatalf("parseGiftNames() = %v, want %v", got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Fatalf("parseGiftNames()[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestExtractFromDataFollower(t *testing.T) {
+	trueVal := true
+	falseVal := false
+	tests := []struct {
+		name string
+		data EventData
+		want *bool
+	}{
+		{name: "bool true", data: EventData{"isFollower": true}, want: &trueVal},
+		{name: "bool false", data: EventData{"isFollower": false}, want: &falseVal},
+		{name: "float 1", data: EventData{"isFollower": float64(1)}, want: &trueVal},
+		{name: "float 2 friends", data: EventData{"isFollower": float64(2)}, want: &trueVal},
+		{name: "float 0", data: EventData{"isFollower": float64(0)}, want: &falseVal},
+		{name: "string 1", data: EventData{"isFollower": "1"}, want: &trueVal},
+		{name: "missing", data: EventData{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractFromData(tt.data)
+			if tt.want == nil {
+				if got.IsFollower != nil {
+					t.Fatalf("expected nil follower, got %v", *got.IsFollower)
+				}
+				return
+			}
+			if got.IsFollower == nil || *got.IsFollower != *tt.want {
+				t.Fatalf("IsFollower = %v, want %v", got.IsFollower, *tt.want)
+			}
+		})
+	}
+}
+
+func TestGiftsListCachesAndIgnoresEmptyOverwrite(t *testing.T) {
+	m, _ := New()
+	emitted := make(chan []string, 2)
+	m.OnEvent(func(eventType string, data EventData) {
+		if eventType == EventGiftsList {
+			emitted <- parseGiftNames(data)
+		}
+	})
+
+	m.handleBridgeEvent(EventGiftsList, EventData{"gifts": []interface{}{"Rose", "Dino"}})
+	m.handleBridgeEvent(EventGiftsList, EventData{"gifts": []interface{}{}})
+
+	got := m.CachedAvailableGifts()
+	if len(got) != 2 || got[0] != "Rose" || got[1] != "Dino" {
+		t.Fatalf("cache = %v, want [Rose Dino]", got)
+	}
+
+	select {
+	case names := <-emitted:
+		if len(names) != 2 {
+			t.Fatalf("emitted %v", names)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected gifts-list event")
+	}
+	select {
+	case names := <-emitted:
+		t.Fatalf("did not expect empty gifts-list emit, got %v", names)
+	default:
+	}
+}
+
+func TestFetchAvailableGiftsReturnsCacheWithoutBridge(t *testing.T) {
+	m, _ := New()
+	m.cacheAvailableGifts([]string{"Rose", "Dino"})
+	got, err := m.FetchAvailableGifts()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 || got[0] != "Rose" {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestFetchAvailableGiftsWithoutBridgeReturnsEmpty(t *testing.T) {
+	m, _ := New()
+	got, err := m.FetchAvailableGifts()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected empty slice, got nil")
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestEmitDoesNotDeadlockOnGetState(t *testing.T) {
+	m, _ := New()
+	m.OnEvent(func(eventType string, data EventData) {
+		_ = m.GetState()
+	})
+	done := make(chan struct{})
+	go func() {
+		m.emit(EventAnyGift, EventData{"giftName": "Rose"})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("emit deadlocked")
+	}
+}
+
+func TestIsGiftCountingSettlement(t *testing.T) {
+	m, _ := New()
+	tests := []struct {
+		name string
+		data EventData
+		want bool
+	}{
+		{"non-streak", EventData{"giftType": float64(0), "repeatEnd": false}, true},
+		{"streak in progress bool", EventData{"giftType": float64(1), "repeatEnd": false}, false},
+		{"streak ended bool", EventData{"giftType": float64(1), "repeatEnd": true}, true},
+		{"streak in progress number", EventData{"giftType": float64(1), "repeatEnd": float64(0)}, false},
+		{"streak ended number", EventData{"giftType": float64(1), "repeatEnd": float64(1)}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := m.isGiftCountingSettlement(tt.data)
+			if got != tt.want {
+				t.Fatalf("isGiftCountingSettlement(%v) = %v, want %v", tt.data, got, tt.want)
+			}
+		})
+	}
+}

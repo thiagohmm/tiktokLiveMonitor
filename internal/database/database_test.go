@@ -339,6 +339,21 @@ func TestAddGift(t *testing.T) {
 	}
 }
 
+func TestGetRecentGiftsEmptySlice(t *testing.T) {
+	db := openTestDB(t)
+
+	gifts, err := db.GetRecentGifts("missing-live", 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gifts == nil {
+		t.Fatal("expected empty slice, got nil")
+	}
+	if len(gifts) != 0 {
+		t.Fatalf("expected 0, got %d", len(gifts))
+	}
+}
+
 func TestGetRecentGiftsLimit(t *testing.T) {
 	db := openTestDB(t)
 
@@ -608,6 +623,18 @@ func TestDeleteSessionData(t *testing.T) {
 	if _, err := db.AddFeedback("example", "SPAM", "SIM_SPAM"); err != nil {
 		t.Fatalf("add feedback: %v", err)
 	}
+	if _, err := db.AddPinnedComment("live1", "user1", "User One", "fixado live1", "pin-1", nil, time.Now()); err != nil {
+		t.Fatalf("add pinned live1: %v", err)
+	}
+	if _, err := db.AddPinnedComment("live2", "user2", "User Two", "fixado live2", "pin-2", nil, time.Now()); err != nil {
+		t.Fatalf("add pinned live2: %v", err)
+	}
+	if _, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", time.Now()); err != nil {
+		t.Fatalf("add target gift live1: %v", err)
+	}
+	if _, err := db.AddTargetGiftHistory("live2", "user2", "User Two", "Dino", time.Now()); err != nil {
+		t.Fatalf("add target gift live2: %v", err)
+	}
 
 	if err := db.DeleteSessionData("live1"); err != nil {
 		t.Fatalf("delete session: %v", err)
@@ -630,6 +657,18 @@ func TestDeleteSessionData(t *testing.T) {
 	}
 	if n := countTable(t, db, "SELECT COUNT(*) FROM false_positives"); n != 1 {
 		t.Fatalf("expected feedback to remain, got %d", n)
+	}
+	if n := countTable(t, db, "SELECT COUNT(*) FROM pinned_comments WHERE live_name = ?", "live1"); n != 0 {
+		t.Fatalf("expected 0 pinned comments for live1, got %d", n)
+	}
+	if n := countTable(t, db, "SELECT COUNT(*) FROM pinned_comments WHERE live_name = ?", "live2"); n != 1 {
+		t.Fatalf("expected 1 pinned comment for live2, got %d", n)
+	}
+	if n := countTable(t, db, "SELECT COUNT(*) FROM target_gift_history WHERE live_name = ?", "live1"); n != 0 {
+		t.Fatalf("expected 0 target gift history for live1, got %d", n)
+	}
+	if n := countTable(t, db, "SELECT COUNT(*) FROM target_gift_history WHERE live_name = ?", "live2"); n != 1 {
+		t.Fatalf("expected 1 target gift history for live2, got %d", n)
 	}
 }
 
@@ -760,5 +799,120 @@ func TestMarkTargetGiftAnsweredInvalid(t *testing.T) {
 	}
 	if err := db.MarkTargetGiftAnswered(id, "weird", time.Now()); err == nil {
 		t.Fatal("expected error for invalid response type")
+	}
+}
+
+func TestGetPendingTargetGiftHistory(t *testing.T) {
+	db := openTestDB(t)
+	now := time.Now()
+
+	pendingID, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", now)
+	if err != nil {
+		t.Fatalf("add pending: %v", err)
+	}
+	answeredID, err := db.AddTargetGiftHistory("live1", "user2", "User Two", "Dino", now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("add answered: %v", err)
+	}
+	if err := db.MarkTargetGiftAnswered(answeredID, model.TargetGiftResponseManual, now.Add(2*time.Second)); err != nil {
+		t.Fatalf("mark answered: %v", err)
+	}
+	if _, err := db.AddTargetGiftHistory("live2", "user3", "User Three", "Rosa", now); err != nil {
+		t.Fatalf("add other live: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		liveName string
+		wantLen  int
+		wantID   int64
+	}{
+		{"pending for live1", "live1", 1, pendingID},
+		{"empty live name", "", 0, 0},
+		{"other live", "live2", 1, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			items, err := db.GetPendingTargetGiftHistory(tt.liveName, 10)
+			if err != nil {
+				t.Fatalf("get pending: %v", err)
+			}
+			if items == nil {
+				t.Fatal("expected empty slice, got nil")
+			}
+			if len(items) != tt.wantLen {
+				t.Fatalf("expected %d items, got %d", tt.wantLen, len(items))
+			}
+			if tt.wantID > 0 && (len(items) == 0 || items[0].ID != tt.wantID) {
+				t.Fatalf("expected pending id %d, got %+v", tt.wantID, items)
+			}
+			for _, item := range items {
+				if item.AnsweredAt != nil {
+					t.Fatalf("expected unanswered item, got answered %+v", item)
+				}
+			}
+		})
+	}
+}
+
+func TestPinnedCommentFlow(t *testing.T) {
+	db := openTestDB(t)
+	at := time.Date(2026, 8, 17, 15, 30, 0, 0, time.UTC)
+	follower := true
+
+	id, err := db.AddPinnedComment("live1", "user1", "User One", "comentário fixado", "pin-1", &follower, at)
+	if err != nil {
+		t.Fatalf("add pinned: %v", err)
+	}
+	if id <= 0 {
+		t.Fatalf("expected positive id, got %d", id)
+	}
+
+	same, err := db.AddPinnedComment("live1", "user1", "User One", "comentário fixado", "pin-1", &follower, at.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("dedup pinned: %v", err)
+	}
+	if same != id {
+		t.Fatalf("expected same id %d, got %d", id, same)
+	}
+
+	if _, err := db.AddPinnedComment("live1", "user2", "User Two", "outro", "pin-2", nil, at.Add(2*time.Minute)); err != nil {
+		t.Fatalf("add second: %v", err)
+	}
+	if _, err := db.AddPinnedComment("live2", "user3", "User Three", "outra live", "pin-1", nil, at); err != nil {
+		t.Fatalf("add other live: %v", err)
+	}
+
+	items, err := db.GetRecentPinnedComments("live1", 10)
+	if err != nil {
+		t.Fatalf("get pinned: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 pinned comments, got %d", len(items))
+	}
+	if items[0].Comment != "outro" {
+		t.Fatalf("expected newest first, got %q", items[0].Comment)
+	}
+	if items[1].PinID != "pin-1" {
+		t.Fatalf("expected pin-1, got %q", items[1].PinID)
+	}
+	if items[1].IsFollower == nil || !*items[1].IsFollower {
+		t.Fatal("expected follower flag")
+	}
+
+	empty, err := db.GetRecentPinnedComments("missing", 10)
+	if err != nil {
+		t.Fatalf("get missing: %v", err)
+	}
+	if empty == nil || len(empty) != 0 {
+		t.Fatalf("expected empty slice, got %#v", empty)
+	}
+}
+
+func TestAddPinnedCommentRequiresComment(t *testing.T) {
+	db := openTestDB(t)
+	if _, err := db.AddPinnedComment("live1", "user1", "User", "  ", "", nil, time.Now()); err == nil {
+		t.Fatal("expected error for empty comment")
 	}
 }
