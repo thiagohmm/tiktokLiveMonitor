@@ -32,6 +32,7 @@ type FalsePositive struct {
 // UserMessage represents a user message from a live stream.
 type UserMessage struct {
 	ID        int64  `json:"id"`
+	LiveName  string `json:"liveName,omitempty"`
 	UniqueID  string `json:"uniqueId"`
 	Username  string `json:"username"`
 	Message   string `json:"message"`
@@ -101,3 +102,110 @@ var ValidCategory = map[string]bool{
 	"GOLPE":        true,
 	"OUTRO":        true,
 }
+
+// Risk level constants used across ranking, alerts and profiles.
+const (
+	RiskLevelNone    = "none"
+	RiskLevelLow     = "low"
+	RiskLevelMedium  = "medium"
+	RiskLevelHigh    = "high"
+	RiskLevelCritical = "critical"
+)
+
+// UserRank is a single participant's engagement ranking for a live.
+type UserRank struct {
+	UniqueID      string  `json:"uniqueId"`
+	Nickname      string  `json:"nickname"`
+	Score         float64 `json:"score"`
+	GiftScore     float64 `json:"giftScore"`
+	MessageCount  int     `json:"messageCount"`
+	QuestionCount int     `json:"questionCount"`
+	GiftCount     int     `json:"giftCount"`
+	AnomalyCount  int     `json:"anomalyCount"`
+	RiskLevel     string  `json:"riskLevel"`
+	FirstSeen     string  `json:"firstSeen"`
+	LastSeen      string  `json:"lastSeen"`
+}
+
+// LiveRanking is the full engagement ranking for a single live.
+type LiveRanking struct {
+	LiveName   string     `json:"liveName"`
+	UpdatedAt  string     `json:"updatedAt"`
+	TotalUsers int        `json:"totalUsers"`
+	UserRanks  []UserRank `json:"userRanks"`
+}
+
+// AlertSeverity describes how urgent an external alert is.
+type AlertSeverity string
+
+const (
+	AlertSeverityInfo    AlertSeverity = "info"
+	AlertSeverityWarning AlertSeverity = "warning"
+	AlertSeverityError   AlertSeverity = "error"
+	AlertSeverityCritical AlertSeverity = "critical"
+)
+
+// AlertEvent is a notification emitted for notable live events.
+type AlertEvent struct {
+	Type      string        `json:"type"`
+	Title     string        `json:"title"`
+	Message   string        `json:"message"`
+	Severity  AlertSeverity `json:"severity"`
+	UniqueID  string        `json:"uniqueId,omitempty"`
+	Nickname  string        `json:"nickname,omitempty"`
+	LiveName  string        `json:"liveName"`
+	Timestamp string        `json:"timestamp"`
+}
+
+// LiveReport is the AI-generated post-live summary.
+type LiveReport struct {
+	LiveName         string                `json:"liveName"`
+	StartedAt        string                `json:"startedAt"`
+	EndedAt          string                `json:"endedAt"`
+	DurationMinutes  int                   `json:"durationMinutes"`
+	MessageCount     int                   `json:"messageCount"`
+	ParticipantCount int                   `json:"participantCount"`
+	GiftCount        int                   `json:"giftCount"`
+	GiftTotal        int                   `json:"giftTotal"`
+	TopSupporters    []UserRank            `json:"topSupporters"`
+	FrequentQuestions []string             `json:"frequentQuestions"`
+	ModerationIssues []AnomalySummary      `json:"moderationIssues"`
+	Summary          string                `json:"summary"`
+}
+
+// AnomalySummary groups anomaly logs by category for the report.
+type AnomalySummary struct {
+	Category string `json:"category"`
+	Count    int    `json:"count"`
+}
+
+// SuggestedResponse is an AI-prepared reply for a question (not auto-published).
+type SuggestedResponse struct {
+	Question  string `json:"question"`
+	Suggested string `json:"suggested"`
+	Reason    string `json:"reason"`
+}
+
+// UserProfile aggregates a participant's full history across lives.
+type UserProfile struct {
+	UniqueID      string            `json:"uniqueId"`
+	Nickname      string            `json:"nickname"`
+	Messages      []UserMessage     `json:"messages"`
+	Gifts         []Gift            `json:"gifts"`
+	Alerts        []AnomalyLog      `json:"alerts"`
+	RiskLevel     string            `json:"riskLevel"`
+	TotalMessages int               `json:"totalMessages"`
+	TotalGifts    int               `json:"totalGifts"`
+	LastLives     []UserLiveSummary `json:"lastLives"`
+}
+
+// UserLiveSummary describes one live a participant appeared in.
+type UserLiveSummary struct {
+	LiveName  string `json:"liveName"`
+	Messages  int    `json:"messages"`
+	Gifts     int    `json:"gifts"`
+	FirstSeen string `json:"firstSeen"`
+	LastSeen  string `json:"lastSeen"`
+}
+
+// ValidExpected values for feedback.

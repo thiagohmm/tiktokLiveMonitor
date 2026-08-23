@@ -73,6 +73,7 @@ func (db *DB) migrate() error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS user_messages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			live_name TEXT NOT NULL DEFAULT '',
 			uniqueId TEXT NOT NULL,
 			username TEXT NOT NULL,
 			message TEXT NOT NULL,
@@ -101,12 +102,53 @@ func (db *DB) migrate() error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_pinned_comments_pin
 			ON pinned_comments(live_name, pin_id)
 			WHERE pin_id IS NOT NULL AND pin_id != ''`,
+		`CREATE INDEX IF NOT EXISTS idx_user_messages_dedup
+			ON user_messages(LOWER(uniqueId), LOWER(message))`,
 	}
 
 	for _, s := range stmts {
 		if _, err := db.conn.Exec(s); err != nil {
 			return fmt.Errorf("exec migration: %w", err)
 		}
+	}
+
+	// user_messages created by older versions may lack the live_name column.
+	if err := db.ensureColumn("user_messages", "live_name", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ensureColumn adds a column to a table if it does not already exist.
+func (db *DB) ensureColumn(table, column, decl string) error {
+	rows, err := db.conn.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return fmt.Errorf("inspect table %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			ctype   string
+			notnull int
+			dflt    interface{}
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("scan table_info %s: %w", table, err)
+		}
+		if name == column {
+			return rows.Err()
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if _, err := db.conn.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + decl); err != nil {
+		return fmt.Errorf("add column %s.%s: %w", table, column, err)
 	}
 	return nil
 }
@@ -301,10 +343,11 @@ func (db *DB) CleanupOldAnomalies() (int64, error) {
 // --- UserMessageRepository ---
 
 // AddUserMessageDedup stores a user message only if it's unique for that user, keeping max 10.
-func (db *DB) AddUserMessageDedup(uniqueID, username, message string) error {
+func (db *DB) AddUserMessageDedup(liveName, uniqueID, username, message string) error {
 	uniqueID = strings.ToLower(strings.TrimSpace(uniqueID))
 	message = strings.ToLower(strings.TrimSpace(message))
 	username = strings.TrimSpace(username)
+	liveName = strings.TrimSpace(liveName)
 
 	if message == "" || uniqueID == "" {
 		return nil
@@ -325,8 +368,8 @@ func (db *DB) AddUserMessageDedup(uniqueID, username, message string) error {
 
 	// Insert new message.
 	_, err = db.conn.Exec(
-		"INSERT INTO user_messages (uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?)",
-		uniqueID, username, message, time.Now(),
+		"INSERT INTO user_messages (live_name, uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?, ?)",
+		liveName, uniqueID, username, message, time.Now(),
 	)
 	if err != nil {
 		return fmt.Errorf("insert user message: %w", err)
@@ -345,6 +388,76 @@ func (db *DB) AddUserMessageDedup(uniqueID, username, message string) error {
 	return nil
 }
 
+// UserMessageEntry is a pending user message to be stored in a batch.
+type UserMessageEntry struct {
+	LiveName  string
+	UniqueID  string
+	Username  string
+	Message   string
+	Timestamp time.Time
+}
+
+// BatchAddUserMessages inserts multiple user messages in a single transaction.
+// Duplicates (same user, same message, case-insensitive) are skipped and every
+// affected user is pruned to their 10 most recent messages.
+func (db *DB) BatchAddUserMessages(entries []UserMessageEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("begin batch user messages: %w", err)
+	}
+	defer tx.Rollback()
+
+	users := make(map[string]struct{})
+	for _, e := range entries {
+		uid := strings.ToLower(strings.TrimSpace(e.UniqueID))
+		msg := strings.ToLower(strings.TrimSpace(e.Message))
+		if uid == "" || msg == "" {
+			continue
+		}
+		username := strings.TrimSpace(e.Username)
+		if username == "" {
+			username = uid
+		}
+		liveName := strings.TrimSpace(e.LiveName)
+		ts := e.Timestamp
+		if ts.IsZero() {
+			ts = time.Now()
+		}
+		_, err := tx.Exec(`
+			INSERT INTO user_messages (live_name, uniqueId, username, message, timestamp)
+			SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (
+				SELECT 1 FROM user_messages WHERE LOWER(uniqueId) = ? AND LOWER(message) = ?
+			)`, liveName, e.UniqueID, username, e.Message, ts, uid, msg)
+		if err != nil {
+			return fmt.Errorf("batch insert user message: %w", err)
+		}
+		users[uid] = struct{}{}
+	}
+
+	for uid := range users {
+		_, err := tx.Exec(`
+			DELETE FROM user_messages WHERE id NOT IN (
+				SELECT id FROM user_messages WHERE LOWER(uniqueId) = ?
+				ORDER BY timestamp DESC LIMIT 10
+			) AND LOWER(uniqueId) = ?`, uid, uid)
+		if err != nil {
+			return fmt.Errorf("prune user messages: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit batch user messages: %w", err)
+	}
+	return nil
+}
+
 // GetUserMessages returns all unique messages for a specific user.
 func (db *DB) GetUserMessages(uniqueID string) ([]model.UserMessage, error) {
 	uniqueID = strings.ToLower(strings.TrimSpace(uniqueID))
@@ -355,7 +468,7 @@ func (db *DB) GetUserMessages(uniqueID string) ([]model.UserMessage, error) {
 	defer db.mu.Unlock()
 
 	rows, err := db.conn.Query(
-		"SELECT id, uniqueId, username, message, timestamp FROM user_messages WHERE LOWER(uniqueId) = ? ORDER BY timestamp DESC",
+		"SELECT id, live_name, uniqueId, username, message, timestamp FROM user_messages WHERE LOWER(uniqueId) = ? ORDER BY timestamp DESC",
 		uniqueID,
 	)
 	if err != nil {
@@ -366,7 +479,7 @@ func (db *DB) GetUserMessages(uniqueID string) ([]model.UserMessage, error) {
 	var out []model.UserMessage
 	for rows.Next() {
 		var um model.UserMessage
-		if err := rows.Scan(&um.ID, &um.UniqueID, &um.Username, &um.Message, &um.Timestamp); err != nil {
+		if err := rows.Scan(&um.ID, &um.LiveName, &um.UniqueID, &um.Username, &um.Message, &um.Timestamp); err != nil {
 			return nil, fmt.Errorf("scan user message: %w", err)
 		}
 		out = append(out, um)
@@ -380,7 +493,7 @@ func (db *DB) GetAllUserMessages() (map[string][]model.UserMessage, error) {
 	defer db.mu.Unlock()
 
 	rows, err := db.conn.Query(
-		"SELECT uniqueId, username, message, timestamp FROM user_messages ORDER BY uniqueId, timestamp DESC",
+		"SELECT id, live_name, uniqueId, username, message, timestamp FROM user_messages ORDER BY uniqueId, timestamp DESC",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query all user messages: %w", err)
@@ -390,7 +503,7 @@ func (db *DB) GetAllUserMessages() (map[string][]model.UserMessage, error) {
 	result := make(map[string][]model.UserMessage)
 	for rows.Next() {
 		var um model.UserMessage
-		if err := rows.Scan(&um.UniqueID, &um.Username, &um.Message, &um.Timestamp); err != nil {
+		if err := rows.Scan(&um.ID, &um.LiveName, &um.UniqueID, &um.Username, &um.Message, &um.Timestamp); err != nil {
 			return nil, fmt.Errorf("scan user message: %w", err)
 		}
 		result[um.UniqueID] = append(result[um.UniqueID], um)
@@ -521,7 +634,7 @@ func (db *DB) GetTodayUserMessages() ([]model.UserMessage, error) {
 	defer db.mu.Unlock()
 
 	rows, err := db.conn.Query(
-		`SELECT id, uniqueId, username, message, timestamp
+		`SELECT id, live_name, uniqueId, username, message, timestamp
 		 FROM user_messages
 		 WHERE date(timestamp) = date('now')
 		 ORDER BY timestamp ASC`,
@@ -534,7 +647,7 @@ func (db *DB) GetTodayUserMessages() ([]model.UserMessage, error) {
 	var out []model.UserMessage
 	for rows.Next() {
 		var um model.UserMessage
-		if err := rows.Scan(&um.ID, &um.UniqueID, &um.Username, &um.Message, &um.Timestamp); err != nil {
+		if err := rows.Scan(&um.ID, &um.LiveName, &um.UniqueID, &um.Username, &um.Message, &um.Timestamp); err != nil {
 			return nil, fmt.Errorf("scan today user message: %w", err)
 		}
 		out = append(out, um)
@@ -791,6 +904,16 @@ func nullIfEmpty(s string) any {
 	return s
 }
 
+// coalesceStr returns the first non-empty string, or the fallback.
+func coalesceStr(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // GetRecentPinnedComments returns the latest N pinned comments.
 func (db *DB) GetRecentPinnedComments(liveName string, limit int) ([]model.PinnedComment, error) {
 	if limit < 1 || limit > 200 {
@@ -961,6 +1084,203 @@ func (db *DB) ExecSQL(query string, args ...any) error {
 	defer db.mu.Unlock()
 	_, err := db.conn.Exec(query, args...)
 	return err
+}
+
+// --- RankingRepository ---
+
+// LiveFirstSeen returns the earliest recorded timestamp for a live.
+func (db *DB) LiveFirstSeen(liveName string) (string, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var ts sql.NullString
+	query := `SELECT MIN(timestamp) FROM (
+		SELECT timestamp FROM user_messages WHERE live_name = ?
+		UNION ALL SELECT timestamp FROM gifts WHERE live_name = ?
+		UNION ALL SELECT received_at FROM target_gift_history WHERE live_name = ?
+		UNION ALL SELECT timestamp FROM anomaly_logs WHERE live_name = ?
+	)`
+	err := db.conn.QueryRow(query, liveName, liveName, liveName, liveName).Scan(&ts)
+	if err != nil {
+		return "", fmt.Errorf("query live first seen: %w", err)
+	}
+	if !ts.Valid || ts.String == "" {
+		return "", nil
+	}
+	at, perr := parseSQLiteTime(ts.String)
+	if perr != nil {
+		return ts.String, nil
+	}
+	return at.UTC().Format(time.RFC3339), nil
+}
+
+// LiveStatsByUser returns per-user aggregated stats for a live.
+func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	stats := make(map[string]model.LiveStat)
+
+	// Messages (and questions, detected heuristically).
+	msgRows, err := db.conn.Query(`
+		SELECT uniqueId, username, COUNT(*) AS n,
+			SUM(CASE WHEN instr(message, '?') > 0 OR lower(message) LIKE 'pq%'
+			  OR lower(message) LIKE 'por que%' OR lower(message) LIKE 'como%'
+			  OR lower(message) LIKE 'quando%' OR lower(message) LIKE 'qual%'
+			  OR lower(message) LIKE 'quem%' OR lower(message) LIKE 'onde%'
+			  OR lower(message) LIKE 'aonde%' OR lower(message) LIKE 'sera%'
+			  OR lower(message) LIKE 'pode%' OR lower(message) LIKE 'poderia%'
+			THEN 1 ELSE 0 END) AS questions,
+		MIN(timestamp) AS first, MAX(timestamp) AS last
+		FROM user_messages WHERE live_name = ? GROUP BY uniqueId`, liveName)
+	if err != nil {
+		return nil, fmt.Errorf("query live stats messages: %w", err)
+	}
+	for msgRows.Next() {
+		var uid, uname, first, last sql.NullString
+		var n, questions int
+		if err := msgRows.Scan(&uid, &uname, &n, &questions, &first, &last); err != nil {
+			msgRows.Close()
+			return nil, fmt.Errorf("scan live stat message: %w", err)
+		}
+		if uid.String == "" {
+			continue
+		}
+		s := stats[uid.String]
+		s.UniqueID = uid.String
+		s.Nickname = coalesceStr(uname.String, uid.String)
+		s.MessageCount = n
+		s.QuestionCount = questions
+		if first.Valid && first.String != "" {
+			s.FirstSeen = first.String
+		}
+		if last.Valid && last.String != "" {
+			s.LastSeen = last.String
+		}
+		stats[uid.String] = s
+	}
+	msgRows.Close()
+
+	// Gifts.
+	giftRows, err := db.conn.Query(`
+		SELECT uniqueId, nickname, COUNT(*) AS n, SUM(repeat_count) AS total,
+			MIN(timestamp) AS first, MAX(timestamp) AS last
+		FROM gifts WHERE live_name = ? GROUP BY uniqueId`, liveName)
+	if err != nil {
+		return nil, fmt.Errorf("query live stats gifts: %w", err)
+	}
+	for giftRows.Next() {
+		var uid, uname string
+		var n, total int
+		var first, last sql.NullString
+		if err := giftRows.Scan(&uid, &uname, &n, &total, &first, &last); err != nil {
+			giftRows.Close()
+			return nil, fmt.Errorf("scan live stat gift: %w", err)
+		}
+		if uid == "" {
+			continue
+		}
+		s := stats[uid]
+		s.UniqueID = uid
+		s.Nickname = coalesceStr(uname, uid)
+		s.GiftCount = n
+		s.GiftTotal = total
+		if first.Valid && first.String != "" {
+			if s.FirstSeen == "" || first.String < s.FirstSeen {
+				s.FirstSeen = first.String
+			}
+		}
+		if last.Valid && last.String != "" {
+			if s.LastSeen == "" || last.String > s.LastSeen {
+				s.LastSeen = last.String
+			}
+		}
+		stats[uid] = s
+	}
+	giftRows.Close()
+
+	out := make([]model.LiveStat, 0, len(stats))
+	for _, s := range stats {
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// RecentLivesForUser returns the last N lives a participant appeared in.
+func (db *DB) RecentLivesForUser(uniqueID string, limit int) ([]model.UserLiveSummary, error) {
+	uniqueID = strings.ToLower(strings.TrimSpace(uniqueID))
+	if uniqueID == "" {
+		return []model.UserLiveSummary{}, nil
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	out := make([]model.UserLiveSummary, 0)
+
+	// Group by live_name across messages, gifts and target gifts.
+	rows, err := db.conn.Query(`
+		SELECT live_name,
+			SUM(CASE WHEN tbl='msg' THEN 1 ELSE 0 END) AS messages,
+			SUM(CASE WHEN tbl='gift' THEN 1 ELSE 0 END) AS gifts,
+			MIN(ts) AS first_seen, MAX(ts) AS last_seen
+		FROM (
+			SELECT live_name, 'msg' AS tbl, uniqueId AS uid, timestamp AS ts
+			FROM user_messages WHERE LOWER(uniqueId) = ?
+			UNION ALL
+			SELECT live_name, 'gift' AS tbl, uniqueId AS uid, timestamp AS ts
+			FROM gifts WHERE LOWER(uniqueId) = ?
+			UNION ALL
+			SELECT live_name, 'gift' AS tbl, uniqueId AS uid, received_at AS ts
+			FROM target_gift_history WHERE LOWER(uniqueId) = ?
+		) GROUP BY live_name ORDER BY MAX(ts) DESC LIMIT ?`,
+		uniqueID, uniqueID, uniqueID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query recent lives: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var liveName string
+		var messages, gifts int
+		var firstSeen, lastSeen sql.NullString
+		if err := rows.Scan(&liveName, &messages, &gifts, &firstSeen, &lastSeen); err != nil {
+			return nil, fmt.Errorf("scan recent life: %w", err)
+		}
+		ls := model.UserLiveSummary{LiveName: liveName, Messages: messages, Gifts: gifts}
+		if firstSeen.Valid && firstSeen.String != "" {
+			if at, perr := parseSQLiteTime(firstSeen.String); perr == nil {
+				ls.FirstSeen = at.UTC().Format(time.RFC3339)
+			} else {
+				ls.FirstSeen = firstSeen.String
+			}
+		}
+		if lastSeen.Valid && lastSeen.String != "" {
+			if at, perr := parseSQLiteTime(lastSeen.String); perr == nil {
+				ls.LastSeen = at.UTC().Format(time.RFC3339)
+			} else {
+				ls.LastSeen = lastSeen.String
+			}
+		}
+		out = append(out, ls)
+	}
+	return out, rows.Err()
+}
+
+// TotalDistinctUsers counts distinct users across all stored messages.
+func (db *DB) TotalDistinctUsers() (int, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var count int
+	err := db.conn.QueryRow(
+		"SELECT COUNT(DISTINCT uniqueId) FROM user_messages",
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("query distinct users: %w", err)
+	}
+	return count, nil
 }
 
 // --- Repository interface ---

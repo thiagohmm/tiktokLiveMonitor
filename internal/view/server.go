@@ -15,13 +15,20 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"text/template"
 	"time"
 
+	"github.com/thiagohmm/tiktok-live-monitor/internal/alerts"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/config"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 )
+
+// BuildVersion identifies the compiled build. It is injected at link time via
+// -ldflags "-X github.com/thiagohmm/tiktok-live-monitor/internal/view.BuildVersion=..."
+// and used to bust browser caches for static assets (e.g. renderer.js).
+var BuildVersion = "dev"
 
 // HTTPServer is the presentation layer (View) that handles HTTP requests.
 type HTTPServer struct {
@@ -31,6 +38,33 @@ type HTTPServer struct {
 	sseMu      sync.Mutex
 	webDir     string
 	cfg        Config
+}
+
+// handleRoot serves the main UI (index.html) with a build-version query string
+// injected into the renderer.js <script> tag to bust browser caches. Any other
+// path is delegated to the static file server.
+func (s *HTTPServer) handleRoot(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.FileServer(http.Dir(s.webDir)).ServeHTTP(w, r)
+		return
+	}
+
+	indexHTML, err := os.ReadFile(filepath.Join(s.webDir, "index.html"))
+	if err != nil {
+		http.Error(w, "Página inicial não encontrada.", http.StatusInternalServerError)
+		return
+	}
+
+	tmpl, err := template.New("index.html").Option("missingkey=error").Parse(string(indexHTML))
+	if err != nil {
+		http.Error(w, "Falha ao renderizar a página.", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := tmpl.Execute(w, map[string]string{"BuildVersion": BuildVersion}); err != nil {
+		log.Printf("[View] Error rendering index.html: %v", err)
+	}
 }
 
 // Config holds server configuration.
@@ -90,9 +124,15 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/target-gift-history/answer", s.handleTargetGiftHistoryAnswer)
 	mux.HandleFunc("/api/pinned-comments", s.handlePinnedComments)
 	mux.HandleFunc("/api/ask-ai", s.handleAskAI)
+	mux.HandleFunc("/api/ranking", s.handleRanking)
+	mux.HandleFunc("/api/report", s.handleReport)
+	mux.HandleFunc("/api/profile", s.handleProfile)
+	mux.HandleFunc("/api/alert-config", s.handleAlertConfig)
 
-	// Static files.
-	mux.Handle("/", http.FileServer(http.Dir(s.webDir)))
+	// Root page: render index.html with a cache-busting build version so the
+	// browser always re-fetches renderer.js after a rebuild. Every other path
+	// is delegated to the static file server.
+	mux.HandleFunc("/", s.handleRoot)
 
 	// Chart.js vendor.
 	mux.HandleFunc("/vendor/chart.js", func(w http.ResponseWriter, r *http.Request) {
@@ -562,6 +602,83 @@ func (s *HTTPServer) handleAskAI(w http.ResponseWriter, r *http.Request) {
 		"question": body.Question,
 		"answer":   response,
 	})
+}
+
+// handleRanking returns the engagement ranking for a live.
+func (s *HTTPServer) handleRanking(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	query := r.URL.Query()
+	liveName := query.Get("live")
+	if liveName == "" {
+		state := s.controller.GetState()
+		liveName = state.Username
+	}
+	ranking, err := s.controller.GetLiveRanking(liveName)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, ranking)
+}
+
+// handleReport generates an AI-assisted post-live report.
+func (s *HTTPServer) handleReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	query := r.URL.Query()
+	liveName := query.Get("live")
+	if liveName == "" {
+		state := s.controller.GetState()
+		liveName = state.Username
+	}
+	report, err := s.controller.GenerateReport(r.Context(), liveName)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, report)
+}
+
+// handleProfile returns the historical profile for a participant.
+func (s *HTTPServer) handleProfile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	uniqueID := r.URL.Query().Get("uid")
+	if uniqueID == "" {
+		writeError(w, http.StatusBadRequest, "uid is required")
+		return
+	}
+	profile, err := s.controller.GetUserProfile(uniqueID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, profile)
+}
+
+// handleAlertConfig gets or updates the alert webhook configuration.
+func (s *HTTPServer) handleAlertConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, s.controller.GetAlertConfig())
+	case http.MethodPost:
+		var body alerts.Config
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid body")
+			return
+		}
+		s.controller.SetAlertConfig(body)
+		writeJSON(w, map[string]string{"success": "ok"})
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
 }
 
 // --- Helpers ---

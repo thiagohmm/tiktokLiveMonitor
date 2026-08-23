@@ -41,7 +41,7 @@ type AnomalyRepository interface {
 
 // UserMessageRepository handles persistence of user messages.
 type UserMessageRepository interface {
-	AddUserMessageDedup(uniqueID, username, message string) error
+	AddUserMessageDedup(liveName, uniqueID, username, message string) error
 	GetUserMessages(uniqueID string) ([]UserMessage, error)
 	GetAllUserMessages() (map[string][]UserMessage, error)
 	GetTodayUserMessages() ([]UserMessage, error)
@@ -76,6 +76,30 @@ type SessionRepository interface {
 	DeleteSessionData(liveName string) error
 }
 
+// RankingRepository handles engagement ranking and live analytics.
+type RankingRepository interface {
+	// LiveFirstSeen returns the first recorded timestamp for a live (RFC3339).
+	LiveFirstSeen(liveName string) (string, error)
+	// LiveStatsByUser returns per-user aggregated stats for a live.
+	LiveStatsByUser(liveName string) ([]LiveStat, error)
+	// RecentLivesForUser returns the last N lives a participant appeared in.
+	RecentLivesForUser(uniqueID string, limit int) ([]UserLiveSummary, error)
+	// TotalDistinctUsers counts distinct users across all user_messages.
+	TotalDistinctUsers() (int, error)
+}
+
+// LiveStat is per-user aggregated data used to compute a ranking score.
+type LiveStat struct {
+	UniqueID      string
+	Nickname      string
+	MessageCount  int
+	QuestionCount int
+	GiftCount     int
+	GiftTotal     int
+	FirstSeen     string
+	LastSeen      string
+}
+
 // Repository combines all repository interfaces.
 type Repository interface {
 	FeedbackRepository
@@ -85,5 +109,6 @@ type Repository interface {
 	TargetGiftHistoryRepository
 	PinnedCommentRepository
 	SessionRepository
+	RankingRepository
 	Close() error
 }

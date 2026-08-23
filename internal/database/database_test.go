@@ -98,12 +98,12 @@ func TestGetRecentFeedbacksLimit(t *testing.T) {
 func TestAddUserMessageDedup(t *testing.T) {
 	db := openTestDB(t)
 
-	err := db.AddUserMessageDedup("user1", "User One", "Hello")
+	err := db.AddUserMessageDedup("live1", "user1", "User One", "Hello")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	err = db.AddUserMessageDedup("user1", "User One", "Hello")
+	err = db.AddUserMessageDedup("live1", "user1", "User One", "Hello")
 	if err != nil {
 		t.Fatalf("unexpected error for duplicate: %v", err)
 	}
@@ -120,12 +120,12 @@ func TestAddUserMessageDedup(t *testing.T) {
 func TestAddUserMessageDedupCaseInsensitive(t *testing.T) {
 	db := openTestDB(t)
 
-	err := db.AddUserMessageDedup("user1", "User One", "Hello")
+	err := db.AddUserMessageDedup("live1", "user1", "User One", "Hello")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	err = db.AddUserMessageDedup("USER1", "User One", "HELLO")
+	err = db.AddUserMessageDedup("live1", "USER1", "User One", "HELLO")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestAddUserMessageDedupMax10FIFO(t *testing.T) {
 	db := openTestDB(t)
 
 	for i := 0; i < 15; i++ {
-		err := db.AddUserMessageDedup("user1", "User One", "msg")
+		err := db.AddUserMessageDedup("live1", "user1", "User One", "msg")
 		if err != nil {
 			t.Fatalf("add message %d: %v", i, err)
 		}
@@ -161,12 +161,12 @@ func TestAddUserMessageDedupMax10FIFO(t *testing.T) {
 func TestAddUserMessageDedupEmpty(t *testing.T) {
 	db := openTestDB(t)
 
-	err := db.AddUserMessageDedup("", "User", "msg")
+	err := db.AddUserMessageDedup("live1", "", "User", "msg")
 	if err != nil {
 		t.Fatalf("expected nil for empty uniqueID, got: %v", err)
 	}
 
-	err = db.AddUserMessageDedup("user1", "User", "")
+	err = db.AddUserMessageDedup("live1", "user1", "User", "")
 	if err != nil {
 		t.Fatalf("expected nil for empty message, got: %v", err)
 	}
@@ -192,11 +192,11 @@ func TestGetUserMessagesEmpty(t *testing.T) {
 func TestGetAllUserMessages(t *testing.T) {
 	db := openTestDB(t)
 
-	err := db.AddUserMessageDedup("user1", "User One", "msg1")
+	err := db.AddUserMessageDedup("live1", "user1", "User One", "msg1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	err = db.AddUserMessageDedup("user2", "User Two", "msg2")
+	err = db.AddUserMessageDedup("live1", "user2", "User Two", "msg2")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -617,7 +617,7 @@ func TestDeleteSessionData(t *testing.T) {
 	if err := db.LogAnomaly("live2", "ok", false, "OK", "user2"); err != nil {
 		t.Fatalf("log live2: %v", err)
 	}
-	if err := db.AddUserMessageDedup("user1", "User One", "hello"); err != nil {
+	if err := db.AddUserMessageDedup("live1", "user1", "User One", "hello"); err != nil {
 		t.Fatalf("add message: %v", err)
 	}
 	if _, err := db.AddFeedback("example", "SPAM", "SIM_SPAM"); err != nil {
