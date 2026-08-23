@@ -421,7 +421,7 @@ func (m *Manager) resolvePaths() (binPath, modelPath string) {
 			}
 		}
 	}
-	modelPath = filepath.Join(m.modelsDir, "ggml-model.gguf") // Fallback.
+	modelPath = filepath.Join(m.modelsDir, "gemma-4-E4B-it-Q4_K_M.gguf") // Fallback.
 
 	return binPath, modelPath
 }

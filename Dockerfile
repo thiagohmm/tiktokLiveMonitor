@@ -38,6 +38,8 @@ RUN apt-get update \
         libstdc++6 \
         libatomic1 \
         curl \
+        python3 \
+        python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -45,8 +47,11 @@ WORKDIR /app
 COPY --from=builder /tiktok-live-monitor /app/tiktok-live-monitor
 COPY web/ ./web/
 COPY model-config.json ./
+COPY agent/ ./agent/
+COPY requirements.txt ./
 
-RUN mkdir -p models bin
+RUN mkdir -p models bin \
+    && pip3 install --break-system-packages --no-cache-dir -r requirements.txt
 
 ENV HOST=0.0.0.0
 ENV PORT=3000

@@ -6,17 +6,10 @@ const unzipper = require('unzipper');
 const tar = require('tar');
 
 // Registro espelhando internal/config/config.go (var Models).
-// Em Docker (Linux) o container usa as variantes E2B menores.
 const MODELS = {
     'gemma-4b': {
-        filename: 'google_gemma-4-E4B-it-Q4_K_M.gguf',
-        url: 'https://huggingface.co/bartowski/google_gemma-4-E4B-it-GGUF/resolve/main/google_gemma-4-E4B-it-Q4_K_M.gguf',
-        dockerFilename: 'google_gemma-4-E2B-it-Q4_K_M.gguf',
-        dockerUrl: 'https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF/resolve/main/google_gemma-4-E2B-it-Q4_K_M.gguf',
-    },
-    'gemma-2-2b': {
-        filename: 'ggml-model.gguf',
-        url: 'https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf',
+        filename: 'gemma-4-E4B-it-Q4_K_M.gguf',
+        url: 'https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf',
     },
     'llama-3.2-3b': {
         filename: 'Llama-3.2-3B-Instruct-Q4_K_M.gguf',
@@ -270,9 +263,8 @@ async function setup() {
         if (cfg.selectedModel && MODELS[cfg.selectedModel]) modelKey = cfg.selectedModel;
     } catch { /* usa o padrão */ }
     const info = MODELS[modelKey];
-    const inDocker = fs.existsSync('/.dockerenv');
-    const GGUF_FILENAME = (inDocker && info.dockerFilename) ? info.dockerFilename : info.filename;
-    const DOWNLOAD_URL = (inDocker && info.dockerUrl) ? info.dockerUrl : info.url;
+    const GGUF_FILENAME = info.filename;
+    const DOWNLOAD_URL = info.url;
 
     const modelDest = path.join(MODELS_DIR, GGUF_FILENAME);
     await downloadFile(DOWNLOAD_URL, modelDest);

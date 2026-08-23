@@ -23,6 +23,10 @@ models/*.gguf
 models/*.gguf.broken
 /bin/
 
+# Python
+__pycache__/
+*.py[cod]
+
 # Binary files
 *.exe
 *.dmg

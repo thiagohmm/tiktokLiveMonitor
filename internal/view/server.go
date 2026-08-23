@@ -69,11 +69,12 @@ func (s *HTTPServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 
 // Config holds server configuration.
 type Config struct {
-	Host      string
-	Port      int
-	ModelsDir string
-	BinDir    string
-	WebDir    string
+	Host       string
+	Port       int
+	ModelsDir  string
+	BinDir     string
+	WebDir     string
+	AgentProxy http.Handler
 }
 
 // New creates a new HTTP server (View).
@@ -128,6 +129,11 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/report", s.handleReport)
 	mux.HandleFunc("/api/profile", s.handleProfile)
 	mux.HandleFunc("/api/alert-config", s.handleAlertConfig)
+
+	// Agent proxy: forward /agent/* to the Python agent HTTP API.
+	if s.cfg.AgentProxy != nil {
+		mux.Handle("/agent/", s.cfg.AgentProxy)
+	}
 
 	// Root page: render index.html with a cache-busting build version so the
 	// browser always re-fetches renderer.js after a rebuild. Every other path

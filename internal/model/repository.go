@@ -25,6 +25,7 @@ var ErrUniqueIDRequired = errors.New("uniqueId is required")
 type FeedbackRepository interface {
 	AddFeedback(comment, category, expected string) (int64, error)
 	GetRecentFeedbacks(limit int) ([]Feedback, error)
+	GetFalsePositiveComments(limit int) ([]string, error)
 }
 
 // AnomalyRepository handles persistence of moderation logs.

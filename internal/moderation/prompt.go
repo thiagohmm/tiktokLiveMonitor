@@ -49,9 +49,17 @@ func buildPromptContext(ctx context.Context, repo model.Repository, limit int) (
 	var sb strings.Builder
 	sb.WriteString(baseSystemPrompt)
 	sb.WriteString("\n\nO usuário humano revisou as seguintes mensagens. Siga estas classificações como exemplos (Few-Shot):\n")
+	seen := make(map[string]struct{}, len(feedbacks))
+	added := 0
 	for _, f := range feedbacks {
+		key := f.Comment + "\x00" + f.Expected
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
 		sb.WriteString(fmt.Sprintf("- Texto: %q -> Classificar como: %s\n", f.Comment, f.Expected))
+		added++
 	}
 
-	return sb.String(), len(feedbacks), nil
+	return sb.String(), added, nil
 }

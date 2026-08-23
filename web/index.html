@@ -130,6 +130,14 @@
             font-size: 0.82em;
             border-radius: 8px;
         }
+        .fix-false-positive-btn {
+            margin-top: 6px;
+            padding: 4px 10px;
+            font-size: 0.75em;
+            border-radius: 6px;
+            background: linear-gradient(135deg, #3a3f4c, #555b6a);
+            box-shadow: none;
+        }
         #status {
             margin-bottom: 20px;
             font-size: 0.9em;
@@ -854,6 +862,23 @@
                 </div>
             </div>
         </section>
+        <section class="ai-card">
+            <div class="ai-card-head">
+                <span class="ai-card-title">Agente de IA</span>
+            </div>
+            <div class="ai-question">
+                <label for="agentQuestion">Comando para o copiloto:</label>
+                <div class="ai-question-row">
+                    <input type="text" id="agentQuestion" placeholder="Ex: ranking da live, perfil de @fulano" autocomplete="off">
+                    <button id="agentAskBtn" type="button" class="small-btn">Perguntar</button>
+                    <button id="agentSummarizeBtn" type="button" class="small-btn secondary-btn">Resumir live</button>
+                </div>
+                <div id="agentAnswerWrap" style="display: none;">
+                    <div id="agentAnswer"></div>
+                    <button id="clearAgentBtn" type="button" class="small-btn secondary-btn">Limpar</button>
+                </div>
+            </div>
+        </section>
 
             <style>
                 .ai-card {
@@ -917,7 +942,8 @@
                 #aiAnswerWrap {
                     margin-top: 0;
                 }
-                #aiAnswer {
+                #aiAnswer,
+                #agentAnswer {
                     padding: 14px 16px;
                     background: rgba(37, 244, 238, 0.06);
                     border: 1px solid var(--border);
@@ -1229,6 +1255,92 @@
         document.getElementById('aiQuestion').addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 document.getElementById('askAiBtn').click();
+            }
+        });
+
+        async function agentAsk(question) {
+            const answerWrap = document.getElementById('agentAnswerWrap');
+            const answerDiv = document.getElementById('agentAnswer');
+            const clearBtn = document.getElementById('clearAgentBtn');
+            const askBtn = document.getElementById('agentAskBtn');
+            const summarizeBtn = document.getElementById('agentSummarizeBtn');
+
+            answerWrap.style.display = 'block';
+            clearBtn.style.display = 'none';
+            answerDiv.textContent = 'Pensando...';
+            askBtn.disabled = true;
+            summarizeBtn.disabled = true;
+
+            try {
+                const resp = await fetch('/agent/ask', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question })
+                });
+                const data = await resp.json();
+                if (data.answer) {
+                    answerDiv.textContent = data.answer;
+                } else if (data.error) {
+                    answerDiv.textContent = resp.ok ? 'Erro: ' + data.error : 'Agente indisponível.';
+                } else {
+                    answerDiv.textContent = 'Sem resposta.';
+                }
+            } catch (e) {
+                answerDiv.textContent = 'Erro ao conectar com o agente (indisponível?).';
+            } finally {
+                clearBtn.style.display = 'inline-block';
+                askBtn.disabled = false;
+                summarizeBtn.disabled = false;
+            }
+        }
+
+        document.getElementById('agentAskBtn').addEventListener('click', () => {
+            const q = document.getElementById('agentQuestion').value.trim();
+            if (!q) return;
+            agentAsk(q);
+        });
+
+        document.getElementById('agentSummarizeBtn').addEventListener('click', async () => {
+            const answerWrap = document.getElementById('agentAnswerWrap');
+            const answerDiv = document.getElementById('agentAnswer');
+            const clearBtn = document.getElementById('clearAgentBtn');
+            const summarizeBtn = document.getElementById('agentSummarizeBtn');
+            const askBtn = document.getElementById('agentAskBtn');
+
+            answerWrap.style.display = 'block';
+            clearBtn.style.display = 'none';
+            answerDiv.textContent = 'Resumindo...';
+            summarizeBtn.disabled = true;
+            askBtn.disabled = true;
+
+            try {
+                const resp = await fetch('/agent/summarize');
+                const data = await resp.json();
+                if (data.summary) {
+                    answerDiv.textContent = data.summary;
+                } else if (data.error) {
+                    answerDiv.textContent = 'Agente indisponível.';
+                } else {
+                    answerDiv.textContent = 'Sem resposta.';
+                }
+            } catch (e) {
+                answerDiv.textContent = 'Erro ao conectar com o agente (indisponível?).';
+            } finally {
+                clearBtn.style.display = 'inline-block';
+                summarizeBtn.disabled = false;
+                askBtn.disabled = false;
+            }
+        });
+
+        document.getElementById('clearAgentBtn').addEventListener('click', () => {
+            document.getElementById('agentAnswer').textContent = '';
+            document.getElementById('agentAnswerWrap').style.display = 'none';
+            document.getElementById('clearAgentBtn').style.display = 'none';
+        });
+
+        document.getElementById('agentQuestion').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                document.getElementById('agentAskBtn').click();
             }
         });
     </script>
