@@ -43,9 +43,27 @@ function shouldIgnoreBridgeError(message) {
         message.includes('fetchWebcastSignatureFromEulerRoute');
 }
 
+let stdoutBroken = false;
+
+process.stdout.on('error', (err) => {
+    if (err && (err.code === 'EPIPE' || err.code === 'ERR_STREAM_DESTROYED' || err.code === 'ERR_STREAM_WRITE_AFTER_END')) {
+        stdoutBroken = true;
+    }
+});
+
+process.stdin.on('end', () => process.exit(0));
+process.stdin.on('close', () => process.exit(0));
+
 function send(type, data) {
-    const msg = JSON.stringify({ type, data }) + '\n';
-    process.stdout.write(msg);
+    if (stdoutBroken) {
+        return;
+    }
+    try {
+        const msg = JSON.stringify({ type, data }) + '\n';
+        process.stdout.write(msg);
+    } catch (err) {
+        stdoutBroken = true;
+    }
 }
 
 const { resolveIsFollower } = require('./follower');
@@ -60,6 +78,14 @@ function getUser(data) {
         nickname,
         isFollower: resolveIsFollower(data, user)
     };
+}
+
+// tiktok-live-connector v2 (WebcastChatMessage) exposes the message text in
+// `content`, while the legacy WebcastPushConnection used `comment`. Support both.
+function chatContent(data) {
+    if (typeof data.content === 'string' && data.content.trim()) return data.content.trim();
+    if (typeof data.comment === 'string' && data.comment.trim()) return data.comment.trim();
+    return '';
 }
 
 function asBool(value, fallback = true) {
@@ -390,7 +416,7 @@ async function doConnect(username) {
         send('new-chat-message', {
             uniqueId: user.uniqueId,
             nickname: user.nickname,
-            comment: data.comment || '',
+            comment: chatContent(data),
             timestamp: Date.now(),
             isFollower: user.isFollower
         });
@@ -485,7 +511,7 @@ async function doConnect(username) {
         chatBuffer.push({
             uniqueId: user.uniqueId,
             nickname: user.nickname,
-            comment: data.comment || '',
+            comment: chatContent(data),
             timestamp: Date.now(),
             isFollower: user.isFollower
         });

@@ -282,6 +282,126 @@
         .target-gift-chip button:hover {
             color: var(--pink);
         }
+        .report-box {
+            background: rgba(37, 244, 238, 0.04);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px 18px;
+        }
+        .report-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+        .report-stat {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 10px 12px;
+        }
+        .report-stat .stat-value {
+            font-size: 1.4em;
+            font-weight: 700;
+            color: var(--cyan);
+        }
+        .report-stat .stat-label {
+            font-size: 0.75em;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .report-text {
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-size: 0.9em;
+            line-height: 1.55;
+            color: var(--text);
+        }
+        .report-error {
+            margin-top: 10px;
+            color: var(--pink);
+            font-size: 0.85em;
+        }
+        .alert-config-box {
+            display: grid;
+            gap: 12px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px 18px;
+        }
+        .alert-field {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            font-size: 0.8em;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+        .alert-field input {
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 0.9em;
+        }
+        .alert-field input:focus {
+            outline: none;
+            border-color: var(--cyan);
+        }
+        .alert-config-status {
+            font-size: 0.8em;
+            min-height: 1.2em;
+        }
+        .alert-config-status.ok {
+            color: var(--cyan);
+        }
+        .alert-config-status.err {
+            color: var(--pink);
+        }
+        .suggestion-card {
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--cyan);
+            border-radius: 10px;
+            padding: 12px 14px;
+            margin-bottom: 10px;
+        }
+        .suggestion-q {
+            font-size: 0.8em;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+        .suggestion-a {
+            font-size: 0.92em;
+            color: var(--text);
+            line-height: 1.5;
+        }
+        .suggestion-reason {
+            font-size: 0.75em;
+            color: var(--text-muted);
+            margin-top: 6px;
+        }
+        .risk-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: 0.72em;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+        .risk-none { background: rgba(34,197,94,0.15); color: #22c55e; }
+        .risk-low { background: rgba(234,179,8,0.15); color: #eab308; }
+        .risk-medium { background: rgba(249,115,22,0.15); color: #f97316; }
+        .risk-high { background: rgba(239,68,68,0.15); color: #ef4444; }
+        .risk-critical { background: rgba(220,38,38,0.25); color: #dc2626; }
+        .ranking-rank {
+            font-weight: 800;
+            color: var(--cyan);
+        }
+        }
         .action-group {
             display: flex;
             gap: 8px;
@@ -937,6 +1057,91 @@
             </table>
         </div>
 
+        <!-- Ranking Inteligente da Live -->
+        <div class="section-title">
+            <div class="section-title-label">
+                <h3>🏆 Ranking de Engajamento</h3>
+            </div>
+            <div class="section-title-actions">
+                <button id="refreshRankingBtn" class="small-btn" type="button">Atualizar</button>
+            </div>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Usuário</th>
+                        <th>Score</th>
+                        <th>Presentes</th>
+                        <th>Mensagens</th>
+                        <th>Perguntas</th>
+                        <th>Risco</th>
+                    </tr>
+                </thead>
+                <tbody id="rankingTableBody">
+                    <!-- Ranking gerado pela IA aparecerá aqui -->
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Respostas Sugeridas em Tempo Real -->
+        <div class="section-title">
+            <div class="section-title-label">
+                <h3>💬 Respostas Sugeridas</h3>
+            </div>
+            <div class="section-title-actions">
+                <span class="section-subtitle">Sugestões prontas (não publicadas automaticamente)</span>
+            </div>
+        </div>
+        <div id="suggestionsContainer" class="table-container">
+            <!-- Respostas sugeridas aparecerão aqui -->
+        </div>
+
+        <!-- Relatório Pós-Live gerado por IA -->
+        <div class="section-title">
+            <div class="section-title-label">
+                <h3>📊 Relatório Pós-Live (IA)</h3>
+            </div>
+            <div class="section-title-actions">
+                <button id="generateReportBtn" class="small-btn" type="button">Gerar Relatório</button>
+            </div>
+        </div>
+        <div id="reportWrap" class="report-box" style="display: none;">
+            <div id="reportSummary" class="report-summary"></div>
+            <div id="reportText" class="report-text"></div>
+            <div id="reportError" class="report-error" style="display: none;"></div>
+        </div>
+
+        <!-- Alertas Externos (Discord / Telegram / WhatsApp) -->
+        <div class="section-title">
+            <div class="section-title-label">
+                <h3>🔔 Alertas Externos</h3>
+            </div>
+            <div class="section-title-actions">
+                <button id="saveAlertConfigBtn" class="small-btn" type="button">Salvar</button>
+            </div>
+        </div>
+        <div class="alert-config-box">
+            <label class="alert-field">
+                <span>Discord Webhook</span>
+                <input type="text" id="alertDiscord" placeholder="https://discord.com/api/webhooks/..." autocomplete="off">
+            </label>
+            <label class="alert-field">
+                <span>Telegram Chat ID</span>
+                <input type="text" id="alertTelegramChat" placeholder="ID do chat Telegram" autocomplete="off">
+            </label>
+            <label class="alert-field">
+                <span>Telegram Bot Token</span>
+                <input type="password" id="alertTelegramToken" placeholder="Token do bot Telegram" autocomplete="off">
+            </label>
+            <label class="alert-field">
+                <span>WhatsApp URL (360dialog)</span>
+                <input type="text" id="alertWhatsapp" placeholder="https://api.360dialog.io/..." autocomplete="off">
+            </label>
+            <div id="alertConfigStatus" class="alert-config-status"></div>
+        </div>
+
     </div>
 
     <div id="historyModalBackdrop" class="modal-backdrop" aria-hidden="true">
@@ -949,7 +1154,18 @@
             </div>
         </div>
 
-    <script src="renderer.js"></script>
+        <!-- Perfil do Participante -->
+        <div id="profileModalBackdrop" class="modal-backdrop" aria-hidden="true">
+            <div class="modal" role="dialog" aria-modal="true" aria-labelledby="profileModalTitle">
+                <div class="modal-header">
+                    <h2 id="profileModalTitle">Perfil do Participante</h2>
+                    <button id="profileModalCloseBtn" class="modal-close" type="button" aria-label="Fechar">×</button>
+                </div>
+                <div id="profileModalBody" class="modal-body"></div>
+            </div>
+        </div>
+
+    <script src="renderer.js?v={{ .BuildVersion }}"></script>
     <script>
         let askAiController = null;
 

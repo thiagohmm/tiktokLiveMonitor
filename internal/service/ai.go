@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 )
 
 // AskAI builds context from repository data and asks the AI a question.
-func AskAI(ctx context.Context, question string, aiManager *ai.Manager, repo model.Repository) (string, error) {
+func AskAI(ctx context.Context, question string, aiManager *ai.Manager, repo model.Repository, cachedMessages []model.UserMessage) (string, error) {
 	giftSummary, err := repo.GetGiftSummary()
 	if err != nil {
 		log.Printf("[Service-AI] Error fetching gift summary: %v", err)
@@ -25,15 +26,24 @@ func AskAI(ctx context.Context, question string, aiManager *ai.Manager, repo mod
 		log.Printf("[Service-AI] Error fetching user messages: %v", err)
 	}
 
-	contextText := buildAIContext(allMessages, giftSummary)
+	if len(cachedMessages) > 0 {
+		allMessages = mergeMessages(allMessages, cachedMessages)
+	}
 
-	systemPrompt := fmt.Sprintf(`Você é um assistente que responde perguntas sobre uma live do TikTok.
-Use os dados abaixo para responder. Busque informações nos dados de mensagens e presentes.
-Se a pergunta não estiver relacionada aos dados disponíveis, diga que não encontrou informações.
+	mentionedUsers := findMentionedUsers(question, allMessages)
+	contextText := buildAIContext(allMessages, giftSummary, mentionedUsers)
 
+	systemPrompt := fmt.Sprintf(`Você é o assistente de uma live do TikTok. Responda a pergunta EXCLUSIVAMENTE com base nos dados abaixo.
+
+REGRAS:
+1. Vá direto ao ponto. Nunca cumprimente e nunca diga que é um assistente.
+2. Se a pergunta menciona um usuário, relate TUDO dele da seção de perfil completo: presença, mensagens e presentes.
+3. Se os dados não contêm a informação pedida, responda apenas: "Não encontrei dados sobre isso na live."
+
+DADOS DA LIVE:
 %s
 
-Responda em português do Brasil de forma direta e concisa.`, contextText)
+Responda em português do Brasil, de forma direta e concisa.`, contextText)
 
 	req := ai.CompletionRequest{
 		SystemContent: systemPrompt,
@@ -44,13 +54,61 @@ Responda em português do Brasil de forma direta e concisa.`, contextText)
 	return aiManager.Complete(ctx, req)
 }
 
-func buildAIContext(allMessages map[string][]model.UserMessage, giftSummary map[string]map[string]int) string {
+func buildAIContext(allMessages map[string][]model.UserMessage, giftSummary map[string]map[string]int, mentionedUsers []string) string {
 	var sb strings.Builder
 
 	const maxMessages = 50
 	const maxGiftUsers = 10
 	const maxGiftTypesPerUser = 5
 	const maxMessageLen = 200
+	const maxUserMessages = 100
+
+	if len(mentionedUsers) > 0 {
+		sb.WriteString("PERFIL COMPLETO DO USUÁRIO MENCIONADO NA PERGUNTA:\n")
+		for _, uid := range mentionedUsers {
+			msgs := allMessages[uid]
+			nickname := ""
+			if len(msgs) > 0 {
+				nickname = msgs[0].Username
+			}
+			if nickname == "" {
+				nickname = uid
+			}
+			// msgs comes ordered by timestamp DESC: first = most recent, last = oldest.
+			firstSeen, lastSeen := "", ""
+			if len(msgs) > 0 {
+				lastSeen = msgs[0].Timestamp
+				firstSeen = msgs[len(msgs)-1].Timestamp
+			}
+			sb.WriteString(fmt.Sprintf("\nUSUÁRIO: %s (uid: %s)\n", nickname, uid))
+			sb.WriteString(fmt.Sprintf("  Presença na live: primeira atividade %s | última atividade %s | %d mensagens\n",
+				orDash(firstSeen), orDash(lastSeen), len(msgs)))
+
+			sb.WriteString("  Mensagens (ordem cronológica, da mais antiga para a mais recente):\n")
+			for i := len(msgs) - 1; i >= 0; i-- {
+				if len(msgs)-1-i >= maxUserMessages {
+					sb.WriteString(fmt.Sprintf("    ... (e mais %d mensagens anteriores)\n", len(msgs)-maxUserMessages))
+					break
+				}
+				text := msgs[i].Message
+				if len(text) > maxMessageLen {
+					text = text[:maxMessageLen]
+				}
+				sb.WriteString(fmt.Sprintf("    - [%s] %s\n", orDash(msgs[i].Timestamp), text))
+			}
+
+			if gifts, ok := giftSummary[uid]; ok && len(gifts) > 0 {
+				parts := make([]string, 0, len(gifts))
+				for gname, count := range gifts {
+					parts = append(parts, fmt.Sprintf("%s x%d", gname, count))
+				}
+				sb.WriteString(fmt.Sprintf("  Presentes enviados: %s\n", strings.Join(parts, ", ")))
+			} else {
+				sb.WriteString("  Presentes enviados: nenhum\n")
+			}
+		}
+		sb.WriteString("\n")
+	}
 
 	if len(allMessages) > 0 {
 		sb.WriteString("MENSAGENS RECENTES NA LIVE:\n")
@@ -154,6 +212,71 @@ func CorrelateGiftQuestion(ctx context.Context, aiManager *ai.Manager, gift moni
 	}
 	pick := candidates[idx-1]
 	return &pick
+}
+
+// mergeMessages merges buffered (write-behind cache) messages into the per-user
+// message map coming from the database, deduplicating by (user, message).
+func mergeMessages(base map[string][]model.UserMessage, extra []model.UserMessage) map[string][]model.UserMessage {
+	byUser := make(map[string][]model.UserMessage, len(base)+len(extra))
+	for uid, msgs := range base {
+		key := strings.ToLower(uid)
+		for _, m := range msgs {
+			if m.UniqueID != "" && strings.ToLower(m.UniqueID) != key {
+				key = strings.ToLower(m.UniqueID)
+				break
+			}
+		}
+		byUser[key] = msgs
+	}
+	for _, m := range extra {
+		key := strings.ToLower(m.UniqueID)
+		dup := false
+		for _, existing := range byUser[key] {
+			if strings.ToLower(existing.Message) == strings.ToLower(m.Message) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			byUser[key] = append(byUser[key], m)
+		}
+	}
+	return byUser
+}
+
+// findMentionedUsers returns the uniqueIDs of registered users mentioned by name in the question.
+func findMentionedUsers(question string, allMessages map[string][]model.UserMessage) []string {
+	q := strings.ToLower(strings.TrimSpace(question))
+	if q == "" {
+		return nil
+	}
+	var out []string
+	for uid, msgs := range allMessages {
+		names := map[string]struct{}{}
+		if uid != "" {
+			names[strings.ToLower(uid)] = struct{}{}
+		}
+		for _, m := range msgs {
+			if m.Username != "" {
+				names[strings.ToLower(m.Username)] = struct{}{}
+			}
+		}
+		for name := range names {
+			if len(name) >= 2 && strings.Contains(q, name) {
+				out = append(out, uid)
+				break
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 func coalesceUser(nickname, uniqueID string) string {

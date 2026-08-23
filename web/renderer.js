@@ -42,9 +42,28 @@ const historyModalBackdrop = document.getElementById('historyModalBackdrop');
 const historyModalTitle = document.getElementById('historyModalTitle');
 const historyModalBody = document.getElementById('historyModalBody');
 const historyModalCloseBtn = document.getElementById('historyModalCloseBtn');
+const profileModalBackdrop = document.getElementById('profileModalBackdrop');
+const profileModalBody = document.getElementById('profileModalBody');
+const profileModalCloseBtn = document.getElementById('profileModalCloseBtn');
 const giftSearchInput = document.getElementById('giftSearchInput');
 const allGiftsSection = document.getElementById('allGiftsSection');
 const allGiftsTableContainer = document.getElementById('allGiftsTableContainer');
+
+// --- New feature elements ---
+const rankingTableBody = document.getElementById('rankingTableBody');
+const refreshRankingBtn = document.getElementById('refreshRankingBtn');
+const suggestionsContainer = document.getElementById('suggestionsContainer');
+const generateReportBtn = document.getElementById('generateReportBtn');
+const reportWrap = document.getElementById('reportWrap');
+const reportSummary = document.getElementById('reportSummary');
+const reportText = document.getElementById('reportText');
+const reportError = document.getElementById('reportError');
+const saveAlertConfigBtn = document.getElementById('saveAlertConfigBtn');
+const alertDiscord = document.getElementById('alertDiscord');
+const alertTelegramChat = document.getElementById('alertTelegramChat');
+const alertTelegramToken = document.getElementById('alertTelegramToken');
+const alertWhatsapp = document.getElementById('alertWhatsapp');
+const alertConfigStatus = document.getElementById('alertConfigStatus');
 
 let chart;
 let messageCount = 0;
@@ -503,10 +522,124 @@ function openHistoryModal(type) {
     historyModalBackdrop.setAttribute('aria-hidden', 'false');
 }
 
+function closeProfileModal() {
+    if (!profileModalBackdrop) return;
+    profileModalBackdrop.classList.remove('is-open');
+    profileModalBackdrop.setAttribute('aria-hidden', 'true');
+    profileModalBody.innerHTML = '';
+}
+
 function closeHistoryModal() {
     historyModalBackdrop.classList.remove('is-open');
     historyModalBackdrop.setAttribute('aria-hidden', 'true');
     activeModalType = null;
+}
+
+async function openProfile(uniqueId) {
+    if (!profileModalBackdrop || !profileModalBody) return;
+    profileModalBody.innerHTML = '<p style="color:var(--text-muted)">Carregando perfil...</p>';
+    profileModalBackdrop.classList.add('is-open');
+    profileModalBackdrop.setAttribute('aria-hidden', 'false');
+    try {
+        const response = await fetch('/api/profile?uid=' + encodeURIComponent(String(uniqueId)));
+        const data = await response.json();
+        renderProfile(data);
+    } catch (error) {
+        profileModalBody.innerHTML = '<p style="color:var(--pink)">Falha ao carregar o perfil do usuário.</p>';
+        console.error('[Frontend] Falha ao carregar perfil:', error);
+    }
+}
+
+function renderProfile(profile) {
+    if (!profileModalBody) return;
+    profileModalBody.innerHTML = '';
+
+    const header = document.createElement('div');
+    header.style.marginBottom = '14px';
+    header.innerHTML =
+        '<div style="font-size:1.15em;font-weight:700;">' + escapeHtml(profile.nickname || profile.uniqueId || 'Participante') +
+        ' <span style="color:var(--text-muted);font-weight:400;font-size:0.8em;">@' + escapeHtml(profile.uniqueId || '') + '</span></div>';
+    const riskBadge = document.createElement('span');
+    riskBadge.className = 'risk-badge ' + riskBadgeClass(profile.riskLevel);
+    riskBadge.textContent = riskLabel(profile.riskLevel);
+    header.appendChild(riskBadge);
+    profileModalBody.appendChild(header);
+
+    const stats = document.createElement('div');
+    stats.className = 'report-summary';
+    stats.style.marginBottom = '16px';
+    const statItems = [
+        { value: profile.totalMessages != null ? profile.totalMessages : 0, label: 'Mensagens' },
+        { value: profile.totalGifts != null ? profile.totalGifts : 0, label: 'Presentes' },
+        { value: (profile.lastLives || []).length, label: 'Vidas participadas' }
+    ];
+    statItems.forEach(stat => {
+        const box = document.createElement('div');
+        box.className = 'report-stat';
+        box.innerHTML = '<div class="stat-value">' + escapeHtml(String(stat.value)) + '</div><div class="stat-label">' + escapeHtml(stat.label) + '</div>';
+        stats.appendChild(box);
+    });
+    profileModalBody.appendChild(stats);
+
+    // Últimas vidas
+    const lives = profile.lastLives || [];
+    if (lives.length) {
+        const h = document.createElement('h4');
+        h.textContent = 'Últimas vidas';
+        h.style.margin = '12px 0 6px';
+        h.style.fontSize = '0.9em';
+        h.style.color = 'var(--text-muted)';
+        profileModalBody.appendChild(h);
+        lives.forEach(live => {
+            const row = document.createElement('div');
+            row.className = 'suggestion-card';
+            row.style.borderLeftColor = 'var(--pink)';
+            row.innerHTML = '<div style="font-weight:600;">' + escapeHtml(live.liveName || 'Live') + '</div>' +
+                '<div style="font-size:0.8em;color:var(--text-muted);">' +
+                (live.messages != null ? live.messages + ' mensagens, ' : '') +
+                (live.gifts != null ? live.gifts + ' presentes. ' : '') +
+                ('Primeira: ' + (live.firstSeen || '—') + ' • Última: ' + (live.lastSeen || '—')) +
+                '</div>';
+            profileModalBody.appendChild(row);
+        });
+    }
+
+    // Alertas / infrações
+    const alerts = profile.alerts || [];
+    if (alerts.length) {
+        const h2 = document.createElement('h4');
+        h2.textContent = 'Alertas de moderação (' + alerts.length + ')';
+        h2.style.margin = '12px 0 6px';
+        h2.style.fontSize = '0.9em';
+        h2.style.color = 'var(--text-muted)';
+        profileModalBody.appendChild(h2);
+        alerts.slice(0, 15).forEach(alert => {
+            const row = document.createElement('div');
+            row.className = 'suggestion-card';
+            row.style.borderLeftColor = 'var(--pink)';
+            row.innerHTML = '<div style="font-size:0.85em;">' + escapeHtml(alert.category || 'Infração') + '</div>' +
+                '<div style="font-size:0.8em;color:var(--text-muted);">' + escapeHtml(alert.comment || '') + '</div>';
+            profileModalBody.appendChild(row);
+        });
+    }
+
+    // Mensagens recentes
+    const messages = profile.messages || [];
+    if (messages.length) {
+        const h3 = document.createElement('h4');
+        h3.textContent = 'Mensagens recentes (' + messages.length + ')';
+        h3.style.margin = '12px 0 6px';
+        h3.style.fontSize = '0.9em';
+        h3.style.color = 'var(--text-muted)';
+        profileModalBody.appendChild(h3);
+        messages.slice(0, 20).forEach(msg => {
+            const row = document.createElement('div');
+            row.className = 'suggestion-card';
+            row.style.borderLeftColor = 'var(--cyan)';
+            row.textContent = (msg.username || msg.uniqueId || '') + (msg.timestamp ? ' — ' + msg.timestamp : '') + ': ' + (msg.message || '');
+            profileModalBody.appendChild(row);
+        });
+    }
 }
 
 function addTargetGiftToHistory(user) {
@@ -710,12 +843,33 @@ targetGiftHistoryBtn.addEventListener('click', () => openHistoryModal('target-gi
 pinnedCommentHistoryBtn.addEventListener('click', () => openHistoryModal('pinned-comments'));
 listenBtn.addEventListener('click', () => openHistoryModal('listen'));
 
+if (refreshRankingBtn) {
+    refreshRankingBtn.addEventListener('click', () => loadRanking());
+}
+if (generateReportBtn) {
+    generateReportBtn.addEventListener('click', () => loadReport());
+}
+if (saveAlertConfigBtn) {
+    saveAlertConfigBtn.addEventListener('click', () => saveAlertConfig());
+}
+
 historyModalCloseBtn.addEventListener('click', closeHistoryModal);
 historyModalBackdrop.addEventListener('click', event => {
     if (event.target === historyModalBackdrop) {
         closeHistoryModal();
     }
 });
+
+if (profileModalCloseBtn) {
+    profileModalCloseBtn.addEventListener('click', closeProfileModal);
+}
+if (profileModalBackdrop) {
+    profileModalBackdrop.addEventListener('click', event => {
+        if (event.target === profileModalBackdrop) {
+            closeProfileModal();
+        }
+    });
+}
 document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && activeModalType) {
         closeHistoryModal();
@@ -976,6 +1130,11 @@ function addUserToList(user, options = {}) {
     const userSpan = document.createElement('span');
     userSpan.className = 'user-name';
     userSpan.textContent = user.nickname;
+    if (user.uniqueId) {
+        userSpan.style.cursor = 'pointer';
+        userSpan.title = 'Ver perfil';
+        userSpan.addEventListener('click', () => openProfile(user.uniqueId));
+    }
     userTd.appendChild(userSpan);
 
     const badge = createFollowerBadge(followerStatusForDisplay(user));
@@ -1208,6 +1367,11 @@ function addAllGiftToList(gift) {
     const userSpan = document.createElement('span');
     userSpan.className = 'user-name';
     userSpan.textContent = gift.nickname;
+    if (gift.uniqueId) {
+        userSpan.style.cursor = 'pointer';
+        userSpan.title = 'Ver perfil';
+        userSpan.addEventListener('click', () => openProfile(gift.uniqueId));
+    }
     userTd.appendChild(userSpan);
 
     const badge = createFollowerBadge(followerStatusForDisplay(gift));
@@ -1266,6 +1430,11 @@ function addPinnedCommentToList(pinnedComment, options = {}) {
     const userSpan = document.createElement('span');
     userSpan.className = 'user-name';
     userSpan.innerText = pinnedComment.nickname || pinnedComment.uniqueId || 'Nao identificado';
+    if (pinnedComment.uniqueId) {
+        userSpan.style.cursor = 'pointer';
+        userSpan.title = 'Ver perfil';
+        userSpan.addEventListener('click', () => openProfile(pinnedComment.uniqueId));
+    }
     userTd.appendChild(userSpan);
 
     const badge = createFollowerBadge(followerStatusForDisplay(pinnedComment));
@@ -1301,7 +1470,7 @@ function addFlaggedMessageToList(data) {
     rememberLiveUser(data);
 
     const category = String(data.category || '').toUpperCase();
-    if (!['REPETICAO', 'CORRELACAO'].includes(category)) {
+    if (!['REPETICAO', 'CORRELACAO', 'SPAM', 'GOLPE', 'PROSELITISMO', 'ODIO', 'OUTRO'].includes(category)) {
         return;
     }
 
@@ -1322,6 +1491,11 @@ function addFlaggedMessageToList(data) {
     const spanUser = document.createElement('span');
     spanUser.className = 'user-name';
     spanUser.textContent = data.nickname != null ? String(data.nickname) : '';
+    if (data.uniqueId) {
+        spanUser.style.cursor = 'pointer';
+        spanUser.title = 'Ver perfil';
+        spanUser.addEventListener('click', () => openProfile(data.uniqueId));
+    }
     tdUser.appendChild(spanUser);
 
     const badge = createFollowerBadge(followerStatusForDisplay(data));
@@ -1480,9 +1654,14 @@ async function loadInitialState() {
             await Promise.all([
                 loadAllGifts(),
                 loadPendingTargetGifts(),
-                loadPinnedComments()
+                loadPinnedComments(),
+                loadRanking()
             ]);
         }
+
+        // Carrega config de alertas e ranking mesmo desconectado.
+        loadAlertConfig();
+        loadRanking();
     } catch (error) {
         setStatus('Servidor indisponível', 'error');
     }
@@ -1577,6 +1756,14 @@ function setupEventStream() {
         markUserRed(JSON.parse(event.data));
     });
 
+    eventSource.addEventListener('suggested-response', event => {
+        try {
+            addSuggestion(JSON.parse(event.data));
+        } catch (error) {
+            console.error('[Frontend] Falha ao registrar resposta sugerida:', error, event.data);
+        }
+    });
+
     eventSource.addEventListener('settings-update', event => {
         renderTargetGifts();
     });
@@ -1584,6 +1771,233 @@ function setupEventStream() {
     eventSource.onerror = () => {
         setStatus('Reconectando ao servidor...', 'reconnecting');
     };
+}
+
+// --- Ranking Inteligente ---
+function riskBadgeClass(level) {
+    const map = {
+        'none': 'risk-none',
+        'low': 'risk-low',
+        'medium': 'risk-medium',
+        'high': 'risk-high',
+        'critical': 'risk-critical'
+    };
+    return map[level] || 'risk-none';
+}
+
+function riskLabel(level) {
+    const map = {
+        'none': 'Nenhum',
+        'low': 'Baixo',
+        'medium': 'Médio',
+        'high': 'Alto',
+        'critical': 'Crítico'
+    };
+    return map[level] || (level || 'Nenhum');
+}
+
+async function loadRanking() {
+    if (!rankingTableBody) return;
+    try {
+        const response = await fetch('/api/ranking');
+        const data = await response.json();
+        renderRanking(data);
+    } catch (error) {
+        console.error('[Frontend] Falha ao carregar ranking:', error);
+    }
+}
+
+function renderRanking(ranking) {
+    if (!rankingTableBody) return;
+    rankingTableBody.innerHTML = '';
+    const rows = ranking.userRanks || ranking.userRanks || [];
+    if (!rows.length) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 7;
+        td.style.textAlign = 'center';
+        td.style.color = 'var(--text-muted)';
+        td.textContent = 'Sem dados de engajamento ainda.';
+        tr.appendChild(td);
+        rankingTableBody.appendChild(tr);
+        return;
+    }
+    rows.forEach((user, index) => {
+        const tr = document.createElement('tr');
+        tr.className = 'user-row';
+        tr.dataset.uniqueId = user.uniqueId || '';
+
+        const tdRank = document.createElement('td');
+        tdRank.className = 'ranking-rank';
+        tdRank.textContent = String(index + 1);
+        tr.appendChild(tdRank);
+
+        const tdUser = document.createElement('td');
+        const spanUser = document.createElement('span');
+        spanUser.className = 'user-name';
+        spanUser.style.cursor = 'pointer';
+        spanUser.textContent = (user.nickname || user.uniqueId || 'Nao identificado');
+        spanUser.addEventListener('click', () => {
+            if (user.uniqueId) {
+                openProfile(user.uniqueId);
+            }
+        });
+        tdUser.appendChild(spanUser);
+        tr.appendChild(tdUser);
+
+        const tdScore = document.createElement('td');
+        tdScore.textContent = (user.score != null ? user.score.toFixed(1) : '0');
+        tr.appendChild(tdScore);
+
+        const tdGifts = document.createElement('td');
+        tdGifts.textContent = String(user.giftCount || 0);
+        tr.appendChild(tdGifts);
+
+        const tdMessages = document.createElement('td');
+        tdMessages.textContent = String(user.messageCount || 0);
+        tr.appendChild(tdMessages);
+
+        const tdQuestions = document.createElement('td');
+        tdQuestions.textContent = String(user.questionCount || 0);
+        tr.appendChild(tdQuestions);
+
+        const tdRisk = document.createElement('td');
+        const badge = document.createElement('span');
+        badge.className = 'risk-badge ' + riskBadgeClass(user.riskLevel);
+        badge.textContent = riskLabel(user.riskLevel);
+        tdRisk.appendChild(badge);
+        tr.appendChild(tdRisk);
+
+        rankingTableBody.appendChild(tr);
+    });
+}
+
+// --- Respostas Sugeridas ---
+function addSuggestion(data) {
+    if (!suggestionsContainer) return;
+    const card = document.createElement('div');
+    card.className = 'suggestion-card';
+
+    const q = document.createElement('div');
+    q.className = 'suggestion-q';
+    q.textContent = 'P: ' + (data.question || '(pergunta)');
+    card.appendChild(q);
+
+    const a = document.createElement('div');
+    a.className = 'suggestion-a';
+    a.textContent = data.suggested || '';
+    card.appendChild(a);
+
+    if (data.reason) {
+        const reason = document.createElement('div');
+        reason.className = 'suggestion-reason';
+        reason.textContent = '💡 ' + data.reason;
+        card.appendChild(reason);
+    }
+
+    suggestionsContainer.prepend(card);
+    while (suggestionsContainer.children.length > 25) {
+        suggestionsContainer.lastChild.remove();
+    }
+}
+
+// --- Relatório Pós-Live ---
+async function loadReport() {
+    if (!generateReportBtn) return;
+    generateReportBtn.disabled = true;
+    const originalText = generateReportBtn.textContent;
+    generateReportBtn.textContent = 'Gerando...';
+    reportWrap.style.display = 'block';
+    reportError.style.display = 'none';
+    reportSummary.innerHTML = '';
+    reportText.textContent = 'Gerando relatório com a IA, aguarê...';
+    try {
+        const response = await fetch('/api/report');
+        const data = await response.json();
+        if (data.error) {
+            reportText.textContent = '';
+            reportError.textContent = 'Erro: ' + data.error;
+            reportError.style.display = 'block';
+        } else {
+            renderReport(data);
+        }
+    } catch (error) {
+        reportText.textContent = '';
+        reportError.textContent = 'Falha ao conectar com o servidor.';
+        reportError.style.display = 'block';
+        console.error('[Frontend] Falha ao gerar relatório:', error);
+    } finally {
+        generateReportBtn.disabled = false;
+        generateReportBtn.textContent = originalText;
+    }
+}
+
+function renderReport(report) {
+    if (!reportSummary) return;
+    reportSummary.innerHTML = '';
+    const stats = [
+        { value: report.durationMinutes != null ? report.durationMinutes + ' min' : '—', label: 'Duração' },
+        { value: report.messageCount || 0, label: 'Mensagens' },
+        { value: report.participantCount || 0, label: 'Participantes' },
+        { value: report.giftCount || 0, label: 'Presentes' },
+        { value: report.giftTotal || 0, label: 'Total presentes' }
+    ];
+    stats.forEach(stat => {
+        const box = document.createElement('div');
+        box.className = 'report-stat';
+        box.innerHTML = '<div class="stat-value">' + escapeHtml(String(stat.value)) + '</div><div class="stat-label">' + escapeHtml(stat.label) + '</div>';
+        reportSummary.appendChild(box);
+    });
+    reportText.textContent = report.summary || 'Relatório indisponível.';
+}
+
+function escapeHtml(value) {
+    return String(value)
+        .replace(/&/g, '&')
+        .replace(/</g, '<')
+        .replace(/>/g, '>');
+}
+
+// --- Alertas Externos ---
+async function loadAlertConfig() {
+    try {
+        const response = await fetch('/api/alert-config');
+        const config = await response.json();
+        if (config.discordWebhook) alertDiscord.value = config.discordWebhook;
+        if (config.telegramChatId) alertTelegramChat.value = config.telegramChatId;
+        if (config.telegramToken) alertTelegramToken.value = config.telegramToken;
+        if (config.whatsappUrl) alertWhatsapp.value = config.whatsappUrl;
+    } catch (error) {
+        console.error('[Frontend] Falha ao carregar config de alertas:', error);
+    }
+}
+
+async function saveAlertConfig() {
+    const payload = {
+        discordWebhook: alertDiscord.value.trim(),
+        telegramChatId: alertTelegramChat.value.trim(),
+        telegramToken: alertTelegramToken.value.trim(),
+        whatsappUrl: alertWhatsapp.value.trim()
+    };
+    alertConfigStatus.textContent = '';
+    alertConfigStatus.className = 'alert-config-status';
+    try {
+        const response = await fetch('/api/alert-config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (response.ok) {
+            alertConfigStatus.textContent = 'Configuração salva.';
+            alertConfigStatus.className = 'alert-config-status ok';
+        } else {
+            throw new Error('Falha no servidor');
+        }
+    } catch (error) {
+        alertConfigStatus.textContent = 'Falha ao salvar configuração.';
+        alertConfigStatus.className = 'alert-config-status err';
+        console.error('[Frontend] Falha ao salvar config de alertas:', error);
+    }
 }
 
 function updateAllGiftsVisibility() {

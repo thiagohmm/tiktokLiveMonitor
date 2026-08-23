@@ -52,8 +52,15 @@ func main() {
 	// Service layer: moderation engine
 	modEngine := moderation.NewEngine(aiMgr, repo)
 
+	// In-memory write-behind cache for user messages (batched DB writes).
+	// Registered after repo.Close so the final flush runs before the DB closes.
+	msgCache := database.NewMessageCache(repo)
+	msgCache.Start()
+	defer msgCache.Stop()
+
 	// Controller layer: orchestrate services
 	ctrl := controller.NewAppController(aiMgr, modEngine, mon, repo)
+	ctrl.SetMessageCache(msgCache)
 
 	// View layer: HTTP server
 	port := 3001

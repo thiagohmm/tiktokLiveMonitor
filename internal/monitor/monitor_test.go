@@ -191,7 +191,7 @@ func newMonitorWithDB(t *testing.T) (*Monitor, *database.DB) {
 func TestRestoreOrPurgeKeepsRecentSameDay(t *testing.T) {
 	m, db := newMonitorWithDB(t)
 
-	if err := db.AddUserMessageDedup("user1", "User One", "hello today"); err != nil {
+	if err := db.AddUserMessageDedup("live1", "user1", "User One", "hello today"); err != nil {
 		t.Fatalf("add message: %v", err)
 	}
 	if err := db.LogAnomaly("live1", "spam", true, "SPAM", "user1"); err != nil {

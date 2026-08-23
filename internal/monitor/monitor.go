@@ -855,6 +855,13 @@ func (m *Monitor) loadTodayData() {
 	log.Printf("[Monitor] Restored %d pinned users from today's anomaly logs", len(todayAnomalies))
 }
 
+// Close stops the supervisor and kills the bridge child process. It is meant
+// for full application shutdown so the node bridge is not orphaned.
+func (m *Monitor) Close() {
+	m.stopSupervisor()
+	m.stopBridge()
+}
+
 func (m *Monitor) StopMonitoring() {
 	m.mu.Lock()
 	m.userStopped = true
@@ -871,6 +878,12 @@ func (m *Monitor) StopMonitoring() {
 		"success": false,
 		"error":   "Desconectado pelo usuário",
 	})
+}
+
+// Emit dispatches an event to all registered handlers. It is exported so the
+// controller layer can surface derived events (e.g. reply suggestions).
+func (m *Monitor) Emit(eventType string, data EventData) {
+	m.emit(eventType, data)
 }
 
 func (m *Monitor) emit(eventType string, data EventData) {
