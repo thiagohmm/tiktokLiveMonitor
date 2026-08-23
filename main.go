@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/ai"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
@@ -55,9 +56,15 @@ func main() {
 	ctrl := controller.NewAppController(aiMgr, modEngine, mon, repo)
 
 	// View layer: HTTP server
+	port := 3001
+	if p := os.Getenv("PORT"); p != "" {
+		if n, err := strconv.Atoi(p); err == nil && n > 0 {
+			port = n
+		}
+	}
 	srv := view.New(view.Config{
 		Host:      os.Getenv("HOST"),
-		Port:      3000,
+		Port:      port,
 		ModelsDir: modelsDir,
 		BinDir:    binDir,
 		WebDir:    filepath.Join(baseDir, "web"),
@@ -65,7 +72,7 @@ func main() {
 
 	ctx := context.Background()
 	log.Println("Starting TikTok Live Monitor (Go backend)...")
-	log.Println("Open http://localhost:3000 in your browser")
+	log.Printf("Open http://localhost:%d in your browser", port)
 	if err := srv.Start(ctx); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}

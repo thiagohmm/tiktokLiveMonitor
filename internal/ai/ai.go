@@ -18,6 +18,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/thiagohmm/tiktok-live-monitor/internal/config"
 )
 
 const (
@@ -221,7 +223,12 @@ func (m *Manager) spawnLocal(ctx context.Context) error {
 	}
 
 	log.Printf("[AI-Queue] Iniciando llama-server na porta %d...", basePort)
-	cmd := exec.CommandContext(ctx, binPath, args...)
+	// IMPORTANTE: o processo NÃO deve ser atrelado ao contexto do chamador
+	// (ex.: r.Context() de uma requisição HTTP). O contexto da requisição é
+	// cancelado assim que o handler responde, e `exec.CommandContext` mataria o
+	// llama-server no fim de cada chamada a /api/probe-llm ou /api/readiness.
+	// O processo só é encerrado por Manager.Stop() ou por um novo spawn.
+	cmd := exec.Command(binPath, args...)
 	cmd.Dir = filepath.Dir(binPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -238,12 +245,16 @@ func (m *Manager) spawnLocal(ctx context.Context) error {
 		Process: cmd,
 	}
 
-	// Wait for health.
+	// Wait for health. Se o contexto do chamador terminar no meio do carregamento,
+	// abandonamos a espera mas NÃO matamos o processo: ele continua carregando em
+	// segundo plano e fica pronto para as próximas sondagens.
 	for i := 0; i < healthMaxTries; i++ {
 		select {
 		case <-ctx.Done():
-			w.kill()
-			return ctx.Err()
+			m.mu.Lock()
+			m.worker = w // Keep worker; it may finish loading in the background.
+			m.mu.Unlock()
+			return nil
 		case <-time.After(healthRetryMs * time.Millisecond):
 		}
 		if w.checkHealth(ctx) {
@@ -390,6 +401,15 @@ func (m *Manager) resolvePaths() (binPath, modelPath string) {
 
 	archDir := filepath.Join(m.binDir, platform, arch)
 	binPath = m.resolveLlamaPath(archDir, binName)
+
+	// Prefer the model selected in model-config.json (config.GGUFPath resolves
+	// the correct filename for the current platform). Only fall back to
+	// auto-detect when the selected model file is missing.
+	if selected := config.GGUFPath(m.modelsDir); selected != "" {
+		if _, err := os.Stat(selected); err == nil {
+			return binPath, selected
+		}
+	}
 
 	// Auto-detect .gguf model files in the models directory.
 	entries, err := os.ReadDir(m.modelsDir)
