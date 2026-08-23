@@ -71,6 +71,13 @@ func (db *DB) migrate() error {
 			gift_type INTEGER DEFAULT 0,
 			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS shares (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			live_name TEXT NOT NULL,
+			uniqueId TEXT NOT NULL,
+			nickname TEXT NOT NULL,
+			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
 		`CREATE TABLE IF NOT EXISTS user_messages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			live_name TEXT NOT NULL DEFAULT '',
@@ -526,6 +533,20 @@ func (db *DB) AddGift(liveName, uniqueID, nickname, giftName string, repeatCount
 		return 0, fmt.Errorf("insert gift: %w", err)
 	}
 	return result.LastInsertId()
+}
+
+// AddShare stores a share of the live made by a participant.
+func (db *DB) AddShare(liveName, uniqueID, nickname string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if _, err := db.conn.Exec(
+		"INSERT INTO shares (live_name, uniqueId, nickname) VALUES (?, ?, ?)",
+		liveName, uniqueID, nickname,
+	); err != nil {
+		return fmt.Errorf("insert share: %w", err)
+	}
+	return nil
 }
 
 // GetRecentGifts returns the latest N gifts.
@@ -1198,6 +1219,43 @@ func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
 		stats[uid] = s
 	}
 	giftRows.Close()
+
+	// Shares.
+	shareRows, err := db.conn.Query(`
+		SELECT uniqueId, nickname, COUNT(*) AS n,
+			MIN(timestamp) AS first, MAX(timestamp) AS last
+		FROM shares WHERE live_name = ? GROUP BY uniqueId`, liveName)
+	if err != nil {
+		return nil, fmt.Errorf("query live stats shares: %w", err)
+	}
+	for shareRows.Next() {
+		var uid, uname string
+		var n int
+		var first, last sql.NullString
+		if err := shareRows.Scan(&uid, &uname, &n, &first, &last); err != nil {
+			shareRows.Close()
+			return nil, fmt.Errorf("scan live stat share: %w", err)
+		}
+		if uid == "" {
+			continue
+		}
+		s := stats[uid]
+		s.UniqueID = uid
+		s.Nickname = coalesceStr(uname, uid)
+		s.ShareCount = n
+		if first.Valid && first.String != "" {
+			if s.FirstSeen == "" || first.String < s.FirstSeen {
+				s.FirstSeen = first.String
+			}
+		}
+		if last.Valid && last.String != "" {
+			if s.LastSeen == "" || last.String > s.LastSeen {
+				s.LastSeen = last.String
+			}
+		}
+		stats[uid] = s
+	}
+	shareRows.Close()
 
 	out := make([]model.LiveStat, 0, len(stats))
 	for _, s := range stats {

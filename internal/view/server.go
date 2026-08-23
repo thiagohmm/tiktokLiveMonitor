@@ -152,6 +152,9 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 		if eventType == monitor.EventChatMessage {
 			go s.controller.HandleChatMessageEvent(data)
 		}
+		if eventType == monitor.EventNewSocialEvent {
+			go s.controller.HandleShareEvent(data)
+		}
 		if eventType == monitor.EventGiftUser {
 			if id, err := s.controller.RecordTargetGiftReceived(data); err != nil {
 				log.Printf("[View] Error recording target gift history: %v", err)

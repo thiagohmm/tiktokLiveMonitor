@@ -1814,7 +1814,7 @@ function renderRanking(ranking) {
     if (!rows.length) {
         const tr = document.createElement('tr');
         const td = document.createElement('td');
-        td.colSpan = 7;
+        td.colSpan = 8;
         td.style.textAlign = 'center';
         td.style.color = 'var(--text-muted)';
         td.textContent = 'Sem dados de engajamento ainda.';
@@ -1852,6 +1852,10 @@ function renderRanking(ranking) {
         const tdGifts = document.createElement('td');
         tdGifts.textContent = String(user.giftCount || 0);
         tr.appendChild(tdGifts);
+
+        const tdShares = document.createElement('td');
+        tdShares.textContent = String(user.shareCount || 0);
+        tr.appendChild(tdShares);
 
         const tdMessages = document.createElement('td');
         tdMessages.textContent = String(user.messageCount || 0);

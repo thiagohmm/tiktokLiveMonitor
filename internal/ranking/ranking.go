@@ -21,6 +21,8 @@ type Weights struct {
 	MessagePointPerMessage float64
 	// QuestionPointPerQuestion awards extra points per detected question.
 	QuestionPointPerQuestion float64
+	// SharePointPerShare awards points per live share.
+	SharePointPerShare float64
 	// AnomalyPenaltyPerEvent subtracts points per moderation anomaly.
 	AnomalyPenaltyPerEvent float64
 }
@@ -31,6 +33,7 @@ var DefaultWeights = Weights{
 	GiftPointPerUnit:         5,
 	MessagePointPerMessage:   1,
 	QuestionPointPerQuestion: 3,
+	SharePointPerShare:       2,
 	AnomalyPenaltyPerEvent:   8,
 }
 
@@ -52,7 +55,8 @@ func New(weights Weights) *Ranker {
 	if weights.GiftPointPerGift == 0 &&
 		weights.GiftPointPerUnit == 0 &&
 		weights.MessagePointPerMessage == 0 &&
-		weights.QuestionPointPerQuestion == 0 {
+		weights.QuestionPointPerQuestion == 0 &&
+		weights.SharePointPerShare == 0 {
 		weights = DefaultWeights
 	}
 	return &Ranker{weights: weights}
@@ -66,10 +70,11 @@ func (r *Ranker) Compute(stats []model.LiveStat, anomaliesByUser map[string]int)
 			r.weights.GiftPointPerUnit*float64(s.GiftTotal)
 		messageScore := r.weights.MessagePointPerMessage*float64(s.MessageCount)
 		questionScore := r.weights.QuestionPointPerQuestion*float64(s.QuestionCount)
+		shareScore := r.weights.SharePointPerShare * float64(s.ShareCount)
 		anomalyCount := anomaliesByUser[s.UniqueID]
 		anomalyPenalty := r.weights.AnomalyPenaltyPerEvent * float64(anomalyCount)
 
-		score := giftScore + messageScore + questionScore - anomalyPenalty
+		score := giftScore + messageScore + questionScore + shareScore - anomalyPenalty
 		if score < 0 {
 			score = 0
 		}
@@ -83,6 +88,7 @@ func (r *Ranker) Compute(stats []model.LiveStat, anomaliesByUser map[string]int)
 				MessageCount:  s.MessageCount,
 				QuestionCount: s.QuestionCount,
 				GiftCount:     s.GiftCount,
+				ShareCount:    s.ShareCount,
 				AnomalyCount:  anomalyCount,
 				RiskLevel:     riskLevelFor(anomalyCount, score),
 				FirstSeen:     formatTS(s.FirstSeen),
