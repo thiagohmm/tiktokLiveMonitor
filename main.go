@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/thiagohmm/tiktok-live-monitor/internal/agent"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/ai"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
@@ -62,6 +63,13 @@ func main() {
 	ctrl := controller.NewAppController(aiMgr, modEngine, mon, repo)
 	ctrl.SetMessageCache(msgCache)
 
+	// Service layer: AI agent (Python subprocess) + reverse proxy.
+	agentMgr := agent.NewManager(baseDir)
+	if err := agentMgr.Start(); err != nil {
+		log.Printf("[Agent] Falha ao iniciar agente Python: %v", err)
+	}
+	defer agentMgr.Stop()
+
 	// View layer: HTTP server
 	port := 3001
 	if p := os.Getenv("PORT"); p != "" {
@@ -70,11 +78,12 @@ func main() {
 		}
 	}
 	srv := view.New(view.Config{
-		Host:      os.Getenv("HOST"),
-		Port:      port,
-		ModelsDir: modelsDir,
-		BinDir:    binDir,
-		WebDir:    filepath.Join(baseDir, "web"),
+		Host:       os.Getenv("HOST"),
+		Port:       port,
+		ModelsDir:  modelsDir,
+		BinDir:     binDir,
+		WebDir:     filepath.Join(baseDir, "web"),
+		AgentProxy: agentMgr.ProxyHandler(),
 	}, ctrl)
 
 	ctx := context.Background()

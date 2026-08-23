@@ -1462,6 +1462,25 @@ function addPinnedCommentToList(pinnedComment, options = {}) {
     }
 }
 
+async function sendFalsePositiveFeedback(comment, category) {
+    try {
+        const response = await fetch('/api/feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ comment, category, expected: 'NAO' })
+        });
+        if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(payload.error || `status ${response.status}`);
+        }
+        return true;
+    } catch (err) {
+        console.error('[Frontend] Falha ao enviar feedback de falso positivo:', err);
+        setStatus('Falha ao registrar correção: ' + err.message, 'error');
+        return false;
+    }
+}
+
 function addFlaggedMessageToList(data) {
     if (!correlationMessagesTableBody) {
         return;
@@ -1516,6 +1535,34 @@ function addFlaggedMessageToList(data) {
 
     const tdReason = document.createElement('td');
     tdReason.textContent = data.reason != null ? String(data.reason) : '';
+
+    const aiCategories = ['PROSELITISMO', 'SPAM', 'GOLPE', 'ODIO', 'OUTRO'];
+    if (aiCategories.includes(category)) {
+        const fixBtn = document.createElement('button');
+        fixBtn.type = 'button';
+        fixBtn.className = 'small-btn fix-false-positive-btn';
+        fixBtn.textContent = 'Não é ' + infractionCategoryLabel(category);
+        fixBtn.addEventListener('click', async () => {
+            fixBtn.disabled = true;
+            fixBtn.textContent = 'Enviando…';
+            const ok = await sendFalsePositiveFeedback(data.comment != null ? String(data.comment) : '', category);
+            if (!ok) {
+                fixBtn.disabled = false;
+                fixBtn.textContent = 'Não é ' + infractionCategoryLabel(category);
+                return;
+            }
+            fixBtn.textContent = 'Corrigido';
+            setTimeout(() => {
+                if (flaggedMessageTimers[timerKey]) {
+                    clearTimeout(flaggedMessageTimers[timerKey]);
+                    delete flaggedMessageTimers[timerKey];
+                }
+                tr.remove();
+            }, 600);
+        });
+        tdReason.appendChild(document.createElement('br'));
+        tdReason.appendChild(fixBtn);
+    }
 
     tr.appendChild(tdUser);
     tr.appendChild(tdMsg);

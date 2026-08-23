@@ -11,11 +11,9 @@ import (
 
 // ModelInfo describes a downloadable LLM model.
 type ModelInfo struct {
-	Name            string `json:"name"`
-	Filename        string `json:"filename"`
-	URL             string `json:"url"`
-	DockerFilename  string `json:"dockerFilename,omitempty"`
-	DockerURL       string `json:"dockerUrl,omitempty"`
+	Name     string `json:"name"`
+	Filename string `json:"filename"`
+	URL      string `json:"url"`
 }
 
 // ModelConfig persists the selected model key.
@@ -40,16 +38,9 @@ var DefaultSettings = Settings{
 // Models is the registry of available LLM models.
 var Models = map[string]ModelInfo{
 	"gemma-4b": {
-		Name:           "Gemma 4B (Padrão)",
-		Filename:       "google_gemma-4-E4B-it-Q4_K_M.gguf",
-		URL:            "https://huggingface.co/bartowski/google_gemma-4-E4B-it-GGUF/resolve/main/google_gemma-4-E4B-it-Q4_K_M.gguf",
-		DockerFilename: "google_gemma-4-E2B-it-Q4_K_M.gguf",
-		DockerURL:      "https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF/resolve/main/google_gemma-4-E2B-it-Q4_K_M.gguf",
-	},
-	"gemma-2-2b": {
-		Name:     "Gemma 2 2B It (Q4_K_M)",
-		Filename: "ggml-model.gguf",
-		URL:      "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf",
+		Name:     "Gemma 4B (Padrão)",
+		Filename: "gemma-4-E4B-it-Q4_K_M.gguf",
+		URL:      "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
 	},
 	"llama-3.2-3b": {
 		Name:     "Llama 3.2 (3B Instruct)",
@@ -131,27 +122,13 @@ func GetModelInfo() ModelInfo {
 	return info
 }
 
-// IsDocker returns true when running inside a container.
-func IsDocker() bool {
-	_, err := os.Stat("/.dockerenv")
-	return err == nil
-}
-
 // GGUFPath returns the filesystem path to the model GGUF file.
 func GGUFPath(modelsDir string) string {
 	info := GetModelInfo()
-	filename := info.Filename
-	if IsDocker() && info.DockerFilename != "" {
-		filename = info.DockerFilename
-	}
-	return filepath.Join(modelsDir, filename)
+	return filepath.Join(modelsDir, info.Filename)
 }
 
 // DownloadURL returns the URL to download the model GGUF.
 func DownloadURL() string {
-	info := GetModelInfo()
-	if IsDocker() && info.DockerURL != "" {
-		return info.DockerURL
-	}
-	return info.URL
+	return GetModelInfo().URL
 }

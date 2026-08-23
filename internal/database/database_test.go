@@ -1,6 +1,7 @@
 package database
 
 import (
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -75,7 +76,7 @@ func TestGetRecentFeedbacksLimit(t *testing.T) {
 	db := openTestDB(t)
 
 	for i := 0; i < 15; i++ {
-		_, err := db.AddFeedback("msg", "SPAM", "SIM_SPAM")
+		_, err := db.AddFeedback(fmt.Sprintf("msg%d", i), "SPAM", "SIM_SPAM")
 		if err != nil {
 			t.Fatalf("add feedback %d: %v", i, err)
 		}
@@ -92,6 +93,71 @@ func TestGetRecentFeedbacksLimit(t *testing.T) {
 	_, err = db.GetRecentFeedbacks(0)
 	if err != nil {
 		t.Fatalf("unexpected error for limit 0: %v", err)
+	}
+}
+
+func TestAddFeedbackDedup(t *testing.T) {
+	db := openTestDB(t)
+
+	id, err := db.AddFeedback("spam message", "SPAM", "NAO")
+	if err != nil {
+		t.Fatalf("add feedback: %v", err)
+	}
+	if id <= 0 {
+		t.Fatalf("expected positive id, got %d", id)
+	}
+
+	id2, err := db.AddFeedback("spam message", "SPAM", "NAO")
+	if err != nil {
+		t.Fatalf("dedup feedback: %v", err)
+	}
+	if id2 != 0 {
+		t.Fatalf("expected idempotent 0, got %d", id2)
+	}
+
+	if n := countTable(t, db, "SELECT COUNT(*) FROM false_positives WHERE comment = 'spam message' AND expected = 'NAO'"); n != 1 {
+		t.Fatalf("expected 1 row, got %d", n)
+	}
+
+	// Same comment with a different expected value is not a duplicate.
+	if _, err := db.AddFeedback("spam message", "SPAM", "SIM_SPAM"); err != nil {
+		t.Fatalf("add distinct expected: %v", err)
+	}
+	if n := countTable(t, db, "SELECT COUNT(*) FROM false_positives WHERE comment = 'spam message'"); n != 2 {
+		t.Fatalf("expected 2 rows, got %d", n)
+	}
+}
+
+func TestGetFalsePositiveComments(t *testing.T) {
+	db := openTestDB(t)
+
+	if _, err := db.AddFeedback("jesus te ama", "PROSELITISMO", "NAO"); err != nil {
+		t.Fatalf("add fp 1: %v", err)
+	}
+	if _, err := db.AddFeedback("jesus te ama", "PROSELITISMO", "NAO"); err != nil {
+		t.Fatalf("add fp 1 dup: %v", err)
+	}
+	if _, err := db.AddFeedback("clica no link", "SPAM", "NAO"); err != nil {
+		t.Fatalf("add fp 2: %v", err)
+	}
+	if _, err := db.AddFeedback("isto é spam mesmo", "SPAM", "SIM_SPAM"); err != nil {
+		t.Fatalf("add non-fp: %v", err)
+	}
+
+	comments, err := db.GetFalsePositiveComments(10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(comments) != 2 {
+		t.Fatalf("expected 2 distinct comments, got %d", len(comments))
+	}
+
+	got := make(map[string]bool, len(comments))
+	for _, c := range comments {
+		got[c] = true
+	}
+	if !got["jesus te ama"] || !got["clica no link"] {
+		t.Fatalf("unexpected comments: %v", comments)
 	}
 }
 

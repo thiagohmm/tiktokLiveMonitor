@@ -41,10 +41,10 @@ type AnalysisResult struct {
 }
 
 const (
-	aiCacheMax             = 150
-	aiCooldownMs           = 30_000
-	auditReclassifyEnv     = "MODERATION_AUDIT_RECLASSIFY"
-	recentChatLimit        = 14
+	aiCacheMax         = 150
+	aiCooldownMs       = 30_000
+	auditReclassifyEnv = "MODERATION_AUDIT_RECLASSIFY"
+	recentChatLimit    = 14
 )
 
 var (
@@ -59,13 +59,14 @@ func init() {
 
 // Engine handles message moderation.
 type Engine struct {
-	mu           sync.Mutex
-	aiManager    *ai.Manager
-	repo         model.Repository
-	cache        map[string]AnalysisResult
+	mu            sync.Mutex
+	aiManager     *ai.Manager
+	repo          model.Repository
+	cache         map[string]AnalysisResult
 	cooldownUntil int64
-	warmupStatus StartupStatus
-	warmupFlight *sync.Mutex
+	warmupStatus  StartupStatus
+	warmupFlight  *sync.Mutex
+	allowlist     map[string]struct{}
 }
 
 // NewEngine creates a moderation engine.
@@ -75,7 +76,31 @@ func NewEngine(aiMgr *ai.Manager, repo model.Repository) *Engine {
 		repo:         repo,
 		cache:        make(map[string]AnalysisResult),
 		warmupFlight: &sync.Mutex{},
+		allowlist:    make(map[string]struct{}),
 	}
+}
+
+// refreshAllowlist reloads normalized false-positive comments from the repository.
+func (e *Engine) refreshAllowlist() {
+	if e.repo == nil {
+		return
+	}
+	comments, err := e.repo.GetFalsePositiveComments(500)
+	if err != nil {
+		log.Printf("[Moderation] Falha ao carregar allowlist: %v", err)
+		return
+	}
+	allow := make(map[string]struct{}, len(comments))
+	for _, c := range comments {
+		folded := foldText(strings.ToLower(strings.TrimSpace(c)))
+		if folded == "" {
+			continue
+		}
+		allow[folded] = struct{}{}
+	}
+	e.mu.Lock()
+	e.allowlist = allow
+	e.mu.Unlock()
 }
 
 // GetStartupStatus returns the current warmup status.
@@ -107,7 +132,7 @@ func (e *Engine) WarmupLearning(ctx context.Context, touchLLM, force bool) (Star
 	}
 	e.mu.Unlock()
 
-	prompt, feedbackCount, err := buildPromptContext(ctx, e.repo, 12)
+	prompt, feedbackCount, err := buildPromptContext(ctx, e.repo, 24)
 	if err != nil {
 		e.mu.Lock()
 		e.warmupStatus = StartupStatus{
@@ -129,6 +154,8 @@ func (e *Engine) WarmupLearning(ctx context.Context, touchLLM, force bool) (Star
 		}
 	}
 
+	e.refreshAllowlist()
+
 	e.mu.Lock()
 	e.warmupStatus = StartupStatus{
 		Ready:         true,
@@ -146,6 +173,12 @@ func (e *Engine) AnalyzeMessage(ctx context.Context, comment, uniqueID, nickname
 	folded := foldText(commentLower)
 
 	e.mu.Lock()
+	if _, ok := e.allowlist[folded]; ok {
+		e.mu.Unlock()
+		log.Printf("[AI] ✅ liberado por allowlist: %q", truncate(comment, 50))
+		return AnalysisResult{Flagged: false, Category: "OK"}, nil
+	}
+
 	// Cooldown check.
 	if time.Now().UnixMilli() < e.cooldownUntil {
 		e.mu.Unlock()
@@ -161,7 +194,7 @@ func (e *Engine) AnalyzeMessage(ctx context.Context, comment, uniqueID, nickname
 	e.mu.Unlock()
 
 	// Build prompt and call AI.
-	prompt, _, err := buildPromptContext(ctx, e.repo, 12)
+	prompt, _, err := buildPromptContext(ctx, e.repo, 24)
 	if err != nil {
 		return AnalysisResult{Flagged: false}, fmt.Errorf("build prompt: %w", err)
 	}

@@ -181,6 +181,18 @@ func (db *DB) AddFeedback(comment, category, expected string) (int64, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	var existing int64
+	err := db.conn.QueryRow(
+		"SELECT id FROM false_positives WHERE comment = ? AND expected = ? LIMIT 1",
+		comment, expected,
+	).Scan(&existing)
+	if err == nil {
+		return 0, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, fmt.Errorf("lookup feedback: %w", err)
+	}
+
 	result, err := db.conn.Exec(
 		"INSERT INTO false_positives (comment, category, expected) VALUES (?, ?, ?)",
 		comment, category, expected,
@@ -189,6 +201,35 @@ func (db *DB) AddFeedback(comment, category, expected string) (int64, error) {
 		return 0, fmt.Errorf("insert feedback: %w", err)
 	}
 	return result.LastInsertId()
+}
+
+// GetFalsePositiveComments returns distinct comments marked as false positives
+// (expected = 'NAO'), newest first.
+func (db *DB) GetFalsePositiveComments(limit int) ([]string, error) {
+	if limit < 1 || limit > 500 {
+		limit = 100
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	rows, err := db.conn.Query(
+		"SELECT DISTINCT comment FROM false_positives WHERE expected = 'NAO' ORDER BY timestamp DESC LIMIT ?",
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query false positive comments: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]string, 0)
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return nil, fmt.Errorf("scan false positive comment: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 // GetRecentFeedbacks returns the latest N feedback entries.
