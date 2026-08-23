@@ -651,17 +651,40 @@ function createChart(ChartLib) {
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            layout: {
+                padding: 8
+            },
             scales: {
                 y: {
                     beginAtZero: true,
-                    ticks: { stepSize: 1 }
+                    grid: {
+                        color: 'rgba(255, 255, 255, 0.08)',
+                        background: 'rgba(18, 21, 31, 0.6)',
+                        drawBorder: false
+                    },
+                    ticks: {
+                        stepSize: 1,
+                        color: '#9aa0aa',
+                        padding: 8
+                    },
+                    border: { display: false }
                 },
                 x: {
-                    display: false
+                    display: false,
+                    grid: { display: false }
                 }
             },
             plugins: {
-                legend: { display: true, position: 'top' }
+                legend: {
+                    display: true,
+                    position: 'top',
+                    labels: {
+                        color: '#f2f3f5',
+                        padding: 16,
+                        usePointStyle: true,
+                        boxWidth: 8
+                    }
+                }
             },
             animation: false
         }
@@ -801,16 +824,22 @@ if (targetExpirationMinutesInput) {
     targetExpirationMinutesInput.addEventListener('change', () => onExpirationMinutesChanged(true));
 }
 
+function setStatus(text, state) {
+    statusDiv.innerText = text;
+    statusDiv.classList.remove('connected', 'connecting', 'reconnecting', 'error');
+    if (state) {
+        statusDiv.classList.add(state);
+    }
+}
+
 function setConnectingState() {
     connectBtn.disabled = true;
     disconnectBtn.disabled = true;
-    statusDiv.innerText = 'Conectando...';
-    statusDiv.style.color = '#666';
+    setStatus('Conectando...', 'connecting');
 }
 
 function applyConnectedState(username) {
-    statusDiv.innerText = `Conectado a: ${username}`;
-    statusDiv.style.color = 'green';
+    setStatus(`Conectado a: ${username}`, 'connected');
     connectBtn.style.display = 'none';
     connectBtn.disabled = false;
     disconnectBtn.style.display = 'inline-block';
@@ -819,10 +848,8 @@ function applyConnectedState(username) {
 }
 
 function applyDisconnectedState(error) {
-    statusDiv.innerText = error === 'Desconectado pelo usuário' || error === 'Servidor encerrado'
-        ? 'Desconectado'
-        : `Erro: ${error}`;
-    statusDiv.style.color = error === 'Desconectado pelo usuário' || error === 'Servidor encerrado' ? '#666' : 'red';
+    const isUserDisconnect = error === 'Desconectado pelo usuário' || error === 'Servidor encerrado';
+    setStatus(isUserDisconnect ? 'Desconectado' : `Erro: ${error}`, isUserDisconnect ? '' : 'error');
     connectBtn.style.display = 'inline-block';
     connectBtn.disabled = false;
     disconnectBtn.style.display = 'none';
@@ -880,8 +907,7 @@ function handleConnectionStatus(data) {
 
 function applyReconnectingState(retries, nextRetryInMs) {
     const secs = Math.max(0, Math.round((nextRetryInMs || 0) / 1000));
-    statusDiv.innerText = `Reconectando (tentativa ${retries}, em ${secs}s)...`;
-    statusDiv.style.color = 'orange';
+    setStatus(`Reconectando (tentativa ${retries}, em ${secs}s)...`, 'reconnecting');
     // Mantém os botões no estado conectado; o usuário ainda pode parar.
     connectBtn.style.display = 'none';
     disconnectBtn.style.display = 'inline-block';
@@ -1458,8 +1484,7 @@ async function loadInitialState() {
             ]);
         }
     } catch (error) {
-        statusDiv.innerText = 'Servidor indisponível';
-        statusDiv.style.color = 'red';
+        setStatus('Servidor indisponível', 'error');
     }
 }
 
@@ -1557,8 +1582,7 @@ function setupEventStream() {
     });
 
     eventSource.onerror = () => {
-        statusDiv.innerText = 'Reconectando ao servidor...';
-        statusDiv.style.color = '#666';
+        setStatus('Reconectando ao servidor...', 'reconnecting');
     };
 }
 
@@ -1580,11 +1604,14 @@ function renderTargetGifts() {
             const gifts = settings.targetGifts || [];
             gifts.forEach(giftName => {
                 const span = document.createElement('span');
-                span.style.cssText = 'background:#f0f0f0;padding:3px 8px;border-radius:12px;display:inline-flex;align-items:center;gap:4px;';
-                span.textContent = giftName;
+                span.className = 'target-gift-chip';
+                const label = document.createElement('span');
+                label.textContent = giftName;
+                span.appendChild(label);
                 const btn = document.createElement('button');
+                btn.type = 'button';
                 btn.textContent = '×';
-                btn.style.cssText = 'background:none;border:none;cursor:pointer;font-size:1em;line-height:1;color:#999;';
+                btn.setAttribute('aria-label', `Remover ${giftName}`);
                 btn.addEventListener('click', () => removeTargetGift(giftName));
                 span.appendChild(btn);
                 targetGiftsList.appendChild(span);
@@ -1799,8 +1826,7 @@ async function bootstrap() {
         chart = createChart(ChartLib);
     } catch (e) {
         console.error('Chart.js init error:', e);
-        statusDiv.innerText = `Erro ao iniciar gráfico: ${e.message}`;
-        statusDiv.style.color = 'red';
+        setStatus(`Erro ao iniciar gráfico: ${e.message}`, 'error');
         // Don't return; let the rest of bootstrap run.
     }
 

@@ -30,6 +30,7 @@ type HTTPServer struct {
 	sseClients map[http.ResponseWriter]bool
 	sseMu      sync.Mutex
 	webDir     string
+	cfg        Config
 }
 
 // Config holds server configuration.
@@ -47,14 +48,18 @@ func New(cfg Config, ctrl *controller.AppController) *HTTPServer {
 		controller: ctrl,
 		sseClients: make(map[http.ResponseWriter]bool),
 		webDir:     cfg.WebDir,
+		cfg:        cfg,
 	}
 }
 
 // Start begins listening and returns an error when the server stops.
 func (s *HTTPServer) Start(ctx context.Context) error {
-	port := 3000
+	port := 3001
+	if s.cfg.Port > 0 {
+		port = s.cfg.Port
+	}
 	if p := os.Getenv("PORT"); p != "" {
-		if n, err := strconv.Atoi(p); err == nil {
+		if n, err := strconv.Atoi(p); err == nil && n > 0 {
 			port = n
 		}
 	}

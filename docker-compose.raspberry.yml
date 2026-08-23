@@ -20,11 +20,11 @@ services:
     # Garante a arquitetura certa mesmo buildando fora da Pi (buildx/QEMU).
     platform: linux/arm64
     ports:
-      - "${PORT:-3000}:3000"
+      - "${PORT:-3001}:3001"
       - "${LLAMA_PORT:-8080}:8080"
     environment:
       HOST: "0.0.0.0"
-      PORT: "3000"
+      PORT: "3001"
       LLAMA_SERVER_BIND: "0.0.0.0"
       # 1 = memória mapeada do modelo (necessário na Pi 4 p/ modelos grandes)
       LLAMA_USE_MMAP: "1"
@@ -36,7 +36,7 @@ services:
       - feedback-data:/app
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3000/api/state || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3001/api/state || exit 1"]
       interval: 30s
       timeout: 10s
       # No primeiro boot o container baixa o GGUF e o binário llama-server

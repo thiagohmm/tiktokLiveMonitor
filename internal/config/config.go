@@ -46,6 +46,11 @@ var Models = map[string]ModelInfo{
 		DockerFilename: "google_gemma-4-E2B-it-Q4_K_M.gguf",
 		DockerURL:      "https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF/resolve/main/google_gemma-4-E2B-it-Q4_K_M.gguf",
 	},
+	"gemma-2-2b": {
+		Name:     "Gemma 2 2B It (Q4_K_M)",
+		Filename: "ggml-model.gguf",
+		URL:      "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf",
+	},
 	"llama-3.2-3b": {
 		Name:     "Llama 3.2 (3B Instruct)",
 		Filename: "Llama-3.2-3B-Instruct-Q4_K_M.gguf",

@@ -14,6 +14,10 @@ const MODELS = {
         dockerFilename: 'google_gemma-4-E2B-it-Q4_K_M.gguf',
         dockerUrl: 'https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF/resolve/main/google_gemma-4-E2B-it-Q4_K_M.gguf',
     },
+    'gemma-2-2b': {
+        filename: 'ggml-model.gguf',
+        url: 'https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf',
+    },
     'llama-3.2-3b': {
         filename: 'Llama-3.2-3B-Instruct-Q4_K_M.gguf',
         url: 'https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf',
@@ -65,8 +69,45 @@ function removeBadExistingFile(dest) {
     return false;
 }
 
+/** Segue redirects via HEAD e retorna o Content-Length esperado do arquivo (ou null se indeterminado). */
+function getContentLength(url, maxHops = 5) {
+    return new Promise((resolve) => {
+        const hop = (currentUrl, hops) => {
+            if (hops <= 0) return resolve(null);
+            https
+                .request(currentUrl, { method: 'HEAD' }, (response) => {
+                    if (
+                        response.statusCode === 301 || response.statusCode === 302 ||
+                        response.statusCode === 303 || response.statusCode === 307 ||
+                        response.statusCode === 308
+                    ) {
+                        const loc = response.headers.location;
+                        if (!loc) return resolve(null);
+                        const next = loc.startsWith('http') ? loc : new URL(loc, currentUrl).href;
+                        return hop(next, hops - 1);
+                    }
+                    const len = parseInt(response.headers['content-length'], 10);
+                    resolve(Number.isFinite(len) && len > 0 ? len : null);
+                })
+                .on('error', () => resolve(null))
+                .end();
+        };
+        hop(url, maxHops);
+    });
+}
+
 async function downloadFile(url, dest) {
     removeBadExistingFile(dest);
+    // Detecta download truncado/corrompido: se o arquivo local já existe mas tem
+    // tamanho diferente do esperado no servidor, remove e re-baixa.
+    const expected = await getContentLength(url);
+    if (fs.existsSync(dest) && expected !== null) {
+        const actual = fs.statSync(dest).size;
+        if (actual !== expected) {
+            fs.unlinkSync(dest);
+            console.log(`[Setup] Tamanho incorreto (${actual} != ${expected}); removendo para re-download: ${path.basename(dest)}`);
+        }
+    }
     if (fs.existsSync(dest)) {
         console.log(`[Setup] Arquivo já existe: ${path.basename(dest)}`);
         return;
@@ -110,6 +151,11 @@ async function downloadFile(url, dest) {
                 response.pipe(file);
                 file.on('finish', () => {
                     file.close();
+                    if (totalSize > 0 && downloadedSize !== totalSize) {
+                        fs.unlink(dest, () => {});
+                        reject(new Error(`Download incompleto: ${downloadedSize}/${totalSize} bytes`));
+                        return;
+                    }
                     console.log(`[Setup] Download concluído: ${path.basename(dest)}`);
                     resolve();
                 });

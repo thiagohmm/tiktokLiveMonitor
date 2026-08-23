@@ -10,11 +10,11 @@ services:
       args:
         SKIP_TESTS: ${SKIP_TESTS:-}
     ports:
-      - "${PORT:-3000}:3000"
+      - "${PORT:-3001}:3001"
       - "${LLAMA_PORT:-8080}:8080"
     environment:
       HOST: "0.0.0.0"
-      PORT: "3000"
+      PORT: "3001"
       LLAMA_SERVER_BIND: "0.0.0.0"
     shm_size: "${LLAMA_SHM_SIZE:-512mb}"
     volumes:
@@ -23,7 +23,7 @@ services:
       - feedback-data:/app
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3000/api/state || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3001/api/state || exit 1"]
       interval: 30s
       timeout: 10s
       # No primeiro boot o container baixa o GGUF e o binário llama-server.
@@ -36,7 +36,7 @@ services:
   #   build: .
   #   command: ["sleep", "infinity"]
   #   environment:
-  #     MASTER_URL: "http://tiktok-live-monitor:3000"
+  #     MASTER_URL: "http://tiktok-live-monitor:3001"
   #     WORKER_PORT: "8081"
   #   volumes:
   #     - llm-models:/app/models
