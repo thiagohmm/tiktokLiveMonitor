@@ -621,6 +621,28 @@ func (c *AppController) HandleChatMessageEvent(data monitor.EventData) {
 	}
 }
 
+// HandleShareEvent processes a live share event and stores it.
+func (c *AppController) HandleShareEvent(data monitor.EventData) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("[Controller] panic storing share: %v", rec)
+		}
+	}()
+
+	uniqueID := eventString(data, "uniqueId", "userId")
+	if uniqueID == "" {
+		uniqueID = "unknown"
+	}
+	nickname := eventString(data, "nickname")
+	if nickname == "" {
+		nickname = uniqueID
+	}
+	liveName := c.monitor.GetState().Username
+	if err := c.repo.AddShare(liveName, uniqueID, nickname); err != nil {
+		log.Printf("[Controller] Error storing share: %v", err)
+	}
+}
+
 // GetMonitor returns the underlying monitor for event registration.
 func (c *AppController) GetMonitor() *monitor.Monitor {
 	return c.monitor

@@ -76,6 +76,11 @@ type SessionRepository interface {
 	DeleteSessionData(liveName string) error
 }
 
+// ShareRepository tracks social shares of the live made by participants.
+type ShareRepository interface {
+	AddShare(liveName, uniqueID, nickname string) error
+}
+
 // RankingRepository handles engagement ranking and live analytics.
 type RankingRepository interface {
 	// LiveFirstSeen returns the first recorded timestamp for a live (RFC3339).
@@ -96,6 +101,7 @@ type LiveStat struct {
 	QuestionCount int
 	GiftCount     int
 	GiftTotal     int
+	ShareCount    int
 	FirstSeen     string
 	LastSeen      string
 }
@@ -106,6 +112,7 @@ type Repository interface {
 	AnomalyRepository
 	UserMessageRepository
 	GiftRepository
+	ShareRepository
 	TargetGiftHistoryRepository
 	PinnedCommentRepository
 	SessionRepository

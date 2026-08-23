@@ -121,6 +121,7 @@ type UserRank struct {
 	MessageCount  int     `json:"messageCount"`
 	QuestionCount int     `json:"questionCount"`
 	GiftCount     int     `json:"giftCount"`
+	ShareCount    int     `json:"shareCount"`
 	AnomalyCount  int     `json:"anomalyCount"`
 	RiskLevel     string  `json:"riskLevel"`
 	FirstSeen     string  `json:"firstSeen"`
