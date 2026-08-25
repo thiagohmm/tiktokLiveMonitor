@@ -12,7 +12,6 @@ import (
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/alerts"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
-	"github.com/thiagohmm/tiktok-live-monitor/internal/moderation"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/ranking"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/report"
@@ -27,7 +26,6 @@ type MessageCache interface {
 
 // AppController orchestrates all application services.
 type AppController struct {
-	modEngine     *moderation.Engine
 	monitor       *monitor.Monitor
 	repo          model.Repository
 	msgCache      MessageCache
@@ -38,23 +36,24 @@ type AppController struct {
 	monCtx        context.Context
 	monCancel     context.CancelFunc
 	monCancelMu   sync.Mutex
+	flagSeen      map[string]struct{}
+	flagSeenMu    sync.Mutex
 }
 
 // NewAppController creates a new application controller.
 func NewAppController(
-	modEngine *moderation.Engine,
 	mon *monitor.Monitor,
 	repo model.Repository,
 ) *AppController {
 	mon.SetRepo(repo)
 	c := &AppController{
-		modEngine:     modEngine,
 		monitor:       mon,
 		repo:          repo,
 		reportGen:     report.New(repo),
 		suggEngine:    suggestions.New(repo),
 		alertNotifier: alerts.New(alerts.FromEnvironment()),
 		ranker:        ranking.New(ranking.DefaultWeights),
+		flagSeen:      make(map[string]struct{}),
 	}
 	c.registerFeatureHandlers()
 	return c
@@ -87,7 +86,6 @@ func (c *AppController) registerFeatureHandlers() {
 			return
 		}
 		go c.handleSuggestionEvent(data)
-		go c.handleModerationEvent(data)
 	})
 }
 
@@ -184,46 +182,9 @@ func (c *AppController) handleSuggestionEvent(data monitor.EventData) {
 	})
 }
 
-// handleModerationEvent classifies a chat message via the AI moderation engine
-// and surfaces flagged content to the alert/notification pipeline.
-func (c *AppController) handleModerationEvent(data monitor.EventData) {
-	if c.modEngine == nil {
-		return
-	}
-	settings := c.monitor.GetSettings()
-	if !settings.ModerationEnabled || !settings.AIModerationEnabled {
-		return
-	}
-	uniqueID := eventString(data, "uniqueId", "userId")
-	nickname := eventString(data, "nickname")
-	comment := eventString(data, "comment")
-	if comment == "" {
-		return
-	}
-	state := c.monitor.GetState()
-	if state.Username == "" {
-		return
-	}
-	ctx := c.monCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	result, err := c.modEngine.AnalyzeMessage(ctx, comment, uniqueID, nickname, c.monitor.GetChatBuffer(), state.Username)
-	if err != nil {
-		return
-	}
-	if !result.Flagged {
-		return
-	}
-	c.monitor.Emit(monitor.EventFlaggedMessage, monitor.EventData{
-		"uniqueId":  uniqueID,
-		"nickname":  nickname,
-		"comment":   comment,
-		"reason":    result.Reason,
-		"category":  result.Category,
-		"timestamp": eventString(data, "timestamp"),
-	})
-}
+// handleModerationEvent was removed: message moderation (rules + RAG + LLM)
+// now lives entirely in the Python agent, which reports flags back through
+// POST /api/moderation/flag → ReportExternalFlag.
 
 func coalesceStr(values ...string) string {
 	for _, v := range values {
@@ -286,20 +247,66 @@ func (c *AppController) FetchAvailableGifts() ([]string, error) {
 
 // --- Moderation Actions ---
 
-// GetStartupStatus returns the moderation warmup status.
-func (c *AppController) GetStartupStatus() moderation.StartupStatus {
-	return c.modEngine.GetStartupStatus()
+// ReportExternalFlag ingests a moderation flag from the Python agent and
+// surfaces it through the existing flagged-message pipeline (alerts + UI),
+// logging the anomaly. This is plumbing only — no AI logic lives here.
+func (c *AppController) ReportExternalFlag(data monitor.EventData) {
+	settings := c.monitor.GetSettings()
+	if !settings.ModerationEnabled {
+		return
+	}
+	comment := eventString(data, "comment")
+	category := eventString(data, "category")
+	if comment == "" || category == "" {
+		return
+	}
+	uniqueID := eventString(data, "uniqueId", "userId")
+	nickname := eventString(data, "nickname")
+	reason := eventString(data, "reason")
+	if reason == "" {
+		reason = category
+	}
+
+	key := strings.ToLower(uniqueID) + "|" + foldComment(comment)
+	c.flagSeenMu.Lock()
+	if _, ok := c.flagSeen[key]; ok {
+		c.flagSeenMu.Unlock()
+		return
+	}
+	c.flagSeen[key] = struct{}{}
+	if len(c.flagSeen) > 500 {
+		for k := range c.flagSeen {
+			delete(c.flagSeen, k)
+			break
+		}
+	}
+	c.flagSeenMu.Unlock()
+
+	state := c.monitor.GetState()
+	c.monitor.Emit(monitor.EventFlaggedMessage, monitor.EventData{
+		"uniqueId":  uniqueID,
+		"nickname":  nickname,
+		"comment":   comment,
+		"reason":    reason,
+		"category":  category,
+		"timestamp": eventString(data, "timestamp"),
+	})
+	if err := c.repo.LogAnomaly(state.Username, comment, true, category, uniqueID); err != nil {
+		log.Printf("[Controller] Error logging external flag: %v", err)
+	}
 }
 
-// ClearModerationCache clears the AI moderation cache.
-func (c *AppController) ClearModerationCache() {
-	c.modEngine.ClearCache()
-}
-
-// WarmupModeration warms up the moderation pipeline.
-func (c *AppController) WarmupModeration(ctx context.Context, force bool) error {
-	_, err := c.modEngine.WarmupLearning(ctx, force)
-	return err
+func foldComment(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.ReplaceAll(s, "ç", "c")
+	var b strings.Builder
+	for _, r := range s {
+		if r >= 0x0300 && r <= 0x036F {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // --- Repository Actions ---
@@ -730,11 +737,11 @@ func nestedString(v interface{}, keys ...string) string {
 
 func resolveGiftName(data monitor.EventData) string {
 	if name := eventString(data, "giftName", "name", "describe"); name != "" {
-		return name
+		return translateGiftName(name)
 	}
 	for _, nest := range []string{"giftDetails", "extendedGiftInfo", "gift"} {
 		if name := nestedString(data[nest], "giftName", "name", "describe"); name != "" {
-			return name
+			return translateGiftName(name)
 		}
 	}
 	if id := eventString(data, "giftId"); id != "" {

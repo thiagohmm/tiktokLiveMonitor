@@ -42,3 +42,16 @@ LLM_CTX_SIZE = _env_int("LLAMA_CTX_SIZE", 16384)
 
 # --- Feedback (feedback.db, dono do Python) ---
 FEEDBACK_DB = _env_path("FEEDBACK_DB", "feedback.db")
+
+# --- Embeddings (fastembed/ONNX) ---
+FASTEMBED_MODEL = _env(
+    "FASTEMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+)
+FASTEMBED_CACHE = _env_path("FASTEMBED_CACHE", "models/embeddings")
+
+# --- RAG / moderação ---
+RAG_TOP_K = _env_int("RAG_TOP_K", 8)
+RAG_BACKFILL_LIMIT = _env_int("RAG_BACKFILL_LIMIT", 500)
+RAG_CONCURRENCY = _env_int("RAG_CONCURRENCY", 1)
+RAG_TIMEOUT = _env_int("RAG_TIMEOUT", 8)
+RAG_CHAT_INDEX_ENABLED = _env("RAG_CHAT_INDEX_ENABLED", "1") == "1"

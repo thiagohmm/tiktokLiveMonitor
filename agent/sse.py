@@ -16,11 +16,15 @@ log = logging.getLogger("agent.sse")
 
 
 class SSEClient:
-    def __init__(self, sink: EventSink, base_url: str | None = None):
-        self._sink = sink
+    def __init__(self, sink: EventSink | list[EventSink], base_url: str | None = None):
+        self._sinks = sink if isinstance(sink, (list, tuple)) else [sink]
         self._base_url = (base_url or config.MONITOR_URL).rstrip("/")
         self.connected = False
         self._stop = asyncio.Event()
+
+    def _dispatch(self, event_type: str, data) -> None:
+        for sink in self._sinks:
+            sink.ingest(event_type, data)
 
     async def run(self):
         backoff = 1.0
@@ -60,7 +64,7 @@ class SSEClient:
                                 data = json.loads(raw)
                             except json.JSONDecodeError:
                                 continue
-                            self._sink.ingest(event_type, data)
+                            self._dispatch(event_type, data)
         self.connected = False
 
     def stop(self):

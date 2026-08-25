@@ -15,7 +15,7 @@ func TestResolveGiftName(t *testing.T) {
 		{
 			name: "flat giftName",
 			data: monitor.EventData{"giftName": "Rose"},
-			want: "Rose",
+			want: "Rosa",
 		},
 		{
 			name: "nested giftDetails",

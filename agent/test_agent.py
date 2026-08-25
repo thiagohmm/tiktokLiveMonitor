@@ -8,8 +8,11 @@ from fastapi.testclient import TestClient
 
 from . import api
 from . import feedback as feedback_mod
+from . import moderate
 from . import router
+from . import rules
 from . import summary
+from . import vectors
 from .buffer import MessageBuffer
 from .context import ContextBuilder
 from .history import AskAIService, ConversationStore
@@ -270,6 +273,127 @@ class FeedbackEndpointTest(unittest.TestCase):
         api.app.state.feedback = self._store()
         client = TestClient(api.app)
         resp = client.post("/feedback", json={"comment": "x", "category": "INVALID", "expected": "NAO"})
+        self.assertEqual(400, resp.status_code)
+
+
+class VectorStoreTest(unittest.TestCase):
+    def _store(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        store = vectors.VectorStore(os.path.join(self._tmp.name, "vectors.db"))
+        self.addCleanup(store.close)
+        return store
+
+    def test_upsert_and_search_ordering(self):
+        store = self._store()
+        store.upsert("feedback", "voce e um idiota", "ODIO", [1.0, 0.0])
+        store.upsert("feedback", "boa noite pessoal", "OK", [0.0, 1.0])
+        results = store.search([1.0, 0.0], k=2, sources=("feedback",))
+        self.assertEqual(2, len(results))
+        self.assertEqual("voce e um idiota", results[0]["comment"])
+        self.assertAlmostEqual(1.0, results[0]["score"], places=6)
+
+    def test_upsert_dedup_case_insensitive(self):
+        store = self._store()
+        first = store.upsert("feedback", "Voce e um idiota", "ODIO", [1.0, 0.0])
+        second = store.upsert("feedback", "voce e um idiota", "ODIO", [1.0, 0.0])
+        self.assertGreater(first, 0)
+        self.assertEqual(0, second)
+        self.assertEqual(1, store.count("feedback"))
+
+    def test_search_excludes_classify_by_sources(self):
+        store = self._store()
+        store.upsert("classify", "spam classify", "SPAM", [1.0, 0.0])
+        store.upsert("feedback", "spam feedback", "SPAM", [0.9, 0.1])
+        results = store.search([1.0, 0.0], k=5, sources=("feedback", "anomaly"))
+        self.assertEqual(1, len(results))
+        self.assertEqual("spam feedback", results[0]["comment"])
+
+
+class RulesTest(unittest.TestCase):
+    def test_classify_by_rules_parity(self):
+        cases = [
+            ("boa noite pessoal", False, "OK"),
+            ("qual a sua musica favorita?", False, "PERGUNTA"),
+            ("jesus salva, aceita a cristo", True, "PROSELITISMO"),
+            ("clica no link da bio https://bit.ly/abc", True, "SPAM"),
+            ("voce e um idiota", True, "ODIO"),
+        ]
+        for comment, want_flag, want_cat in cases:
+            folded = rules.fold_text(comment)
+            res = rules.classify_by_rules(comment, folded)
+            self.assertEqual(want_flag, res["flagged"], comment)
+            self.assertEqual(want_cat, res["category"], comment)
+
+    def test_engine_allowlist_releases_false_positive(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        store = feedback_mod.FeedbackStore(os.path.join(self._tmp.name, "feedback.db"))
+        self.addCleanup(store.close)
+        store.add("voce e um idiota", "ODIO", "NAO")
+        engine = rules.RulesEngine(store)
+        self.assertFalse(engine.classify("Voce e um idiota")["flagged"])
+
+
+class _FakeEmbedder:
+    def __init__(self, vec=None):
+        self._vec = vec or [1.0, 0.0]
+        self.calls = []
+
+    async def embed(self, texts):
+        self.calls.append(list(texts))
+        return [list(self._vec) for _ in texts]
+
+
+class _FakeStore:
+    def __init__(self, examples=None):
+        self._examples = examples or []
+        self.upserts = []
+
+    def search(self, vec, k=8, sources=("feedback", "anomaly")):
+        return list(self._examples[:k])
+
+    def upsert(self, source, comment, category, embedding):
+        self.upserts.append((source, comment, category))
+
+
+class RagModeratorTest(unittest.TestCase):
+    def test_parse_token(self):
+        self.assertEqual("ODIO", moderate.RagModerator._parse("ODIO"))
+        self.assertEqual("PERGUNTA", moderate.RagModerator._parse("  pergunta "))
+        self.assertEqual("OK", moderate.RagModerator._parse("blabla"))
+
+    def test_classify_flags_via_llm(self):
+        rules_engine = rules.RulesEngine(None)
+        store = _FakeStore([{"comment": "vai embora", "category": "ODIO", "score": 0.9}])
+        model = _FakeModel(reply="ODIO")
+        mod = moderate.RagModerator(
+            embedder=_FakeEmbedder([1.0, 0.0]), store=store, model=model, rules=rules_engine
+        )
+        result = asyncio.run(mod.classify("vai embora seu lixo"))
+        self.assertTrue(result["flagged"])
+        self.assertEqual("ODIO", result["category"])
+
+    def test_classify_rule_fallback_without_embedder(self):
+        rules_engine = rules.RulesEngine(None)
+        mod = moderate.RagModerator(embedder=None, store=None, model=None, rules=rules_engine)
+        result = asyncio.run(mod.classify("voce e um idiota"))
+        self.assertTrue(result["flagged"])
+        self.assertEqual("ODIO", result["category"])
+
+
+class ModerateEndpointTest(unittest.TestCase):
+    def test_moderate_flags_rule_match(self):
+        mod = moderate.RagModerator(embedder=None, store=None, model=None, rules=rules.RulesEngine(None))
+        api.app.state.moderator = mod
+        client = TestClient(api.app)
+        resp = client.post("/moderate", json={"comment": "voce e um idiota"})
+        self.assertEqual(200, resp.status_code)
+        self.assertTrue(resp.json()["flagged"])
+
+    def test_moderate_empty_comment(self):
+        client = TestClient(api.app)
+        resp = client.post("/moderate", json={"comment": ""})
         self.assertEqual(400, resp.status_code)
 
 

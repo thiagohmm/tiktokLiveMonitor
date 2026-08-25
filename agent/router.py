@@ -9,7 +9,7 @@ import json
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
-from . import llm, tools
+from . import config, llm, tools
 from .buffer import LiveBuffer
 from .context import ContextBuilder
 
@@ -193,12 +193,34 @@ class Copilot:
         model: llm.ChatModel,
         registry: ToolRegistry | None = None,
         buffer: LiveBuffer | None = None,
+        embedder=None,
+        store=None,
     ):
         self._model = model
         self._registry = registry or ToolRegistry()
         self._router = Router(model, self._registry)
         self._buffer = buffer
         self._context = ContextBuilder(buffer) if buffer is not None else None
+        self._embedder = embedder
+        self._store = store
+
+    async def _rag_context(self, question: str) -> str:
+        """Busca semântica sobre chat + corpus de moderação para grounding."""
+        if self._embedder is None or self._store is None:
+            return ""
+        try:
+            vecs = await self._embedder.embed([question])
+        except Exception:  # noqa: BLE001
+            return ""
+        if not vecs:
+            return ""
+        results = self._store.search(
+            vecs[0], k=config.RAG_TOP_K, sources=("chat", "feedback", "anomaly")
+        )
+        if not results:
+            return ""
+        lines = [f'- [{r["category"]}] {r["comment"]}' for r in results]
+        return "CONTEXTO RECUPERADO (RAG):\n" + "\n".join(lines)
 
     async def ask(self, question: str) -> str:
         tool, arg = await self._router.route(question)
@@ -215,6 +237,9 @@ class Copilot:
             context = f"RESULTADO DA FERRAMENTA {tool}:\n{result_text}"
         else:
             context = self._context.build() if self._context is not None else ""
+            rag = await self._rag_context(question)
+            if rag:
+                context = f"{context}\n\n{rag}" if context else rag
 
         messages = [
             {"role": "system", "content": _FINAL_SYSTEM},
