@@ -193,18 +193,56 @@
             width: 100%;
             border-collapse: collapse;
             background: transparent;
+            table-layout: fixed;
         }
+        table th,
+        table td {
+            overflow-wrap: break-word;
+            word-break: break-word;
+            min-width: 0;
+        }
+        /* Tabelas com larguras de coluna fixas para alinhar cabeçalho e dados ao rolar */
+        .tbl-users th:nth-child(1) { width: 210px; }
+        .tbl-users th:nth-child(2) { width: 1fr; }
+        .tbl-users th:nth-child(3) { width: 150px; }
+        .tbl-comments th:nth-child(1) { width: 190px; }
+        .tbl-comments th:nth-child(2) { width: 1fr; }
+        .tbl-correlation th:nth-child(1) { width: 160px; }
+        .tbl-correlation th:nth-child(2) { width: 1fr; }
+        .tbl-correlation th:nth-child(3) { width: 90px; }
+        .tbl-correlation th:nth-child(4) { width: 1fr; }
+        .tbl-gifts th:nth-child(1) { width: 180px; }
+        .tbl-gifts th:nth-child(2) { width: 1fr; }
+        .tbl-gifts th:nth-child(3) { width: 80px; }
+        .tbl-ranking th:nth-child(1) { width: 40px; }
+        .tbl-ranking th:nth-child(2) { width: 170px; }
+        .tbl-ranking th:nth-child(3) { width: 80px; }
+        .tbl-ranking th:nth-child(4) { width: 90px; }
+        .tbl-ranking th:nth-child(5) { width: 110px; }
+        .tbl-ranking th:nth-child(6) { width: 90px; }
+        .tbl-ranking th:nth-child(7) { width: 90px; }
+        .tbl-lives th:nth-child(1) { width: 1fr; }
+        .tbl-lives th:nth-child(2) { width: 90px; }
+        .tbl-lives th:nth-child(3) { width: 100px; }
+        .tbl-lives th:nth-child(4) { width: 100px; }
+        .tbl-lives th:nth-child(5) { width: 100px; }
+        .tbl-lives th:nth-child(6) { width: 1fr; }
+        .tbl-lives th:nth-child(7) { width: 150px; }
         th {
             position: sticky;
             top: 0;
-            z-index: 1;
+            z-index: 5;
             text-align: left;
             font-size: 0.78em;
             text-transform: uppercase;
             letter-spacing: 0.08em;
             color: var(--text);
-            background: rgba(254, 44, 85, 0.18);
+            background: #161925;
+            border-bottom: 2px solid var(--red);
             padding: 14px 16px;
+        }
+        thead th {
+            border-top: 2px solid var(--red);
         }
         .user-name {
             font-weight: 600;
@@ -970,7 +1008,7 @@
             </div>
         </div>
         <div class="table-container">
-            <table>
+            <table class="tbl-users">
                 <thead>
                     <tr>
                         <th>Usuário</th>
@@ -993,7 +1031,7 @@
             </div>
         </div>
         <div class="table-container">
-            <table>
+            <table class="tbl-comments">
                 <thead>
                     <tr>
                         <th>Usuário</th>
@@ -1012,7 +1050,7 @@
             </div>
         </div>
         <div class="table-container">
-            <table>
+            <table class="tbl-correlation">
                 <thead>
                     <tr>
                         <th>Usuário</th>
@@ -1036,7 +1074,7 @@
             </div>
         </div>
         <div id="allGiftsTableContainer" class="table-container">
-            <table>
+            <table class="tbl-gifts">
                 <thead>
                     <tr>
                         <th>Usuário</th>
@@ -1060,7 +1098,7 @@
             </div>
         </div>
         <div class="table-container">
-            <table>
+            <table class="tbl-ranking">
                 <thead>
                     <tr>
                         <th>#</th>
@@ -1117,7 +1155,7 @@
             </div>
         </div>
         <div id="adminLivesContainer" class="table-container">
-            <table>
+            <table class="tbl-lives">
                 <thead>
                     <tr>
                         <th>Live</th>
