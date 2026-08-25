@@ -120,6 +120,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/disconnect", s.handleDisconnect)
 	mux.HandleFunc("/api/clear-history", s.handleClearHistory)
 	mux.HandleFunc("/api/feedback", s.handleFeedback)
+	mux.HandleFunc("/api/moderation/flag", s.handleModerationFlag)
 	mux.HandleFunc("/api/readiness", s.handleReadiness)
 	mux.HandleFunc("/api/probe-llm", s.handleProbeLLM)
 	mux.HandleFunc("/api/ask-ai", s.handleAskAI)
@@ -333,14 +334,6 @@ func (s *HTTPServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Warmup moderation in background.
-	go func() {
-		ctx := context.Background()
-		if err := s.controller.WarmupModeration(ctx, false); err != nil {
-			log.Printf("[View] Warmup warning: %v", err)
-		}
-	}()
-
 	if err := s.controller.StartMonitoring(context.Background(), body.Username); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -370,20 +363,50 @@ func (s *HTTPServer) handleFeedback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Compat layer (fase 2): forward to the Python agent, which now owns
-	// feedback.db. On success, refresh the moderation allowlist so identical
-	// messages stop being flagged immediately.
+	// feedback.db. The agent updates its own allowlist and vector index.
 	status, body, err := s.forwardToAgent(r, "/feedback")
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "agent unavailable")
 		return
 	}
-	if status == http.StatusOK {
-		s.controller.ClearModerationCache()
-		s.controller.WarmupModeration(r.Context(), true)
-	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	w.Write(body)
+}
+
+// handleModerationFlag ingests a moderation flag reported by the Python agent
+// and surfaces it through the existing flagged-message pipeline. Plumbing only.
+func (s *HTTPServer) handleModerationFlag(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		Comment  string `json:"comment"`
+		UniqueID string `json:"uniqueId"`
+		Nickname string `json:"nickname"`
+		Category string `json:"category"`
+		Reason   string `json:"reason"`
+		Source   string `json:"source"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if body.Comment == "" || body.Category == "" {
+		writeError(w, http.StatusBadRequest, "comment and category are required")
+		return
+	}
+	s.controller.ReportExternalFlag(monitor.EventData{
+		"comment":   body.Comment,
+		"uniqueId":  body.UniqueID,
+		"nickname":  body.Nickname,
+		"category":  body.Category,
+		"reason":    body.Reason,
+		"source":    body.Source,
+		"timestamp": time.Now().Format(time.RFC3339),
+	})
+	writeJSON(w, map[string]bool{"success": true})
 }
 
 func (s *HTTPServer) handleProbeLLM(w http.ResponseWriter, r *http.Request) {
@@ -438,11 +461,8 @@ func (s *HTTPServer) forwardToAgent(r *http.Request, path string) (int, []byte, 
 }
 
 func (s *HTTPServer) handleReadiness(w http.ResponseWriter, r *http.Request) {
-	modStatus := s.controller.GetStartupStatus()
-
 	writeJSON(w, map[string]interface{}{
-		"ready":      modStatus.Ready,
-		"moderation": modStatus,
+		"ready": true,
 	})
 }
 

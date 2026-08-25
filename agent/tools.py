@@ -22,6 +22,12 @@ class MonitorClient:
             resp.raise_for_status()
             return resp.json()
 
+    async def _post(self, path, payload):
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            resp = await client.post(self._base_url + path, json=payload)
+            resp.raise_for_status()
+            return resp.json()
+
     async def state(self):
         return await self._get("/api/state")
 
@@ -45,6 +51,9 @@ class MonitorClient:
 
     async def target_gifts(self, pending=True):
         return await self._get("/api/target-gift-history", params={"pending": "1" if pending else "0"})
+
+    async def flag(self, payload):
+        return await self._post("/api/moderation/flag", payload)
 
 
 # Instância padrão para conveniência.

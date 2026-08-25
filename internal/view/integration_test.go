@@ -15,7 +15,6 @@ import (
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
-	"github.com/thiagohmm/tiktok-live-monitor/internal/moderation"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 )
 
@@ -34,11 +33,9 @@ func setupTestServer(t *testing.T) (*HTTPServer, model.Repository, string, *moni
 		t.Skipf("skip test (TikTok API unavailable): %v", err)
 	}
 
-	modEngine := moderation.NewEngine(repo)
-
 	os.MkdirAll(filepath.Join(dir, "web"), 0755)
 
-	ctrl := controller.NewAppController(modEngine, mon, repo)
+	ctrl := controller.NewAppController(mon, repo)
 
 	srv := New(Config{
 		Host:      "127.0.0.1",
@@ -426,8 +423,8 @@ func TestHandleGiftEventStoresJSONNumbersAndNestedName(t *testing.T) {
 	for _, g := range gifts {
 		byName[g.GiftName] = g
 	}
-	if byName["Rose"].RepeatCount != 5 {
-		t.Fatalf("expected Rose repeatCount 5, got %d", byName["Rose"].RepeatCount)
+	if byName["Rosa"].RepeatCount != 5 {
+		t.Fatalf("expected Rosa repeatCount 5, got %d", byName["Rosa"].RepeatCount)
 	}
 	if byName["Dino"].UniqueID != "unknown" {
 		t.Fatalf("expected unknown uniqueId, got %q", byName["Dino"].UniqueID)
@@ -746,4 +743,77 @@ func TestHandleAdminLivesDelete(t *testing.T) {
 	if rec4.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", rec4.Code)
 	}
+}
+
+func TestHandleModerationFlag(t *testing.T) {
+	srv, db, _, mon := setupTestServer(t)
+	mon.SetCurrentLive("live1")
+
+	var gotType string
+	var gotData monitor.EventData
+	mon.OnEvent(func(eventType string, data monitor.EventData) {
+		if eventType == monitor.EventFlaggedMessage {
+			gotType = eventType
+			gotData = data
+		}
+	})
+
+	t.Run("emit flag", func(t *testing.T) {
+		body := map[string]string{
+			"comment":  "vai embora seu lixo",
+			"uniqueId": "user1",
+			"nickname": "User One",
+			"category": "ODIO",
+			"reason":   "Odio",
+		}
+		data, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/api/moderation/flag", bytes.NewReader(data))
+		rec := httptest.NewRecorder()
+		srv.handleModerationFlag(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		if gotType != monitor.EventFlaggedMessage {
+			t.Fatalf("expected flagged-message event, got %q", gotType)
+		}
+		if gotData["category"] != "ODIO" {
+			t.Fatalf("expected ODIO, got %v", gotData["category"])
+		}
+		logs, err := db.GetRecentModerations(10)
+		if err != nil || len(logs) != 1 {
+			t.Fatalf("expected 1 anomaly log, got %d err=%v", len(logs), err)
+		}
+	})
+
+	t.Run("missing comment", func(t *testing.T) {
+		body := map[string]string{"category": "ODIO"}
+		data, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/api/moderation/flag", bytes.NewReader(data))
+		rec := httptest.NewRecorder()
+		srv.handleModerationFlag(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", rec.Code)
+		}
+	})
+
+	t.Run("wrong method", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/moderation/flag", nil)
+		rec := httptest.NewRecorder()
+		srv.handleModerationFlag(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("expected 405, got %d", rec.Code)
+		}
+	})
+
+	t.Run("ignored when moderation disabled", func(t *testing.T) {
+		srv.controller.SetSettings(monitor.Settings{ModerationEnabled: false})
+		body := map[string]string{"comment": "outra msg", "category": "SPAM"}
+		data, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/api/moderation/flag", bytes.NewReader(data))
+		rec := httptest.NewRecorder()
+		srv.handleModerationFlag(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 no-op, got %d", rec.Code)
+		}
+	})
 }

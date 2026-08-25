@@ -10,7 +10,6 @@ import (
 	"github.com/thiagohmm/tiktok-live-monitor/internal/agent"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
-	"github.com/thiagohmm/tiktok-live-monitor/internal/moderation"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/view"
 )
@@ -45,9 +44,6 @@ func main() {
 		log.Fatalf("Failed to create monitor: %v", err)
 	}
 
-	// Service layer: moderation engine (rule-based; LLM lives in the Python agent)
-	modEngine := moderation.NewEngine(repo)
-
 	// In-memory write-behind cache for user messages (batched DB writes).
 	// Registered after repo.Close so the final flush runs before the DB closes.
 	msgCache := database.NewMessageCache(repo)
@@ -55,7 +51,7 @@ func main() {
 	defer msgCache.Stop()
 
 	// Controller layer: orchestrate services
-	ctrl := controller.NewAppController(modEngine, mon, repo)
+	ctrl := controller.NewAppController(mon, repo)
 	ctrl.SetMessageCache(msgCache)
 
 	// Service layer: AI agent (Python subprocess) + reverse proxy.

@@ -1870,7 +1870,7 @@ function renderRanking(ranking) {
     if (!rows.length) {
         const tr = document.createElement('tr');
         const td = document.createElement('td');
-        td.colSpan = 8;
+        td.colSpan = 7;
         td.style.textAlign = 'center';
         td.style.color = 'var(--text-muted)';
         td.textContent = 'Sem dados de engajamento ainda.';
@@ -1920,13 +1920,6 @@ function renderRanking(ranking) {
         const tdQuestions = document.createElement('td');
         tdQuestions.textContent = String(user.questionCount || 0);
         tr.appendChild(tdQuestions);
-
-        const tdRisk = document.createElement('td');
-        const badge = document.createElement('span');
-        badge.className = 'risk-badge ' + riskBadgeClass(user.riskLevel);
-        badge.textContent = riskLabel(user.riskLevel);
-        tdRisk.appendChild(badge);
-        tr.appendChild(tdRisk);
 
         rankingTableBody.appendChild(tr);
     });

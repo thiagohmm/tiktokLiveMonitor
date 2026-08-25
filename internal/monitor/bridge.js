@@ -67,6 +67,7 @@ function send(type, data) {
 }
 
 const { resolveIsFollower } = require('./follower');
+const { translateGiftName } = require('./gifts');
 
 function getUser(data) {
     const user = data.user || data.member || data.sender || data.author || data.owner || {};
@@ -258,14 +259,14 @@ function extractGiftArray(raw) {
 }
 
 function giftDisplayName(gift) {
-    if (typeof gift === 'string') return gift.trim();
+    if (typeof gift === 'string') return translateGiftName(gift);
     if (!gift || typeof gift !== 'object') return '';
     const candidates = [gift.giftName, gift.name, gift.describe, gift.displayName];
     for (const candidate of candidates) {
-        if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+        if (typeof candidate === 'string' && candidate.trim()) return translateGiftName(candidate);
         if (candidate && typeof candidate === 'object') {
             const nested = candidate.name || candidate.defaultPattern || candidate.default || '';
-            if (typeof nested === 'string' && nested.trim()) return nested.trim();
+            if (typeof nested === 'string' && nested.trim()) return translateGiftName(nested);
         }
     }
     return '';
@@ -357,10 +358,10 @@ function resolveGiftName(data) {
         data.gift?.giftName,
         data.gift?.name
     );
-    if (fromPayload) return fromPayload;
+    if (fromPayload) return translateGiftName(fromPayload);
     const giftId = data.giftId ?? data.gift?.gift_id ?? data.gift?.giftId;
     if (giftId != null && availableGiftsById.has(Number(giftId))) {
-        return availableGiftsById.get(Number(giftId));
+        return translateGiftName(availableGiftsById.get(Number(giftId)));
     }
     return giftId != null && String(giftId) !== '' ? `Presente ${giftId}` : 'Presente';
 }
