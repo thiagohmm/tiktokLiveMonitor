@@ -1,7 +1,10 @@
 {
   "name": "tiktok-live-monitor",
   "version": "1.0.0",
+  "main": "electron/main.js",
   "scripts": {
+    "start": "electron .",
+    "build:go": "node scripts/build-go.js",
     "docker:build": "docker compose build",
     "docker:up": "docker compose up",
     "postinstall": "node -e \"if (!process.env.SKIP_POSTINSTALL) { require('child_process').execSync('node scripts/setup-llm.js', { stdio: 'inherit' }); }\"",
@@ -18,5 +21,8 @@
     "tar": "^7.4.3",
     "tiktok-live-connector": "^2.1.1-beta1",
     "unzipper": "^0.12.3"
+  },
+  "devDependencies": {
+    "electron": "^37.10.3"
   }
 }
