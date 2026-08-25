@@ -86,6 +86,8 @@ type RankingRepository interface {
 	RecentLivesForUser(uniqueID string, limit int) ([]UserLiveSummary, error)
 	// TotalDistinctUsers counts distinct users across all user_messages.
 	TotalDistinctUsers() (int, error)
+	// ListLives returns derived lives grouped by live_name and day, most recent first.
+	ListLives(limit int) ([]Live, error)
 }
 
 // LiveStat is per-user aggregated data used to compute a ranking score.

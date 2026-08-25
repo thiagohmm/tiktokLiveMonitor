@@ -132,6 +132,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/report", s.handleReport)
 	mux.HandleFunc("/api/profile", s.handleProfile)
 	mux.HandleFunc("/api/alert-config", s.handleAlertConfig)
+	mux.HandleFunc("/api/admin/lives", s.handleAdminLives)
 
 	// Agent proxy: forward /agent/* to the Python agent HTTP API.
 	if s.cfg.AgentProxy != nil {
@@ -604,6 +605,26 @@ func (s *HTTPServer) handleRanking(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, ranking)
+}
+
+// handleAdminLives returns derived lives and schedules stored in the database.
+func (s *HTTPServer) handleAdminLives(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	lives, err := s.controller.GetLives(limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]interface{}{"lives": lives})
 }
 
 // handleReport generates an AI-assisted post-live report.

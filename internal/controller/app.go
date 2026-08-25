@@ -319,6 +319,11 @@ func (c *AppController) ClearHistory() (int64, error) {
 	return c.repo.ClearHistory()
 }
 
+// GetLives returns derived lives (grouped by live and day) for the admin tab.
+func (c *AppController) GetLives(limit int) ([]model.Live, error) {
+	return c.repo.ListLives(limit)
+}
+
 // GetRecentGifts returns recent gifts for the current live.
 func (c *AppController) GetRecentGifts(liveName string, limit int) ([]model.Gift, error) {
 	return c.repo.GetRecentGifts(liveName, limit)
