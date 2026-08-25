@@ -29,17 +29,22 @@ RUN if [ "$SKIP_TESTS" = "1" ]; then echo "SKIP_TESTS=1: pulando testes"; \
 RUN CGO_ENABLED=1 GOOS=linux GOARCH=$TARGETARCH go build -o /tiktok-live-monitor .
 
 # Stage 2: Minimal runtime (multi-arch)
-FROM --platform=$TARGETPLATFORM debian:trixie-slim
+FROM --platform=$TARGETPLATFORM node:22-bookworm-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        build-essential \
         ca-certificates \
+        cmake \
+        git \
         libgomp1 \
         libstdc++6 \
         libatomic1 \
         curl \
         python3 \
         python3-pip \
+        nodejs \
+        npm \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -48,10 +53,15 @@ COPY --from=builder /tiktok-live-monitor /app/tiktok-live-monitor
 COPY web/ ./web/
 COPY model-config.json ./
 COPY agent/ ./agent/
+COPY internal/monitor/ ./internal/monitor/
+COPY scripts/ ./scripts/
+COPY package.json package-lock.json ./
 COPY requirements.txt ./
 
 RUN mkdir -p models bin \
-    && pip3 install --break-system-packages --no-cache-dir -r requirements.txt
+    && mkdir -p data \
+    && pip3 install --break-system-packages --no-cache-dir -r requirements.txt \
+    && SKIP_POSTINSTALL=1 npm ci --omit=dev
 
 ENV HOST=0.0.0.0
 ENV PORT=3000

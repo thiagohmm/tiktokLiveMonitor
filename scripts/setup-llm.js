@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const https = require('https');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const unzipper = require('unzipper');
 const tar = require('tar');
 
@@ -21,6 +22,7 @@ const DEFAULT_MODEL_KEY = 'gemma-4b';
 /** Mesma versão em todas as plataformas (ubuntu-arm64 só existe a partir de builds recentes). */
 const LLAMA_CPP_RELEASE_TAG = 'b8999';
 const LLAMA_CPP_REPO = 'ggml-org/llama.cpp';
+const LLAMA_CPP_SOURCE_URL = `https://github.com/${LLAMA_CPP_REPO}/archive/refs/tags/${LLAMA_CPP_RELEASE_TAG}.tar.gz`;
 
 const MODELS_DIR = path.join(__dirname, '..', 'models');
 const BIN_DIR = path.join(__dirname, '..', 'bin');
@@ -245,6 +247,79 @@ function chmodLlamaBinaries(targetBinDir, targetOs) {
     }
 }
 
+function resolveExistingLlamaBinary(targetBinDir) {
+    const candidates = [
+        path.join(targetBinDir, 'llama-server'),
+        path.join(targetBinDir, 'build', 'bin', 'llama-server'),
+    ];
+    for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) return candidate;
+    }
+    try {
+        const dirs = fs.readdirSync(targetBinDir, { withFileTypes: true });
+        for (const d of dirs) {
+            if (!d.isDirectory() || !/^llama-b\d+$/i.test(d.name)) continue;
+            const nested = path.join(targetBinDir, d.name, 'llama-server');
+            if (fs.existsSync(nested)) return nested;
+        }
+    } catch {
+        /* ignore */
+    }
+    return null;
+}
+
+function isUsableLlamaBinary(binPath) {
+    if (!binPath) return false;
+    try {
+        execFileSync(binPath, ['--help'], { stdio: 'ignore', timeout: 5000 });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+async function buildLlamaFromSource(targetBinDir) {
+    const sourceArchive = path.join(BIN_DIR, `llama-src-${LLAMA_CPP_RELEASE_TAG}.tar.gz`);
+    const sourceDir = path.join(BIN_DIR, `llama-src-${LLAMA_CPP_RELEASE_TAG}`);
+    const buildDir = path.join(sourceDir, 'build');
+
+    fs.rmSync(sourceDir, { recursive: true, force: true });
+    fs.mkdirSync(sourceDir, { recursive: true });
+
+    await downloadFile(LLAMA_CPP_SOURCE_URL, sourceArchive);
+
+    console.log('[Setup] Extraindo fontes do llama.cpp...');
+    execFileSync('tar', ['-xzf', sourceArchive, '-C', sourceDir, '--strip-components=1'], { stdio: 'inherit' });
+
+    console.log('[Setup] Configurando build local do llama-server...');
+    execFileSync(
+        'cmake',
+        [
+            '-S', sourceDir,
+            '-B', buildDir,
+            '-DCMAKE_BUILD_TYPE=Release',
+            '-DGGML_NATIVE=ON',
+            '-DLLAMA_BUILD_SERVER=ON',
+            '-DLLAMA_BUILD_EXAMPLES=OFF',
+            '-DLLAMA_BUILD_TESTS=OFF',
+            '-DLLAMA_BUILD_TOOLS=ON',
+        ],
+        { stdio: 'inherit' }
+    );
+
+    console.log('[Setup] Compilando llama-server localmente...');
+    execFileSync(
+        'cmake',
+        ['--build', buildDir, '--config', 'Release', '-j', String(Math.max(1, os.cpus().length))],
+        { stdio: 'inherit' }
+    );
+
+    fs.rmSync(targetBinDir, { recursive: true, force: true });
+    fs.mkdirSync(targetBinDir, { recursive: true });
+    fs.cpSync(path.join(buildDir, 'bin'), targetBinDir, { recursive: true, force: true });
+    chmodLlamaBinaries(targetBinDir, 'linux');
+}
+
 async function setup() {
     const rawOs = process.argv[2] || (process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? 'mac' : 'linux');
     const rawArch = process.argv[3] || process.arch;
@@ -268,6 +343,23 @@ async function setup() {
 
     const modelDest = path.join(MODELS_DIR, GGUF_FILENAME);
     await downloadFile(DOWNLOAD_URL, modelDest);
+
+    const existingBinary = resolveExistingLlamaBinary(path.join(BIN_DIR, targetOs, targetArch));
+    if (targetOs === 'linux' && targetArch === 'arm64') {
+        if (isUsableLlamaBinary(existingBinary)) {
+            console.log(`[Setup] llama-server já funcional: ${existingBinary}`);
+            return;
+        }
+
+        console.log('[Setup] Binário pré-compilado incompatível ou ausente; compilando localmente para ARM64.');
+        try {
+            await buildLlamaFromSource(path.join(BIN_DIR, targetOs, targetArch));
+        } catch (err) {
+            console.error(`[Setup] Falha ao compilar llama-server localmente: ${err.message}`);
+            process.exit(1);
+        }
+        return;
+    }
 
     let artifact;
     try {

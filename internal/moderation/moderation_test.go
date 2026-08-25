@@ -2,8 +2,6 @@ package moderation
 
 import (
 	"testing"
-
-	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 )
 
 func TestFoldText(t *testing.T) {
@@ -21,26 +19,6 @@ func TestFoldText(t *testing.T) {
 		got := foldText(tt.input)
 		if got != tt.expected {
 			t.Errorf("foldText(%q) = %q, want %q", tt.input, got, tt.expected)
-		}
-	}
-}
-
-func TestNormalizeModerationKeyword(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"SIM_PERGUNTA", "sim_pergunta"},
-		{"Sim Pergunta", "sim_pergunta"},
-		{"NAO", "nao"},
-		{"sim_odio!", "sim_odio"},
-		{"  SIM_SPAM  ", "sim_spam"},
-		{"", ""},
-	}
-	for _, tt := range tests {
-		got := normalizeModerationKeyword(tt.input)
-		if got != tt.expected {
-			t.Errorf("normalizeModerationKeyword(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
 	}
 }
@@ -87,80 +65,6 @@ func TestLooksQuestion(t *testing.T) {
 		if looksQuestion(q) {
 			t.Errorf("expected %q NOT to be a question", q)
 		}
-	}
-}
-
-func TestParseAIResponse(t *testing.T) {
-	tests := []struct {
-		name       string
-		raw        string
-		wantFlag   bool
-		wantCat    string
-	}{
-		{
-			name:     "nao - normal message",
-			raw:      "NAO",
-			wantFlag: false,
-			wantCat:  "OK",
-		},
-		{
-			name:     "sim_pergunta - question",
-			raw:      "SIM_PERGUNTA",
-			wantFlag: false,
-			wantCat:  "PERGUNTA",
-		},
-		{
-			name:     "sim_proselitismo - proselytizing",
-			raw:      "SIM_PROSELITISMO",
-			wantFlag: true,
-			wantCat:  "PROSELITISMO",
-		},
-		{
-			name:     "sim_spam - spam",
-			raw:      "SIM_SPAM",
-			wantFlag: true,
-			wantCat:  "SPAM",
-		},
-		{
-			name:     "sim_golpe - scam",
-			raw:      "SIM_GOLPE",
-			wantFlag: true,
-			wantCat:  "GOLPE",
-		},
-		{
-			name:     "sim_outro - other",
-			raw:      "SIM_OUTRO",
-			wantFlag: true,
-			wantCat:  "OUTRO",
-		},
-		{
-			name:     "empty - treated as nao",
-			raw:      "",
-			wantFlag: false,
-			wantCat:  "OK",
-		},
-		{
-			name:     "sim_odio with question reclassified to OK",
-			raw:      "SIM_ODIO",
-			wantFlag: false,
-			wantCat:  "OK",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var result AnalysisResult
-			if tt.name == "sim_odio with question reclassified" {
-				result = parseAIResponse(tt.raw, "Qual sua religiao?", "live", "uid", "nick")
-			} else {
-				result = parseAIResponse(tt.raw, "normal message", "live", "uid", "nick")
-			}
-			if result.Flagged != tt.wantFlag {
-				t.Errorf("Flagged = %v, want %v", result.Flagged, tt.wantFlag)
-			}
-			if result.Category != tt.wantCat {
-				t.Errorf("Category = %q, want %q", result.Category, tt.wantCat)
-			}
-		})
 	}
 }
 
@@ -296,32 +200,6 @@ func TestPassesPersonalAttackAiGate(t *testing.T) {
 	}
 }
 
-func TestLooksAffectiveOrRomantic(t *testing.T) {
-	positive := []string{
-		"Ele gosta de voce?",
-		"Vai atras dela",
-		"Tem sentimentos por ele",
-		"Ela curte voce",
-		"Quer namorar com ele",
-	}
-	for _, c := range positive {
-		if !looksAffectiveOrRomantic(c) {
-			t.Errorf("expected %q to be affective/romantic", c)
-		}
-	}
-
-	negative := []string{
-		"Boa noite",
-		"Show a live",
-		"Valeu streamer",
-	}
-	for _, c := range negative {
-		if looksAffectiveOrRomantic(c) {
-			t.Errorf("expected %q NOT to be affective/romantic", c)
-		}
-	}
-}
-
 func TestGetCategoryLabel(t *testing.T) {
 	tests := []struct {
 		cat  string
@@ -338,39 +216,6 @@ func TestGetCategoryLabel(t *testing.T) {
 		got := getCategoryLabel(tt.cat)
 		if got == "" {
 			t.Errorf("getCategoryLabel(%q) returned empty", tt.cat)
-		}
-	}
-}
-
-func TestBuildRecentChatBlock(t *testing.T) {
-	buf := []monitor.ChatMessage{
-		{Nickname: "User1", Comment: "Hello"},
-		{Nickname: "User2", Comment: "World"},
-	}
-	block := buildRecentChatBlock(buf)
-	if block == "" {
-		t.Error("expected non-empty chat block")
-	}
-
-	empty := buildRecentChatBlock(nil)
-	if empty != "(nenhuma mensagem anterior no buffer)" {
-		t.Errorf("expected empty buffer message, got %q", empty)
-	}
-}
-
-func TestJsonString(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"hello", `"hello"`},
-		{`he said "hi"`, `"he said \"hi\""`},
-		{"line1\nline2", `"line1\nline2"`},
-	}
-	for _, tt := range tests {
-		got := jsonString(tt.input)
-		if got != tt.expected {
-			t.Errorf("jsonString(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
 	}
 }
@@ -398,5 +243,30 @@ func TestCoalesceStr(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("coalesceStr(%v) = %q, want %q", tt.input, got, tt.expected)
 		}
+	}
+}
+func TestClassifyByRules(t *testing.T) {
+	tests := []struct {
+		name     string
+		comment  string
+		wantFlag bool
+		wantCat  string
+	}{
+		{name: "normal", comment: "boa noite pessoal", wantFlag: false, wantCat: "OK"},
+		{name: "question", comment: "qual a sua musica favorita?", wantFlag: false, wantCat: "PERGUNTA"},
+		{name: "proselytizing", comment: "jesus salva, aceita a cristo", wantFlag: true, wantCat: "PROSELITISMO"},
+		{name: "spam link", comment: "clica no link da bio https://bit.ly/abc", wantFlag: true, wantCat: "SPAM"},
+		{name: "insult", comment: "voce e um idiota", wantFlag: true, wantCat: "ODIO"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res := classifyByRules(tt.comment, foldText(tt.comment))
+			if res.Flagged != tt.wantFlag {
+				t.Errorf("Flagged = %v, want %v", res.Flagged, tt.wantFlag)
+			}
+			if res.Category != tt.wantCat {
+				t.Errorf("Category = %q, want %q", res.Category, tt.wantCat)
+			}
+		})
 	}
 }

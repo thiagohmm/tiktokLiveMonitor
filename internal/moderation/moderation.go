@@ -1,16 +1,14 @@
-// Package moderation provides the message analysis pipeline using LLM + rule-based classifiers.
+// Package moderation provides the message analysis pipeline using rule-based classifiers.
 package moderation
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/thiagohmm/tiktok-live-monitor/internal/ai"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 )
@@ -41,38 +39,22 @@ type AnalysisResult struct {
 }
 
 const (
-	aiCacheMax         = 150
-	aiCooldownMs       = 30_000
-	auditReclassifyEnv = "MODERATION_AUDIT_RECLASSIFY"
-	recentChatLimit    = 14
+	cacheMax = 150
 )
-
-var (
-	auditEnabled bool
-)
-
-func init() {
-	auditEnabled = isTruthy(strings.ToLower(strings.TrimSpace(
-		coalesceEnv(auditReclassifyEnv, ""),
-	)))
-}
 
 // Engine handles message moderation.
 type Engine struct {
-	mu            sync.Mutex
-	aiManager     *ai.Manager
-	repo          model.Repository
-	cache         map[string]AnalysisResult
-	cooldownUntil int64
-	warmupStatus  StartupStatus
-	warmupFlight  *sync.Mutex
-	allowlist     map[string]struct{}
+	mu           sync.Mutex
+	repo         model.Repository
+	cache        map[string]AnalysisResult
+	warmupStatus StartupStatus
+	warmupFlight *sync.Mutex
+	allowlist    map[string]struct{}
 }
 
 // NewEngine creates a moderation engine.
-func NewEngine(aiMgr *ai.Manager, repo model.Repository) *Engine {
+func NewEngine(repo model.Repository) *Engine {
 	return &Engine{
-		aiManager:    aiMgr,
 		repo:         repo,
 		cache:        make(map[string]AnalysisResult),
 		warmupFlight: &sync.Mutex{},
@@ -110,16 +92,18 @@ func (e *Engine) GetStartupStatus() StartupStatus {
 	return e.warmupStatus
 }
 
-// ClearCache resets the AI cache and cooldown.
+// ClearCache resets the moderation cache.
 func (e *Engine) ClearCache() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.cache = make(map[string]AnalysisResult)
-	e.cooldownUntil = 0
 }
 
-// WarmupLearning warms up the moderation pipeline with few-shot examples.
-func (e *Engine) WarmupLearning(ctx context.Context, touchLLM, force bool) (StartupStatus, error) {
+// --- Text Processing Helpers ---
+
+// WarmupLearning prepares the moderation pipeline (allowlist refresh). The LLM
+// warmup moved to the Python agent (docs/plano-unificacao-ia.md, fase 2).
+func (e *Engine) WarmupLearning(ctx context.Context, force bool) (StartupStatus, error) {
 	if !force {
 		e.warmupFlight.Lock()
 		defer e.warmupFlight.Unlock()
@@ -132,42 +116,20 @@ func (e *Engine) WarmupLearning(ctx context.Context, touchLLM, force bool) (Star
 	}
 	e.mu.Unlock()
 
-	prompt, feedbackCount, err := buildPromptContext(ctx, e.repo, 24)
-	if err != nil {
-		e.mu.Lock()
-		e.warmupStatus = StartupStatus{
-			Ready:     false,
-			LastError: err.Error(),
-		}
-		e.mu.Unlock()
-		return e.warmupStatus, fmt.Errorf("build prompt: %w", err)
-	}
-
-	if touchLLM {
-		req := ai.CompletionRequest{
-			SystemContent: prompt,
-			UserContent:   `Contexto recente (mensagens anteriores na live): (nenhuma mensagem anterior no buffer)\n\nAutor do comentário: "system"\nTexto para analisar (ignore menções @nome no início): "mensagem de aquecimento"`,
-			MaxTokens:     8,
-		}
-		if _, err := e.aiManager.Complete(ctx, req); err != nil {
-			log.Printf("[Moderation] Warmup LLM falhou: %v", err)
-		}
-	}
-
 	e.refreshAllowlist()
 
 	e.mu.Lock()
 	e.warmupStatus = StartupStatus{
-		Ready:         true,
-		FeedbackCount: feedbackCount,
-		WarmedAt:      time.Now().UTC().Format(time.RFC3339),
+		Ready:    true,
+		WarmedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	e.mu.Unlock()
 
 	return e.warmupStatus, nil
 }
 
-// AnalyzeMessage classifies a chat message using AI + rules.
+// AnalyzeMessage classifies a chat message using deterministic rules. The LLM
+// classification moved to the Python agent (docs/plano-unificacao-ia.md, fase 2).
 func (e *Engine) AnalyzeMessage(ctx context.Context, comment, uniqueID, nickname string, chatBuf []monitor.ChatMessage, liveName string) (AnalysisResult, error) {
 	commentLower := strings.TrimSpace(strings.ToLower(comment))
 	folded := foldText(commentLower)
@@ -175,14 +137,8 @@ func (e *Engine) AnalyzeMessage(ctx context.Context, comment, uniqueID, nickname
 	e.mu.Lock()
 	if _, ok := e.allowlist[folded]; ok {
 		e.mu.Unlock()
-		log.Printf("[AI] ✅ liberado por allowlist: %q", truncate(comment, 50))
+		log.Printf("[Moderation] ✅ liberado por allowlist: %q", truncate(comment, 50))
 		return AnalysisResult{Flagged: false, Category: "OK"}, nil
-	}
-
-	// Cooldown check.
-	if time.Now().UnixMilli() < e.cooldownUntil {
-		e.mu.Unlock()
-		return AnalysisResult{Flagged: false}, nil
 	}
 
 	// Cache check.
@@ -193,41 +149,12 @@ func (e *Engine) AnalyzeMessage(ctx context.Context, comment, uniqueID, nickname
 	}
 	e.mu.Unlock()
 
-	// Build prompt and call AI.
-	prompt, _, err := buildPromptContext(ctx, e.repo, 24)
-	if err != nil {
-		return AnalysisResult{Flagged: false}, fmt.Errorf("build prompt: %w", err)
-	}
-
-	contextBlock := buildRecentChatBlock(chatBuf)
-	userPrompt := fmt.Sprintf(
-		"Contexto recente (mensagens anteriores na live):\n%s\n\nAutor do comentário: %s\nTexto para analisar (ignore menções @nome no início): %s",
-		contextBlock,
-		jsonString(coalesceStr(nickname, uniqueID, "")),
-		jsonString(comment),
-	)
-
-	req := ai.CompletionRequest{
-		SystemContent: prompt,
-		UserContent:   userPrompt,
-		MaxTokens:     48,
-	}
-
-	raw, err := e.aiManager.Complete(ctx, req)
-	if err != nil {
-		e.mu.Lock()
-		e.cooldownUntil = time.Now().UnixMilli() + aiCooldownMs
-		e.mu.Unlock()
-		log.Printf("[Moderation] IA pausada (falha): %v", err)
-		return AnalysisResult{Flagged: false}, nil
-	}
-
-	result := parseAIResponse(raw, comment, liveName, uniqueID, nickname)
+	result := classifyByRules(comment, folded)
 
 	// Store in cache.
 	e.mu.Lock()
 	e.cache[cacheKey] = result
-	if len(e.cache) > aiCacheMax {
+	if len(e.cache) > cacheMax {
 		for k := range e.cache {
 			delete(e.cache, k)
 			break
@@ -236,10 +163,10 @@ func (e *Engine) AnalyzeMessage(ctx context.Context, comment, uniqueID, nickname
 	e.mu.Unlock()
 
 	if result.Flagged {
-		log.Printf("[AI] ⚠️ CONTEÚDO FLAGADO: [%s] - %q", result.Category, comment)
+		log.Printf("[Moderation] ⚠️ CONTEÚDO FLAGADO: [%s] - %q", result.Category, comment)
 	} else {
 		preview := truncate(comment, 50)
-		log.Printf("[AI] ✅ Conteúdo liberado: %q", preview)
+		log.Printf("[Moderation] ✅ Conteúdo liberado: %q", preview)
 	}
 
 	// Log to database asynchronously.
@@ -251,76 +178,6 @@ func (e *Engine) AnalyzeMessage(ctx context.Context, comment, uniqueID, nickname
 
 	return result, nil
 }
-
-// --- AI Response Parsing ---
-
-func parseAIResponse(raw, originalComment, liveName, uniqueID, nickname string) AnalysisResult {
-	key := normalizeModerationKeyword(raw)
-
-	if key == "" || strings.HasPrefix(key, "nao") {
-		return AnalysisResult{Flagged: false, Category: "OK"}
-	}
-
-	prefixMap := map[string]string{
-		"sim_odio":         "ODIO",
-		"sim_proselitismo": "PROSELITISMO",
-		"sim_spam":         "SPAM",
-		"sim_golpe":        "GOLPE",
-		"sim_pergunta":     "PERGUNTA",
-		"sim_outro":        "OUTRO",
-	}
-
-	var category string
-	for prefix, cat := range prefixMap {
-		if key == prefix || strings.HasPrefix(key, prefix) {
-			category = cat
-			break
-		}
-	}
-
-	if category == "" {
-		compact := strings.TrimSpace(strings.ToLower(raw))
-		if strings.HasPrefix(compact, "sim") {
-			category = "PROSELITISMO"
-		} else {
-			return AnalysisResult{Flagged: false, Category: "OK"}
-		}
-	}
-
-	flagged := category != "PERGUNTA"
-
-	// Rule-based post-processing.
-	result := AnalysisResult{Flagged: flagged, Category: category}
-
-	// Reclassify ODIO to PERGUNTA for questions without personal attacks.
-	if category == "ODIO" && looksQuestion(originalComment) && !hasClearPersonalAttackSignal(originalComment) {
-		logAudit("reclassified_odio_to_pergunta", liveName, uniqueID, nickname, raw, category, "PERGUNTA", originalComment)
-		result.Category = "PERGUNTA"
-		result.Flagged = false
-	}
-
-	// Reclassify ODIO for affective/romantic language.
-	if category == "ODIO" && flagged && looksAffectiveOrRomantic(originalComment) {
-		logAudit("reclassified_odio_to_nao_affective", liveName, uniqueID, nickname, raw, category, "NAO", originalComment)
-		result.Category = "OK"
-		result.Flagged = false
-	}
-
-	// Reclassify ODIO without clear personal attack signals.
-	if category == "ODIO" && flagged && !hasClearPersonalAttackSignal(originalComment) {
-		logAudit("reclassified_odio_to_nao_no_signal", liveName, uniqueID, nickname, raw, category, "NAO", originalComment)
-		result.Category = "OK"
-		result.Flagged = false
-	}
-
-	if result.Flagged {
-		result.Reason = getCategoryLabel(result.Category)
-	}
-
-	return result
-}
-
-// --- Text Processing Helpers ---
 
 func foldText(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
@@ -336,14 +193,6 @@ func foldText(s string) string {
 	return b.String()
 }
 
-func normalizeModerationKeyword(raw string) string {
-	folded := foldText(raw)
-	// Replace whitespace with underscore and remove non-alphanumeric.
-	folded = regexp.MustCompile(`\s+`).ReplaceAllString(folded, "_")
-	folded = regexp.MustCompile(`[^a-z0-9_]`).ReplaceAllString(folded, "")
-	return folded
-}
-
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -352,6 +201,24 @@ func truncate(s string, n int) string {
 }
 
 // --- Rule-based Classifiers ---
+
+// classifyByRules classifies a comment with deterministic rules. Priority
+// follows the old LLM prompt: personal attacks win over questions.
+func classifyByRules(comment, folded string) AnalysisResult {
+	if passesPersonalAttackAiGate(folded) {
+		return AnalysisResult{Flagged: true, Category: "ODIO", Reason: getCategoryLabel("ODIO")}
+	}
+	if passesChristianProselytizingAiGate(comment) {
+		return AnalysisResult{Flagged: true, Category: "PROSELITISMO", Reason: getCategoryLabel("PROSELITISMO")}
+	}
+	if passesSpamScamAiGate(comment, folded) {
+		return AnalysisResult{Flagged: true, Category: "SPAM", Reason: getCategoryLabel("SPAM")}
+	}
+	if looksQuestion(comment) {
+		return AnalysisResult{Flagged: false, Category: "PERGUNTA"}
+	}
+	return AnalysisResult{Flagged: false, Category: "OK"}
+}
 
 func looksQuestion(comment string) bool {
 	raw := strings.TrimSpace(comment)
@@ -474,35 +341,6 @@ func passesPersonalAttackAiGate(folded string) bool {
 	return false
 }
 
-func hasClearPersonalAttackSignal(comment string) bool {
-	folded := foldText(comment)
-	if passesPersonalAttackAiGate(folded) {
-		return true
-	}
-	return regexp.MustCompile(
-		`\b(vc|voce|voces|tu|ce|c\b)\b[\s\S]{0,20}\b(e\s+)?(burro|idiota|imbecil|retardad[oa]|ridicul[oa]|otari[oa]|troux[ae]|lixo)\b`,
-	).MatchString(folded)
-}
-
-func looksAffectiveOrRomantic(comment string) bool {
-	t := foldText(comment)
-	patterns := []string{
-		`\b(gosta\s+d[eio]|gostar\s+d[eio]|gostou\s+d[eio])\b`,
-		`\b(vai\s+atras|vai\s+atr[aá]s|foi\s+atras|correr\s+atras)\b`,
-		`\b(tem\s+sentimentos?|tinha\s+sentimentos?|ter\s+sentimentos?)\b`,
-		`\b(esta\s+apaixonad[oa]|ficou\s+apaixonad[oa]|apaixonou)\b`,
-		`\b(tem\s+interesse|demonstrou?\s+interesse|esta\s+interessad[oa])\b`,
-		`\b(curte|curtiu|se\s+apaixonou|quer\s+fic[ao]r?|quer\s+namorar)\b`,
-		`\b(esta\s+(gostando|querendo)|sempre\s+gostou)\b`,
-	}
-	for _, p := range patterns {
-		if regexp.MustCompile(p).MatchString(t) {
-			return true
-		}
-	}
-	return false
-}
-
 func getCategoryLabel(category string) string {
 	if label, ok := CategoryLabels[category]; ok {
 		return label
@@ -512,31 +350,6 @@ func getCategoryLabel(category string) string {
 
 // --- Utilities ---
 
-func buildRecentChatBlock(buf []monitor.ChatMessage) string {
-	if len(buf) == 0 {
-		return "(nenhuma mensagem anterior no buffer)"
-	}
-	end := len(buf)
-	start := end - recentChatLimit
-	if start < 0 {
-		start = 0
-	}
-	var lines []string
-	for _, m := range buf[start:end] {
-		name := coalesceStr(m.Nickname, m.UniqueID, "?")
-		lines = append(lines, fmt.Sprintf("%s: %s", name, m.Comment))
-	}
-	return strings.Join(lines, "\n")
-}
-
-func jsonString(s string) string {
-	// Simple JSON quoting.
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	s = strings.ReplaceAll(s, "\n", `\n`)
-	return `"` + s + `"`
-}
-
 func coalesceStr(values ...string) string {
 	for _, v := range values {
 		if v != "" {
@@ -544,31 +357,4 @@ func coalesceStr(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func coalesceEnv(key, fallback string) string {
-	if v := strings.TrimSpace(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-func isTruthy(s string) bool {
-	return s == "1" || s == "true" || s == "yes" || s == "y"
-}
-
-func logAudit(event, liveName, uniqueID, nickname, raw, originalCategory, finalCategory, message string) {
-	if !auditEnabled {
-		return
-	}
-	payload := map[string]interface{}{
-		"liveName":         liveName,
-		"uniqueId":         uniqueID,
-		"nickname":         nickname,
-		"rawModelOutput":   raw,
-		"originalCategory": originalCategory,
-		"finalCategory":    finalCategory,
-		"message":          message,
-	}
-	log.Printf("[MOD-AUDIT] %s: %v", event, payload)
 }

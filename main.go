@@ -8,7 +8,6 @@ import (
 	"strconv"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/agent"
-	"github.com/thiagohmm/tiktok-live-monitor/internal/ai"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/moderation"
@@ -40,18 +39,14 @@ func main() {
 	defer repo.Close()
 	log.Println("Database initialized.")
 
-	// Service layer: AI manager
-	aiMgr := ai.NewManager(modelsDir, binDir)
-	defer aiMgr.Stop()
-
 	// Service layer: monitor
 	mon, err := monitor.New()
 	if err != nil {
 		log.Fatalf("Failed to create monitor: %v", err)
 	}
 
-	// Service layer: moderation engine
-	modEngine := moderation.NewEngine(aiMgr, repo)
+	// Service layer: moderation engine (rule-based; LLM lives in the Python agent)
+	modEngine := moderation.NewEngine(repo)
 
 	// In-memory write-behind cache for user messages (batched DB writes).
 	// Registered after repo.Close so the final flush runs before the DB closes.
@@ -60,7 +55,7 @@ func main() {
 	defer msgCache.Stop()
 
 	// Controller layer: orchestrate services
-	ctrl := controller.NewAppController(aiMgr, modEngine, mon, repo)
+	ctrl := controller.NewAppController(modEngine, mon, repo)
 	ctrl.SetMessageCache(msgCache)
 
 	// Service layer: AI agent (Python subprocess) + reverse proxy.
@@ -78,12 +73,13 @@ func main() {
 		}
 	}
 	srv := view.New(view.Config{
-		Host:       os.Getenv("HOST"),
-		Port:       port,
-		ModelsDir:  modelsDir,
-		BinDir:     binDir,
-		WebDir:     filepath.Join(baseDir, "web"),
-		AgentProxy: agentMgr.ProxyHandler(),
+		Host:         os.Getenv("HOST"),
+		Port:         port,
+		ModelsDir:    modelsDir,
+		BinDir:       binDir,
+		WebDir:       filepath.Join(baseDir, "web"),
+		AgentProxy:   agentMgr.ProxyHandler(),
+		AgentBaseURL: agentMgr.BaseURL(),
 	}, ctrl)
 
 	ctx := context.Background()

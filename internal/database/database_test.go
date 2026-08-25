@@ -1,7 +1,6 @@
 package database
 
 import (
-	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -27,122 +26,22 @@ func TestOpenAndMigrate(t *testing.T) {
 	}
 }
 
-func TestAddFeedback(t *testing.T) {
-	db := openTestDB(t)
-
-	id, err := db.AddFeedback("spam message", "SPAM", "SIM_SPAM")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if id <= 0 {
-		t.Fatalf("expected positive id, got %d", id)
-	}
-
-	fbs, err := db.GetRecentFeedbacks(10)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(fbs) != 1 {
-		t.Fatalf("expected 1 feedback, got %d", len(fbs))
-	}
-	if fbs[0].Comment != "spam message" {
-		t.Fatalf("expected 'spam message', got %q", fbs[0].Comment)
-	}
-	if fbs[0].Category != "SPAM" {
-		t.Fatalf("expected 'SPAM', got %q", fbs[0].Category)
-	}
-}
-
-func TestAddFeedbackValidation(t *testing.T) {
-	db := openTestDB(t)
-
-	_, err := db.AddFeedback("", "SPAM", "SIM_SPAM")
-	if err == nil {
-		t.Fatal("expected error for empty comment")
-	}
-
-	_, err = db.AddFeedback("msg", "INVALID", "SIM_SPAM")
-	if err == nil {
-		t.Fatal("expected error for invalid category")
-	}
-
-	_, err = db.AddFeedback("msg", "SPAM", "INVALID")
-	if err == nil {
-		t.Fatal("expected error for invalid expected")
-	}
-}
-
-func TestGetRecentFeedbacksLimit(t *testing.T) {
-	db := openTestDB(t)
-
-	for i := 0; i < 15; i++ {
-		_, err := db.AddFeedback(fmt.Sprintf("msg%d", i), "SPAM", "SIM_SPAM")
-		if err != nil {
-			t.Fatalf("add feedback %d: %v", i, err)
-		}
-	}
-
-	fbs, err := db.GetRecentFeedbacks(5)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(fbs) != 5 {
-		t.Fatalf("expected 5, got %d", len(fbs))
-	}
-
-	_, err = db.GetRecentFeedbacks(0)
-	if err != nil {
-		t.Fatalf("unexpected error for limit 0: %v", err)
-	}
-}
-
-func TestAddFeedbackDedup(t *testing.T) {
-	db := openTestDB(t)
-
-	id, err := db.AddFeedback("spam message", "SPAM", "NAO")
-	if err != nil {
-		t.Fatalf("add feedback: %v", err)
-	}
-	if id <= 0 {
-		t.Fatalf("expected positive id, got %d", id)
-	}
-
-	id2, err := db.AddFeedback("spam message", "SPAM", "NAO")
-	if err != nil {
-		t.Fatalf("dedup feedback: %v", err)
-	}
-	if id2 != 0 {
-		t.Fatalf("expected idempotent 0, got %d", id2)
-	}
-
-	if n := countTable(t, db, "SELECT COUNT(*) FROM false_positives WHERE comment = 'spam message' AND expected = 'NAO'"); n != 1 {
-		t.Fatalf("expected 1 row, got %d", n)
-	}
-
-	// Same comment with a different expected value is not a duplicate.
-	if _, err := db.AddFeedback("spam message", "SPAM", "SIM_SPAM"); err != nil {
-		t.Fatalf("add distinct expected: %v", err)
-	}
-	if n := countTable(t, db, "SELECT COUNT(*) FROM false_positives WHERE comment = 'spam message'"); n != 2 {
-		t.Fatalf("expected 2 rows, got %d", n)
-	}
-}
-
 func TestGetFalsePositiveComments(t *testing.T) {
 	db := openTestDB(t)
 
-	if _, err := db.AddFeedback("jesus te ama", "PROSELITISMO", "NAO"); err != nil {
-		t.Fatalf("add fp 1: %v", err)
+	seed := func(comment, category, expected string) {
+		t.Helper()
+		if _, err := db.conn.Exec(
+			"INSERT INTO false_positives (comment, category, expected) VALUES (?, ?, ?)",
+			comment, category, expected,
+		); err != nil {
+			t.Fatalf("seed feedback %q: %v", comment, err)
+		}
 	}
-	if _, err := db.AddFeedback("jesus te ama", "PROSELITISMO", "NAO"); err != nil {
-		t.Fatalf("add fp 1 dup: %v", err)
-	}
-	if _, err := db.AddFeedback("clica no link", "SPAM", "NAO"); err != nil {
-		t.Fatalf("add fp 2: %v", err)
-	}
-	if _, err := db.AddFeedback("isto é spam mesmo", "SPAM", "SIM_SPAM"); err != nil {
-		t.Fatalf("add non-fp: %v", err)
-	}
+	seed("jesus te ama", "PROSELITISMO", "NAO")
+	seed("jesus te ama", "PROSELITISMO", "NAO")
+	seed("clica no link", "SPAM", "NAO")
+	seed("isto é spam mesmo", "SPAM", "SIM_SPAM")
 
 	comments, err := db.GetFalsePositiveComments(10)
 	if err != nil {
@@ -564,30 +463,6 @@ func TestCleanupOldAnomalies(t *testing.T) {
 	}
 }
 
-func TestValidExpected(t *testing.T) {
-	expected := []string{"NAO", "SIM_PERGUNTA", "SIM_PROSELITISMO", "SIM_ODIO", "SIM_SPAM", "SIM_GOLPE", "SIM_OUTRO"}
-	for _, v := range expected {
-		if !model.ValidExpected[v] {
-			t.Errorf("expected %q to be valid", v)
-		}
-	}
-	if model.ValidExpected["INVALID"] {
-		t.Error("expected INVALID to be invalid")
-	}
-}
-
-func TestValidCategory(t *testing.T) {
-	categories := []string{"OK", "PERGUNTA", "PROSELITISMO", "ODIO", "SPAM", "GOLPE", "OUTRO"}
-	for _, v := range categories {
-		if !model.ValidCategory[v] {
-			t.Errorf("expected %q to be valid", v)
-		}
-	}
-	if model.ValidCategory["INVALID"] {
-		t.Error("expected INVALID to be invalid")
-	}
-}
-
 func TestDatabaseFilePath(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(dir)
@@ -686,8 +561,11 @@ func TestDeleteSessionData(t *testing.T) {
 	if err := db.AddUserMessageDedup("live1", "user1", "User One", "hello"); err != nil {
 		t.Fatalf("add message: %v", err)
 	}
-	if _, err := db.AddFeedback("example", "SPAM", "SIM_SPAM"); err != nil {
-		t.Fatalf("add feedback: %v", err)
+	if _, err := db.conn.Exec(
+		"INSERT INTO false_positives (comment, category, expected) VALUES (?, ?, ?)",
+		"example", "SPAM", "SIM_SPAM",
+	); err != nil {
+		t.Fatalf("insert feedback: %v", err)
 	}
 	if _, err := db.AddPinnedComment("live1", "user1", "User One", "fixado live1", "pin-1", nil, time.Now()); err != nil {
 		t.Fatalf("add pinned live1: %v", err)

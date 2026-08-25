@@ -4,8 +4,8 @@ package view
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -75,6 +75,10 @@ type Config struct {
 	BinDir     string
 	WebDir     string
 	AgentProxy http.Handler
+	// AgentBaseURL is the base URL of the Python agent HTTP API, used by the
+	// transient compatibility layer that forwards /api/ask-ai, /api/probe-llm
+	// and /api/feedback to the agent (docs/plano-unificacao-ia.md, fase 2).
+	AgentBaseURL string
 }
 
 // New creates a new HTTP server (View).
@@ -118,13 +122,12 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/feedback", s.handleFeedback)
 	mux.HandleFunc("/api/readiness", s.handleReadiness)
 	mux.HandleFunc("/api/probe-llm", s.handleProbeLLM)
-	mux.HandleFunc("/api/worker/register", s.handleWorkerRegister)
+	mux.HandleFunc("/api/ask-ai", s.handleAskAI)
 	mux.HandleFunc("/api/gifts", s.handleGifts)
 	mux.HandleFunc("/api/available-gifts", s.handleAvailableGifts)
 	mux.HandleFunc("/api/target-gift-history", s.handleTargetGiftHistory)
 	mux.HandleFunc("/api/target-gift-history/answer", s.handleTargetGiftHistoryAnswer)
 	mux.HandleFunc("/api/pinned-comments", s.handlePinnedComments)
-	mux.HandleFunc("/api/ask-ai", s.handleAskAI)
 	mux.HandleFunc("/api/ranking", s.handleRanking)
 	mux.HandleFunc("/api/report", s.handleReport)
 	mux.HandleFunc("/api/profile", s.handleProfile)
@@ -328,14 +331,10 @@ func (s *HTTPServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Start LLM worker in background.
+	// Warmup moderation in background.
 	go func() {
 		ctx := context.Background()
-		llmReady, err := s.controller.ProbeReady(ctx)
-		if err != nil {
-			log.Printf("[View] LLM worker warmup error: %v", err)
-		}
-		if err := s.controller.WarmupModeration(ctx, llmReady, false); err != nil {
+		if err := s.controller.WarmupModeration(ctx, false); err != nil {
 			log.Printf("[View] Warmup warning: %v", err)
 		}
 	}()
@@ -363,78 +362,86 @@ func (s *HTTPServer) handleClearHistory(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *HTTPServer) handleFeedback(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Comment  string `json:"comment"`
-		Category string `json:"category"`
-		Expected string `json:"expected"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
-		return
-	}
-
-	_, err := s.controller.AddFeedback(body.Comment, body.Category, body.Expected)
-	if err != nil {
-		statusCode := http.StatusInternalServerError
-		switch err.Error() {
-		case "comment is required", "invalid category", "invalid expected":
-			statusCode = http.StatusBadRequest
-		}
-		writeError(w, statusCode, err.Error())
-		return
-	}
-
-	// Clear cache and re-warmup.
-	s.controller.ClearModerationCache()
-	ctx := r.Context()
-	llmReady, _ := s.controller.ProbeReady(ctx)
-	s.controller.WarmupModeration(ctx, llmReady, true)
-
-	writeJSON(w, map[string]bool{"success": true})
-}
-
-func (s *HTTPServer) handleReadiness(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	llmReady, _ := s.controller.ProbeReady(ctx)
-	modStatus := s.controller.GetStartupStatus()
-
-	writeJSON(w, map[string]interface{}{
-		"ready":        modStatus.Ready && llmReady,
-		"llmReady":     llmReady,
-		"moderation":   modStatus,
-		"aiConfigured": true,
-	})
-}
-
-func (s *HTTPServer) handleProbeLLM(w http.ResponseWriter, r *http.Request) {
-	ready, err := s.controller.ProbeReady(r.Context())
-	if err != nil {
-		writeJSON(w, map[string]interface{}{
-			"llmActive": false,
-			"error":     err.Error(),
-		})
-		return
-	}
-	writeJSON(w, map[string]interface{}{"llmActive": ready})
-}
-
-func (s *HTTPServer) handleWorkerRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
-	var body struct {
-		Host string `json:"host"`
-		Port int    `json:"port"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
+	// Compat layer (fase 2): forward to the Python agent, which now owns
+	// feedback.db. On success, refresh the moderation allowlist so identical
+	// messages stop being flagged immediately.
+	status, body, err := s.forwardToAgent(r, "/feedback")
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "agent unavailable")
 		return
 	}
+	if status == http.StatusOK {
+		s.controller.ClearModerationCache()
+		s.controller.WarmupModeration(r.Context(), true)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	w.Write(body)
+}
 
-	s.controller.RegisterWorker(body.Host, body.Port)
-	writeJSON(w, map[string]bool{"success": true})
+func (s *HTTPServer) handleProbeLLM(w http.ResponseWriter, r *http.Request) {
+	status, body, err := s.forwardToAgent(r, "/probe-llm")
+	if err != nil {
+		// Fallback determinístico: sem agente, IA inativa.
+		writeJSON(w, map[string]interface{}{"llmActive": false})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	w.Write(body)
+}
+
+func (s *HTTPServer) handleAskAI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	status, body, err := s.forwardToAgent(r, "/ask-ai")
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "agent unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	w.Write(body)
+}
+
+// forwardToAgent relays the request to the Python agent HTTP API, preserving
+// method and body. Returns the response status and raw body.
+func (s *HTTPServer) forwardToAgent(r *http.Request, path string) (int, []byte, error) {
+	if s.cfg.AgentBaseURL == "" {
+		return 0, nil, fmt.Errorf("agent base URL not configured")
+	}
+	target := strings.TrimRight(s.cfg.AgentBaseURL, "/") + path
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, target, r.Body)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, nil, err
+	}
+	return resp.StatusCode, body, nil
+}
+
+func (s *HTTPServer) handleReadiness(w http.ResponseWriter, r *http.Request) {
+	modStatus := s.controller.GetStartupStatus()
+
+	writeJSON(w, map[string]interface{}{
+		"ready":      modStatus.Ready,
+		"moderation": modStatus,
+	})
 }
 
 func (s *HTTPServer) handleGifts(w http.ResponseWriter, r *http.Request) {
@@ -577,40 +584,6 @@ func (s *HTTPServer) handlePinnedComments(w http.ResponseWriter, r *http.Request
 		items = []model.PinnedComment{}
 	}
 	writeJSON(w, items)
-}
-
-func (s *HTTPServer) handleAskAI(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	var body struct {
-		Question string `json:"question"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
-		return
-	}
-	if body.Question == "" {
-		writeError(w, http.StatusBadRequest, "question is required")
-		return
-	}
-
-	ctx := r.Context()
-	response, err := s.controller.AskAI(ctx, body.Question)
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return
-		}
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("AI error: %v", err))
-		return
-	}
-
-	writeJSON(w, map[string]string{
-		"question": body.Question,
-		"answer":   response,
-	})
 }
 
 // handleRanking returns the engagement ranking for a live.

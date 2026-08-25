@@ -101,6 +101,11 @@ func (m *Manager) Stop() {
 	m.started = false
 }
 
+// BaseURL returns the base URL of the agent HTTP API.
+func (m *Manager) BaseURL() string {
+	return fmt.Sprintf("http://%s:%d", m.host, m.port)
+}
+
 // ProxyHandler returns an http.Handler that reverse-proxies /agent/* to the
 // agent HTTP API.
 func (m *Manager) ProxyHandler() http.Handler {

@@ -850,32 +850,16 @@
                 </div>
             </div>
             <div class="ai-question">
-                <label for="aiQuestion">Pergunta para IA:</label>
+                <label for="aiQuestion">Pergunte sobre a live ou peça um resumo:</label>
                 <div class="ai-question-row">
-                    <input type="text" id="aiQuestion" placeholder="Ex: Quem enviou mais presentes?" autocomplete="off">
-                    <button id="askAiBtn" type="button" class="small-btn">Enviar</button>
+                    <input type="text" id="aiQuestion" placeholder="Ex: ranking da live, perfil de @fulano" autocomplete="off">
+                    <button id="askAiBtn" type="button" class="small-btn">Perguntar</button>
+                    <button id="summarizeBtn" type="button" class="small-btn secondary-btn">Resumir live</button>
                     <button id="cancelAiBtn" type="button" class="small-btn secondary-btn" style="display: none;">Cancelar</button>
                 </div>
                 <div id="aiAnswerWrap" style="display: none;">
                     <div id="aiAnswer"></div>
                     <button id="clearAiBtn" type="button" class="small-btn secondary-btn">Limpar</button>
-                </div>
-            </div>
-        </section>
-        <section class="ai-card">
-            <div class="ai-card-head">
-                <span class="ai-card-title">Agente de IA</span>
-            </div>
-            <div class="ai-question">
-                <label for="agentQuestion">Comando para o copiloto:</label>
-                <div class="ai-question-row">
-                    <input type="text" id="agentQuestion" placeholder="Ex: ranking da live, perfil de @fulano" autocomplete="off">
-                    <button id="agentAskBtn" type="button" class="small-btn">Perguntar</button>
-                    <button id="agentSummarizeBtn" type="button" class="small-btn secondary-btn">Resumir live</button>
-                </div>
-                <div id="agentAnswerWrap" style="display: none;">
-                    <div id="agentAnswer"></div>
-                    <button id="clearAgentBtn" type="button" class="small-btn secondary-btn">Limpar</button>
                 </div>
             </div>
         </section>
@@ -942,8 +926,7 @@
                 #aiAnswerWrap {
                     margin-top: 0;
                 }
-                #aiAnswer,
-                #agentAnswer {
+                #aiAnswer {
                     padding: 14px 16px;
                     background: rgba(37, 244, 238, 0.06);
                     border: 1px solid var(--border);
@@ -1196,25 +1179,25 @@
     <script>
         let askAiController = null;
 
-        document.getElementById('askAiBtn').addEventListener('click', async () => {
-            const questionInput = document.getElementById('aiQuestion');
+        async function runAgentAsk(question) {
             const answerWrap = document.getElementById('aiAnswerWrap');
             const answerDiv = document.getElementById('aiAnswer');
             const clearBtn = document.getElementById('clearAiBtn');
-            const question = questionInput.value.trim();
-            if (!question) return;
+            const askBtn = document.getElementById('askAiBtn');
+            const summarizeBtn = document.getElementById('summarizeBtn');
+            const cancelBtn = document.getElementById('cancelAiBtn');
 
             answerWrap.style.display = 'block';
             clearBtn.style.display = 'none';
             answerDiv.textContent = 'Pensando...';
-            document.getElementById('askAiBtn').disabled = true;
-            const cancelBtn = document.getElementById('cancelAiBtn');
+            askBtn.disabled = true;
+            summarizeBtn.disabled = true;
             cancelBtn.style.display = 'inline-block';
 
             askAiController = new AbortController();
 
             try {
-                const resp = await fetch('/api/ask-ai', {
+                const resp = await fetch('/agent/ask', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ question }),
@@ -1224,19 +1207,60 @@
                 if (data.answer) {
                     answerDiv.textContent = data.answer;
                 } else if (data.error) {
-                    answerDiv.textContent = 'Erro: ' + data.error;
+                    answerDiv.textContent = resp.ok ? 'Erro: ' + data.error : 'Agente indisponível.';
+                } else {
+                    answerDiv.textContent = 'Sem resposta.';
                 }
             } catch (e) {
                 if (e.name === 'AbortError') {
                     answerDiv.textContent = 'Cancelado pelo usuário.';
                 } else {
-                    answerDiv.textContent = 'Erro ao conectar com o servidor.';
+                    answerDiv.textContent = 'Erro ao conectar com o agente (indisponível?).';
                 }
             } finally {
                 cancelBtn.style.display = 'none';
                 clearBtn.style.display = 'inline-block';
-                document.getElementById('askAiBtn').disabled = false;
+                askBtn.disabled = false;
+                summarizeBtn.disabled = false;
                 askAiController = null;
+            }
+        }
+
+        document.getElementById('askAiBtn').addEventListener('click', () => {
+            const q = document.getElementById('aiQuestion').value.trim();
+            if (!q) return;
+            runAgentAsk(q);
+        });
+
+        document.getElementById('summarizeBtn').addEventListener('click', async () => {
+            const answerWrap = document.getElementById('aiAnswerWrap');
+            const answerDiv = document.getElementById('aiAnswer');
+            const clearBtn = document.getElementById('clearAiBtn');
+            const askBtn = document.getElementById('askAiBtn');
+            const summarizeBtn = document.getElementById('summarizeBtn');
+
+            answerWrap.style.display = 'block';
+            clearBtn.style.display = 'none';
+            answerDiv.textContent = 'Resumindo...';
+            askBtn.disabled = true;
+            summarizeBtn.disabled = true;
+
+            try {
+                const resp = await fetch('/agent/summarize');
+                const data = await resp.json();
+                if (data.summary) {
+                    answerDiv.textContent = data.summary;
+                } else if (data.error) {
+                    answerDiv.textContent = 'Agente indisponível.';
+                } else {
+                    answerDiv.textContent = 'Sem resposta.';
+                }
+            } catch (e) {
+                answerDiv.textContent = 'Erro ao conectar com o agente (indisponível?).';
+            } finally {
+                clearBtn.style.display = 'inline-block';
+                askBtn.disabled = false;
+                summarizeBtn.disabled = false;
             }
         });
 
@@ -1255,92 +1279,6 @@
         document.getElementById('aiQuestion').addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 document.getElementById('askAiBtn').click();
-            }
-        });
-
-        async function agentAsk(question) {
-            const answerWrap = document.getElementById('agentAnswerWrap');
-            const answerDiv = document.getElementById('agentAnswer');
-            const clearBtn = document.getElementById('clearAgentBtn');
-            const askBtn = document.getElementById('agentAskBtn');
-            const summarizeBtn = document.getElementById('agentSummarizeBtn');
-
-            answerWrap.style.display = 'block';
-            clearBtn.style.display = 'none';
-            answerDiv.textContent = 'Pensando...';
-            askBtn.disabled = true;
-            summarizeBtn.disabled = true;
-
-            try {
-                const resp = await fetch('/agent/ask', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ question })
-                });
-                const data = await resp.json();
-                if (data.answer) {
-                    answerDiv.textContent = data.answer;
-                } else if (data.error) {
-                    answerDiv.textContent = resp.ok ? 'Erro: ' + data.error : 'Agente indisponível.';
-                } else {
-                    answerDiv.textContent = 'Sem resposta.';
-                }
-            } catch (e) {
-                answerDiv.textContent = 'Erro ao conectar com o agente (indisponível?).';
-            } finally {
-                clearBtn.style.display = 'inline-block';
-                askBtn.disabled = false;
-                summarizeBtn.disabled = false;
-            }
-        }
-
-        document.getElementById('agentAskBtn').addEventListener('click', () => {
-            const q = document.getElementById('agentQuestion').value.trim();
-            if (!q) return;
-            agentAsk(q);
-        });
-
-        document.getElementById('agentSummarizeBtn').addEventListener('click', async () => {
-            const answerWrap = document.getElementById('agentAnswerWrap');
-            const answerDiv = document.getElementById('agentAnswer');
-            const clearBtn = document.getElementById('clearAgentBtn');
-            const summarizeBtn = document.getElementById('agentSummarizeBtn');
-            const askBtn = document.getElementById('agentAskBtn');
-
-            answerWrap.style.display = 'block';
-            clearBtn.style.display = 'none';
-            answerDiv.textContent = 'Resumindo...';
-            summarizeBtn.disabled = true;
-            askBtn.disabled = true;
-
-            try {
-                const resp = await fetch('/agent/summarize');
-                const data = await resp.json();
-                if (data.summary) {
-                    answerDiv.textContent = data.summary;
-                } else if (data.error) {
-                    answerDiv.textContent = 'Agente indisponível.';
-                } else {
-                    answerDiv.textContent = 'Sem resposta.';
-                }
-            } catch (e) {
-                answerDiv.textContent = 'Erro ao conectar com o agente (indisponível?).';
-            } finally {
-                clearBtn.style.display = 'inline-block';
-                summarizeBtn.disabled = false;
-                askBtn.disabled = false;
-            }
-        });
-
-        document.getElementById('clearAgentBtn').addEventListener('click', () => {
-            document.getElementById('agentAnswer').textContent = '';
-            document.getElementById('agentAnswerWrap').style.display = 'none';
-            document.getElementById('clearAgentBtn').style.display = 'none';
-        });
-
-        document.getElementById('agentQuestion').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                document.getElementById('agentAskBtn').click();
             }
         });
     </script>

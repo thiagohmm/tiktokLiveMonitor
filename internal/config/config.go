@@ -60,6 +60,9 @@ var (
 
 // InitConfig loads or creates the model configuration file.
 func InitConfig(baseDir string) error {
+	if err := os.MkdirAll(baseDir, 0755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
 	configPath = filepath.Join(baseDir, configFileName)
 	modelConfig = ModelConfig{SelectedModel: defaultModelKey}
 
