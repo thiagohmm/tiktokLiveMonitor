@@ -2319,7 +2319,7 @@ function renderAdminLives(lives) {
             <td>${formatAdminTime(live.endedAt)}</td>
             <td>${formatAdminDuration(live.startedAt, live.endedAt)}</td>
             <td>${live.events ?? 0}</td>
-            <td><button class="small-btn" type="button" style="color: var(--pink); border-color: var(--pink);">Deletar</button></td>
+            <td><button class="small-btn" type="button" style="border-color: var(--pink);">Deletar</button></td>
         `;
         tr.querySelector('button').addEventListener('click', () => deleteAdminLive(live.name));
         adminLivesTableBody.appendChild(tr);
