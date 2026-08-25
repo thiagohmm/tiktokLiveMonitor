@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -51,6 +52,15 @@ func (m *Manager) Start() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.started {
+		return nil
+	}
+
+	// Reuse an agent that is already listening on the configured port (e.g. a
+	// previous instance still alive) instead of spawning a duplicate that would
+	// fail with "address already in use".
+	if m.agentHealthy() {
+		log.Printf("[Agent] Reutilizando agente Python já em execução na porta %d", m.port)
+		m.started = true
 		return nil
 	}
 
@@ -127,6 +137,18 @@ func findPython() (string, error) {
 		}
 	}
 	return "", fmt.Errorf("python3/python não localizado no PATH")
+}
+
+// agentHealthy reports whether an agent is already serving /health on the
+// configured host/port.
+func (m *Manager) agentHealthy() bool {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("http://%s:%d/health", m.host, m.port))
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
 // withEnv returns os.Environ() with the given keys overridden.
