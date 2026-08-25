@@ -951,3 +951,51 @@ func TestListLivesLimit(t *testing.T) {
 		t.Fatalf("expected 2 rows with limit, got %d", len(lives))
 	}
 }
+
+func TestDeleteLive(t *testing.T) {
+	db := openTestDB(t)
+
+	seed := func(table, liveName string) {
+		t.Helper()
+		var err error
+		switch table {
+		case "gifts":
+			_, err = db.conn.Exec(
+				"INSERT INTO gifts (live_name, uniqueId, nickname, gift_name) VALUES (?, ?, ?, ?)",
+				liveName, "u1", "User", "rose",
+			)
+		case "user_messages":
+			_, err = db.conn.Exec(
+				"INSERT INTO user_messages (live_name, uniqueId, username, message) VALUES (?, ?, ?, ?)",
+				liveName, "u1", "User", "oi",
+			)
+		}
+		if err != nil {
+			t.Fatalf("seed %s: %v", table, err)
+		}
+	}
+
+	seed("gifts", "liveA")
+	seed("user_messages", "liveA")
+	seed("gifts", "liveB")
+
+	deleted, err := db.DeleteLive("liveA")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if deleted != 2 {
+		t.Fatalf("expected 2 deleted rows, got %d", deleted)
+	}
+
+	lives, err := db.ListLives(10)
+	if err != nil {
+		t.Fatalf("list after delete: %v", err)
+	}
+	if len(lives) != 1 || lives[0].Name != "liveB" {
+		t.Fatalf("expected only liveB, got %#v", lives)
+	}
+
+	if _, err := db.DeleteLive("  "); err == nil {
+		t.Fatal("expected error for empty live name")
+	}
+}

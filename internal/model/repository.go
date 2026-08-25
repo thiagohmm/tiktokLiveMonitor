@@ -88,6 +88,9 @@ type RankingRepository interface {
 	TotalDistinctUsers() (int, error)
 	// ListLives returns derived lives grouped by live_name and day, most recent first.
 	ListLives(limit int) ([]Live, error)
+
+	// DeleteLive removes all stored rows for a live (across every table with live_name).
+	DeleteLive(liveName string) (int64, error)
 }
 
 // LiveStat is per-user aggregated data used to compute a ranking score.
