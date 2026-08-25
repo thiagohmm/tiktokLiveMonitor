@@ -691,3 +691,59 @@ func TestHandleAdminLivesEmptyDB(t *testing.T) {
 		t.Fatalf("expected empty lives list, got %#v", result.Lives)
 	}
 }
+
+func TestHandleAdminLivesDelete(t *testing.T) {
+	srv, repo, _, _ := setupTestServer(t)
+
+	if _, err := repo.AddGift("liveA", "u1", "User", "rose", 1, 0); err != nil {
+		t.Fatalf("seed gift: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/lives/delete?live=liveA", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAdminLivesDelete(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var result struct {
+		Deleted int64 `json:"deleted"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if result.Deleted != 1 {
+		t.Fatalf("expected 1 deleted, got %d", result.Deleted)
+	}
+
+	// live is gone
+	req2 := httptest.NewRequest(http.MethodGet, "/api/admin/lives", nil)
+	rec2 := httptest.NewRecorder()
+	srv.handleAdminLives(rec2, req2)
+	var lives struct {
+		Lives []model.Live `json:"lives"`
+	}
+	if err := json.Unmarshal(rec2.Body.Bytes(), &lives); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if len(lives.Lives) != 0 {
+		t.Fatalf("expected no lives after delete, got %#v", lives.Lives)
+	}
+
+	// missing live param → 400
+	req3 := httptest.NewRequest(http.MethodPost, "/api/admin/lives/delete", nil)
+	rec3 := httptest.NewRecorder()
+	srv.handleAdminLivesDelete(rec3, req3)
+	if rec3.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec3.Code)
+	}
+
+	// wrong method → 405
+	req4 := httptest.NewRequest(http.MethodGet, "/api/admin/lives/delete?live=liveA", nil)
+	rec4 := httptest.NewRecorder()
+	srv.handleAdminLivesDelete(rec4, req4)
+	if rec4.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", rec4.Code)
+	}
+}

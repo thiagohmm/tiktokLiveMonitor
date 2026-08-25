@@ -133,6 +133,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/profile", s.handleProfile)
 	mux.HandleFunc("/api/alert-config", s.handleAlertConfig)
 	mux.HandleFunc("/api/admin/lives", s.handleAdminLives)
+	mux.HandleFunc("/api/admin/lives/delete", s.handleAdminLivesDelete)
 
 	// Agent proxy: forward /agent/* to the Python agent HTTP API.
 	if s.cfg.AgentProxy != nil {
@@ -625,6 +626,25 @@ func (s *HTTPServer) handleAdminLives(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]interface{}{"lives": lives})
+}
+
+// handleAdminLivesDelete removes all stored data for a live.
+func (s *HTTPServer) handleAdminLivesDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	liveName := strings.TrimSpace(r.URL.Query().Get("live"))
+	if liveName == "" {
+		writeError(w, http.StatusBadRequest, "live is required")
+		return
+	}
+	deleted, err := s.controller.DeleteLive(liveName)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]interface{}{"deleted": deleted})
 }
 
 // handleReport generates an AI-assisted post-live report.
