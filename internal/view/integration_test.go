@@ -622,3 +622,72 @@ func TestServerStartPortEnv(t *testing.T) {
 		t.Logf("Start returned: %v (acceptable)", err)
 	}
 }
+
+func TestHandleAdminLives(t *testing.T) {
+	srv, repo, _, _ := setupTestServer(t)
+
+	if _, err := repo.AddGift("liveA", "u1", "User", "rose", 1, 0); err != nil {
+		t.Fatalf("seed gift: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/lives", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAdminLives(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var result struct {
+		Lives []model.Live `json:"lives"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if len(result.Lives) != 1 {
+		t.Fatalf("expected 1 live, got %d", len(result.Lives))
+	}
+	if result.Lives[0].Name != "liveA" {
+		t.Fatalf("unexpected live name: %q", result.Lives[0].Name)
+	}
+	if result.Lives[0].Day == "" {
+		t.Fatal("expected non-empty day")
+	}
+	if result.Lives[0].Events != 1 {
+		t.Fatalf("expected 1 event, got %d", result.Lives[0].Events)
+	}
+}
+
+func TestHandleAdminLivesMethodNotAllowed(t *testing.T) {
+	srv, _, _, _ := setupTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/lives", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAdminLives(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminLivesEmptyDB(t *testing.T) {
+	srv, _, _, _ := setupTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/lives", nil)
+	rec := httptest.NewRecorder()
+	srv.handleAdminLives(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var result struct {
+		Lives []model.Live `json:"lives"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	if result.Lives == nil || len(result.Lives) != 0 {
+		t.Fatalf("expected empty lives list, got %#v", result.Lives)
+	}
+}

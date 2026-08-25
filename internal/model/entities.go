@@ -170,3 +170,15 @@ type UserLiveSummary struct {
 	FirstSeen string `json:"firstSeen"`
 	LastSeen  string `json:"lastSeen"`
 }
+
+// Live is a derived view of one live on one day: activity interval and event count.
+// There is no dedicated lives/schedules table; it is aggregated from the tables
+// that carry live_name (user_messages, gifts, shares, anomaly_logs, pinned_comments,
+// target_gift_history).
+type Live struct {
+	Name      string `json:"name"`
+	Day       string `json:"day"`
+	StartedAt string `json:"startedAt"`
+	EndedAt   string `json:"endedAt"`
+	Events    int    `json:"events"`
+}

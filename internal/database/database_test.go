@@ -1,6 +1,7 @@
 package database
 
 import (
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -858,5 +859,95 @@ func TestAddPinnedCommentRequiresComment(t *testing.T) {
 	db := openTestDB(t)
 	if _, err := db.AddPinnedComment("live1", "user1", "User", "  ", "", nil, time.Now()); err == nil {
 		t.Fatal("expected error for empty comment")
+	}
+}
+
+func TestListLives(t *testing.T) {
+	db := openTestDB(t)
+
+	seed := func(table, liveName, ts string) {
+		t.Helper()
+		switch table {
+		case "user_messages":
+			_, err := db.conn.Exec(
+				"INSERT INTO user_messages (live_name, uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?, ?)",
+				liveName, "u1", "User", "oi", ts,
+			)
+			if err != nil {
+				t.Fatalf("seed user_messages: %v", err)
+			}
+		case "gifts":
+			_, err := db.conn.Exec(
+				"INSERT INTO gifts (live_name, uniqueId, nickname, gift_name, timestamp) VALUES (?, ?, ?, ?, ?)",
+				liveName, "u1", "User", "rose", ts,
+			)
+			if err != nil {
+				t.Fatalf("seed gifts: %v", err)
+			}
+		}
+	}
+
+	// Same live on two different days, plus a second live on the later day.
+	seed("gifts", "liveA", "2026-08-20 19:00:00")
+	seed("user_messages", "liveA", "2026-08-20 19:05:00")
+	seed("gifts", "liveA", "2026-08-20 21:30:00")
+	seed("gifts", "liveA", "2026-08-24 20:00:00")
+	seed("gifts", "liveB", "2026-08-24 18:00:00")
+
+	lives, err := db.ListLives(10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(lives) != 3 {
+		t.Fatalf("expected 3 live-day rows, got %d: %#v", len(lives), lives)
+	}
+
+	// Most recent day first.
+	if lives[0].Name != "liveA" || lives[0].Day != "2026-08-24" {
+		t.Fatalf("unexpected first row: %#v", lives[0])
+	}
+	if lives[0].Events != 1 {
+		t.Fatalf("expected 1 event, got %d", lives[0].Events)
+	}
+	if lives[0].StartedAt == "" || lives[0].EndedAt == "" {
+		t.Fatalf("expected timestamps, got %#v", lives[0])
+	}
+
+	// liveA on 2026-08-20 aggregates messages and gifts.
+	if lives[2].Name != "liveA" || lives[2].Day != "2026-08-20" {
+		t.Fatalf("unexpected last row: %#v", lives[2])
+	}
+	if lives[2].Events != 3 {
+		t.Fatalf("expected 3 events, got %d", lives[2].Events)
+	}
+}
+
+func TestListLivesEmpty(t *testing.T) {
+	db := openTestDB(t)
+	lives, err := db.ListLives(10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if lives == nil || len(lives) != 0 {
+		t.Fatalf("expected empty slice, got %#v", lives)
+	}
+}
+
+func TestListLivesLimit(t *testing.T) {
+	db := openTestDB(t)
+	for i := 0; i < 5; i++ {
+		if _, err := db.conn.Exec(
+			"INSERT INTO gifts (live_name, uniqueId, nickname, gift_name) VALUES (?, ?, ?, ?)",
+			fmt.Sprintf("live%d", i), "u1", "User", "rose",
+		); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	lives, err := db.ListLives(2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(lives) != 2 {
+		t.Fatalf("expected 2 rows with limit, got %d", len(lives))
 	}
 }
