@@ -1111,6 +1111,70 @@ func (db *DB) LiveFirstSeen(liveName string) (string, error) {
 	return at.UTC().Format(time.RFC3339), nil
 }
 
+// ListLives returns derived lives grouped by live_name and day, most recent first.
+func (db *DB) ListLives(limit int) ([]model.Live, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if limit <= 0 {
+		limit = 100
+	}
+
+	query := `
+		SELECT live_name, day, MIN(ts) AS started_at, MAX(ts) AS ended_at, COUNT(*) AS events
+		FROM (
+			SELECT live_name, DATE(timestamp) AS day, timestamp AS ts FROM user_messages
+			UNION ALL
+			SELECT live_name, DATE(timestamp), timestamp FROM gifts
+			UNION ALL
+			SELECT live_name, DATE(timestamp), timestamp FROM shares
+			UNION ALL
+			SELECT live_name, DATE(timestamp), timestamp FROM anomaly_logs
+			UNION ALL
+			SELECT live_name, DATE(timestamp), timestamp FROM pinned_comments
+			UNION ALL
+			SELECT live_name, DATE(received_at), received_at FROM target_gift_history
+		)
+		WHERE live_name != ''
+		GROUP BY live_name, day
+		ORDER BY day DESC, started_at DESC
+		LIMIT ?`
+
+	rows, err := db.conn.Query(query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query lives: %w", err)
+	}
+	defer rows.Close()
+
+	results := []model.Live{}
+	for rows.Next() {
+		var (
+			l   model.Live
+			s, e sql.NullString
+		)
+		if err := rows.Scan(&l.Name, &l.Day, &s, &e, &l.Events); err != nil {
+			return nil, fmt.Errorf("scan live: %w", err)
+		}
+		if s.Valid {
+			l.StartedAt = normalizeTime(s.String)
+		}
+		if e.Valid {
+			l.EndedAt = normalizeTime(e.String)
+		}
+		results = append(results, l)
+	}
+	return results, rows.Err()
+}
+
+// normalizeTime converts a SQLite timestamp string to RFC3339 UTC when possible.
+func normalizeTime(raw string) string {
+	at, err := parseSQLiteTime(raw)
+	if err != nil {
+		return raw
+	}
+	return at.UTC().Format(time.RFC3339)
+}
+
 // LiveStatsByUser returns per-user aggregated stats for a live.
 func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
 	db.mu.Lock()
