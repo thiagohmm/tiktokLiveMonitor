@@ -331,44 +331,6 @@
             color: var(--pink);
             font-size: 0.85em;
         }
-        .alert-config-box {
-            display: grid;
-            gap: 12px;
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 16px 18px;
-        }
-        .alert-field {
-            display: flex;
-            flex-direction: column;
-            gap: 5px;
-            font-size: 0.8em;
-            color: var(--text-muted);
-            font-weight: 600;
-        }
-        .alert-field input {
-            padding: 8px 12px;
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--text);
-            font-size: 0.9em;
-        }
-        .alert-field input:focus {
-            outline: none;
-            border-color: var(--cyan);
-        }
-        .alert-config-status {
-            font-size: 0.8em;
-            min-height: 1.2em;
-        }
-        .alert-config-status.ok {
-            color: var(--cyan);
-        }
-        .alert-config-status.err {
-            color: var(--pink);
-        }
         .suggestion-card {
             background: rgba(255, 255, 255, 0.04);
             border: 1px solid var(--border);
@@ -1142,35 +1104,6 @@
             <div id="reportSummary" class="report-summary"></div>
             <div id="reportText" class="report-text"></div>
             <div id="reportError" class="report-error" style="display: none;"></div>
-        </div>
-
-        <!-- Alertas Externos (Discord / Telegram / WhatsApp) -->
-        <div class="section-title">
-            <div class="section-title-label">
-                <h3>🔔 Alertas Externos</h3>
-            </div>
-            <div class="section-title-actions">
-                <button id="saveAlertConfigBtn" class="small-btn" type="button">Salvar</button>
-            </div>
-        </div>
-        <div class="alert-config-box">
-            <label class="alert-field">
-                <span>Discord Webhook</span>
-                <input type="text" id="alertDiscord" placeholder="https://discord.com/api/webhooks/..." autocomplete="off">
-            </label>
-            <label class="alert-field">
-                <span>Telegram Chat ID</span>
-                <input type="text" id="alertTelegramChat" placeholder="ID do chat Telegram" autocomplete="off">
-            </label>
-            <label class="alert-field">
-                <span>Telegram Bot Token</span>
-                <input type="password" id="alertTelegramToken" placeholder="Token do bot Telegram" autocomplete="off">
-            </label>
-            <label class="alert-field">
-                <span>WhatsApp URL (360dialog)</span>
-                <input type="text" id="alertWhatsapp" placeholder="https://api.360dialog.io/..." autocomplete="off">
-            </label>
-            <div id="alertConfigStatus" class="alert-config-status"></div>
         </div>
 
         <!-- Administração: lives e horários -->

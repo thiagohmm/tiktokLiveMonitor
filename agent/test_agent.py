@@ -11,12 +11,14 @@ from . import feedback as feedback_mod
 from . import moderate
 from . import router
 from . import rules
+from . import suggest
 from . import summary
 from . import vectors
 from .buffer import MessageBuffer
 from .context import ContextBuilder
 from .history import AskAIService, ConversationStore
 from .llm_worker import LlamaWorker
+from .suggest import SuggestionService
 
 
 class MessageBufferTest(unittest.TestCase):
@@ -395,6 +397,47 @@ class ModerateEndpointTest(unittest.TestCase):
         client = TestClient(api.app)
         resp = client.post("/moderate", json={"comment": ""})
         self.assertEqual(400, resp.status_code)
+
+
+class SuggestionServiceTest(unittest.TestCase):
+    def test_suggest_returns_reply(self):
+        model = _FakeModel(reply="O valor está na bio!")
+        svc = SuggestionService(model)
+        result = asyncio.run(svc.suggest("quanto custa?", nickname="Ana"))
+        self.assertIsNotNone(result)
+        self.assertEqual("O valor está na bio!", result["suggested"])
+        self.assertTrue(result["reason"])
+        self.assertEqual(1, len(model.calls))
+
+    def test_suggest_nao_returns_none(self):
+        svc = SuggestionService(_FakeModel(reply="NAO"))
+        self.assertIsNone(asyncio.run(svc.suggest("blabla")))
+
+    def test_build_user_prompt_includes_question(self):
+        text = suggest.build_user_prompt("quanto custa?", "Ana")
+        self.assertIn("quanto custa?", text)
+        self.assertIn("Ana", text)
+
+
+class SuggestEndpointTest(unittest.TestCase):
+    def test_suggest_ok(self):
+        api.app.state.suggester = SuggestionService(_FakeModel(reply="Resposta curta."))
+        client = TestClient(api.app)
+        resp = client.post("/suggest", json={"question": "quanto custa?", "nickname": "Ana"})
+        self.assertEqual(200, resp.status_code)
+        self.assertEqual("Resposta curta.", resp.json()["suggested"])
+
+    def test_suggest_empty_question(self):
+        api.app.state.suggester = SuggestionService(_FakeModel())
+        client = TestClient(api.app)
+        resp = client.post("/suggest", json={"question": ""})
+        self.assertEqual(400, resp.status_code)
+
+    def test_suggest_unavailable(self):
+        api.app.state.suggester = None
+        client = TestClient(api.app)
+        resp = client.post("/suggest", json={"question": "quanto custa?"})
+        self.assertEqual(503, resp.status_code)
 
 
 if __name__ == "__main__":

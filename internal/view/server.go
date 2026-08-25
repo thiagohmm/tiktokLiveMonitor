@@ -18,7 +18,6 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/thiagohmm/tiktok-live-monitor/internal/alerts"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/config"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
@@ -132,7 +131,6 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/ranking", s.handleRanking)
 	mux.HandleFunc("/api/report", s.handleReport)
 	mux.HandleFunc("/api/profile", s.handleProfile)
-	mux.HandleFunc("/api/alert-config", s.handleAlertConfig)
 	mux.HandleFunc("/api/admin/lives", s.handleAdminLives)
 	mux.HandleFunc("/api/admin/lives/delete", s.handleAdminLivesDelete)
 
@@ -704,24 +702,6 @@ func (s *HTTPServer) handleProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, profile)
-}
-
-// handleAlertConfig gets or updates the alert webhook configuration.
-func (s *HTTPServer) handleAlertConfig(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, s.controller.GetAlertConfig())
-	case http.MethodPost:
-		var body alerts.Config
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid body")
-			return
-		}
-		s.controller.SetAlertConfig(body)
-		writeJSON(w, map[string]string{"success": "ok"})
-	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
 }
 
 // --- Helpers ---
