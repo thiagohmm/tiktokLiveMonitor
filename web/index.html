@@ -563,6 +563,28 @@
             border: 2px solid transparent;
             background-clip: padding-box;
         }
+        .delete-live-modal {
+            width: min(440px, 100%);
+        }
+        .delete-live-message {
+            margin: 0 0 20px;
+            font-size: 0.95em;
+            line-height: 1.5;
+            color: var(--text-muted);
+        }
+        .delete-live-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+        .delete-btn {
+            background: linear-gradient(135deg, var(--pink), #ff7ab0);
+            border-color: transparent;
+            font-weight: 600;
+        }
+        .delete-btn:hover {
+            opacity: 0.9;
+        }
         .modal-list {
             display: flex;
             flex-direction: column;
@@ -1199,6 +1221,23 @@
                     <button id="profileModalCloseBtn" class="modal-close" type="button" aria-label="Fechar">×</button>
                 </div>
                 <div id="profileModalBody" class="modal-body"></div>
+            </div>
+        </div>
+
+        <!-- Confirmação de exclusão de live -->
+        <div id="deleteLiveModalBackdrop" class="modal-backdrop" aria-hidden="true">
+            <div class="modal delete-live-modal" role="dialog" aria-modal="true" aria-labelledby="deleteLiveModalTitle">
+                <div class="modal-header">
+                    <h2 id="deleteLiveModalTitle">🗑️ Deletar live</h2>
+                    <button id="deleteLiveModalCloseBtn" class="modal-close" type="button" aria-label="Fechar">×</button>
+                </div>
+                <div class="modal-body">
+                    <p id="deleteLiveModalMessage" class="delete-live-message"></p>
+                    <div class="delete-live-actions">
+                        <button id="deleteLiveModalCancelBtn" class="small-btn secondary-btn" type="button">Cancelar</button>
+                        <button id="deleteLiveModalConfirmBtn" class="small-btn delete-btn" type="button">Deletar</button>
+                    </div>
+                </div>
             </div>
         </div>
 

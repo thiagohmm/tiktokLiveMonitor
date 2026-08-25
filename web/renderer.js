@@ -45,6 +45,12 @@ const historyModalCloseBtn = document.getElementById('historyModalCloseBtn');
 const profileModalBackdrop = document.getElementById('profileModalBackdrop');
 const profileModalBody = document.getElementById('profileModalBody');
 const profileModalCloseBtn = document.getElementById('profileModalCloseBtn');
+const deleteLiveModalBackdrop = document.getElementById('deleteLiveModalBackdrop');
+const deleteLiveModalMessage = document.getElementById('deleteLiveModalMessage');
+const deleteLiveModalCancelBtn = document.getElementById('deleteLiveModalCancelBtn');
+const deleteLiveModalConfirmBtn = document.getElementById('deleteLiveModalConfirmBtn');
+const deleteLiveModalCloseBtn = document.getElementById('deleteLiveModalCloseBtn');
+let deleteLivePending = null;
 const giftSearchInput = document.getElementById('giftSearchInput');
 const allGiftsSection = document.getElementById('allGiftsSection');
 const allGiftsTableContainer = document.getElementById('allGiftsTableContainer');
@@ -2357,22 +2363,58 @@ if (adminLivesRefreshBtn) {
     });
 }
 
-async function deleteAdminLive(liveName) {
+function openDeleteLiveModal(liveName) {
+    deleteLivePending = liveName;
+    deleteLiveModalMessage.textContent = `Deletar TODOS os dados da live "${liveName}" do banco? Essa ação não pode ser desfeita.`;
+    deleteLiveModalBackdrop.classList.add('is-open');
+    deleteLiveModalBackdrop.setAttribute('aria-hidden', 'false');
+}
+
+function closeDeleteLiveModal() {
+    deleteLivePending = null;
+    deleteLiveModalBackdrop.classList.remove('is-open');
+    deleteLiveModalBackdrop.setAttribute('aria-hidden', 'true');
+}
+
+function deleteAdminLive(liveName) {
     if (!liveName || liveName === '—') return;
-    const ok = confirm(`Deletar TODOS os dados da live "${liveName}" do banco?`);
-    if (!ok) return;
-    try {
-        const response = await fetch('/api/admin/lives/delete?live=' + encodeURIComponent(liveName), { method: 'POST' });
-        if (!response.ok) {
-            throw new Error(`status ${response.status}`);
+    openDeleteLiveModal(liveName);
+}
+
+if (deleteLiveModalConfirmBtn) {
+    deleteLiveModalConfirmBtn.addEventListener('click', async () => {
+        const liveName = deleteLivePending;
+        if (!liveName) return;
+        closeDeleteLiveModal();
+        try {
+            const response = await fetch('/api/admin/lives/delete?live=' + encodeURIComponent(liveName), { method: 'POST' });
+            if (!response.ok) {
+                throw new Error(`status ${response.status}`);
+            }
+            const data = await response.json();
+            alert(`Live "${liveName}" deletada (${data.deleted ?? 0} registros removidos).`);
+            loadAdminLives();
+        } catch (error) {
+            console.error('[Frontend] Falha ao deletar live:', error);
+            alert('Não foi possível deletar a live.');
         }
-        const data = await response.json();
-        alert(`Live "${liveName}" deletada (${data.deleted ?? 0} registros removidos).`);
-        loadAdminLives();
-    } catch (error) {
-        console.error('[Frontend] Falha ao deletar live:', error);
-        alert('Não foi possível deletar a live.');
-    }
+    });
+}
+
+if (deleteLiveModalCancelBtn) {
+    deleteLiveModalCancelBtn.addEventListener('click', closeDeleteLiveModal);
+}
+
+if (deleteLiveModalCloseBtn) {
+    deleteLiveModalCloseBtn.addEventListener('click', closeDeleteLiveModal);
+}
+
+if (deleteLiveModalBackdrop) {
+    deleteLiveModalBackdrop.addEventListener('click', event => {
+        if (event.target === deleteLiveModalBackdrop) {
+            closeDeleteLiveModal();
+        }
+    });
 }
 
 if (adminLivesMoreBtn) {
