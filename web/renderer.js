@@ -2391,8 +2391,6 @@ if (deleteLiveModalConfirmBtn) {
             if (!response.ok) {
                 throw new Error(`status ${response.status}`);
             }
-            const data = await response.json();
-            alert(`Live "${liveName}" deletada (${data.deleted ?? 0} registros removidos).`);
             loadAdminLives();
         } catch (error) {
             console.error('[Frontend] Falha ao deletar live:', error);
