@@ -1,16 +1,14 @@
-// Package suggestions inspects incoming live messages/questions and prepares
-// short, non-auto-published reply suggestions via the local LLM.
+// Package suggestions inspects incoming live messages/questions and identifies
+// questions worth answering. Reply generation moved to the Python agent
+// (docs/plano-unificacao-ia.md, fase 2).
 package suggestions
 
 import (
 	"context"
-	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/thiagohmm/tiktok-live-monitor/internal/ai"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 )
 
@@ -19,20 +17,19 @@ const EventSuggested = "suggested-response"
 
 // Candidate identifies a message worth answering.
 type Candidate struct {
-	UniqueID   string
-	Nickname   string
-	Message    string
-	Timestamp  string
-	LiveName   string
-	Suggested  string
-	Reason     string
-	Answered   bool
+	UniqueID  string
+	Nickname  string
+	Message   string
+	Timestamp string
+	LiveName  string
+	Suggested string
+	Reason    string
+	Answered  bool
 }
 
-// Engine inspects messages and produces reply suggestions.
+// Engine inspects messages and identifies questions worth answering.
 type Engine struct {
 	mu   sync.Mutex
-	ai   *ai.Manager
 	repo model.Repository
 	// QuestionLengthMin/Max filter out too-short or too-long questions.
 	QuestionLengthMin int
@@ -42,12 +39,11 @@ type Engine struct {
 }
 
 // New creates a suggestions Engine.
-func New(aiManager *ai.Manager, repo model.Repository) *Engine {
+func New(repo model.Repository) *Engine {
 	return &Engine{
-		ai:              aiManager,
-		repo:            repo,
+		repo:              repo,
 		QuestionLengthMin: 8,
-		HistoryWindow:   40,
+		HistoryWindow:     40,
 	}
 }
 
@@ -68,27 +64,8 @@ func (e *Engine) Suggest(ctx context.Context, liveName, uniqueID, nickname, mess
 		return candidate, false
 	}
 
-	if e.ai == nil {
-		return candidate, false
-	}
-
-	prompt := buildPrompt(candidate.Message)
-	resp, err := e.ai.Complete(ctx, ai.CompletionRequest{
-		SystemContent: "Você é um moderador de transmissões ao vivo (TikTok Live). Responda de forma curta, cordial e útil as perguntas do público.",
-		UserContent:   prompt,
-		MaxTokens:     120,
-	})
-	if err != nil {
-		log.Printf("[Suggestions] AI suggestion error: %v", err)
-		return candidate, false
-	}
-	suggested := strings.TrimSpace(resp)
-	if suggested == "" || strings.EqualFold(suggested, "NAO") {
-		return candidate, false
-	}
-	candidate.Suggested = suggested
-	candidate.Reason = "pergunta identificada como relevante"
-	return candidate, true
+	// Reply generation moved to the Python agent; only report the candidate.
+	return candidate, false
 }
 
 // looksLikeQuestion reports whether a message is plausibly a question.
@@ -107,6 +84,3 @@ func looksLikeQuestion(msg string) bool {
 }
 
 // buildPrompt assembles the LLM prompt for a question.
-func buildPrompt(question string) string {
-	return fmt.Sprintf("Pergunta recebida ao vivo: %q\n\nDê uma resposta curta (até 2 frases), cordial e direta, em português (br).", question)
-}

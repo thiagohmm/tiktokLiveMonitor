@@ -10,14 +10,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/thiagohmm/tiktok-live-monitor/internal/ai"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/alerts"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/moderation"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/ranking"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/report"
-	"github.com/thiagohmm/tiktok-live-monitor/internal/service"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/suggestions"
 )
 
@@ -29,7 +27,6 @@ type MessageCache interface {
 
 // AppController orchestrates all application services.
 type AppController struct {
-	aiManager     *ai.Manager
 	modEngine     *moderation.Engine
 	monitor       *monitor.Monitor
 	repo          model.Repository
@@ -45,23 +42,20 @@ type AppController struct {
 
 // NewAppController creates a new application controller.
 func NewAppController(
-	aiManager *ai.Manager,
 	modEngine *moderation.Engine,
 	mon *monitor.Monitor,
 	repo model.Repository,
 ) *AppController {
 	mon.SetRepo(repo)
 	c := &AppController{
-		aiManager:     aiManager,
 		modEngine:     modEngine,
 		monitor:       mon,
 		repo:          repo,
-		reportGen:     report.New(aiManager, repo),
-		suggEngine:    suggestions.New(aiManager, repo),
+		reportGen:     report.New(repo),
+		suggEngine:    suggestions.New(repo),
 		alertNotifier: alerts.New(alerts.FromEnvironment()),
 		ranker:        ranking.New(ranking.DefaultWeights),
 	}
-	mon.LLMCorrelate = c.correlateGiftQuestionLLM
 	c.registerFeatureHandlers()
 	return c
 }
@@ -86,10 +80,8 @@ func (c *AppController) registerFeatureHandlers() {
 			go c.handleHighValueGiftEvent(data)
 		}
 	})
-	// Suggestions run on every chat message. Suggest() calls the LLM
-	// synchronously (local CPU inference can take seconds to minutes); running
-	// it in the event pipeline blocked chat, flagged-message and correlation
-	// events from reaching the UI. Run in a goroutine instead.
+	// Suggestions run on every chat message in a goroutine so the event
+	// pipeline (chat, flagged-message and correlation events) is not blocked.
 	mon.OnEvent(func(eventType string, data monitor.EventData) {
 		if eventType != monitor.EventChatMessage {
 			return
@@ -242,13 +234,6 @@ func coalesceStr(values ...string) string {
 	return ""
 }
 
-func (c *AppController) correlateGiftQuestionLLM(ctx context.Context, gift monitor.GiftPayload, candidates []monitor.QuestionEntry) *monitor.QuestionEntry {
-	if c.aiManager == nil {
-		return nil
-	}
-	return service.CorrelateGiftQuestion(ctx, c.aiManager, gift, candidates)
-}
-
 // --- Monitor Actions ---
 
 // StartMonitoring starts monitoring the given username.
@@ -312,19 +297,9 @@ func (c *AppController) ClearModerationCache() {
 }
 
 // WarmupModeration warms up the moderation pipeline.
-func (c *AppController) WarmupModeration(ctx context.Context, touchLLM, force bool) error {
-	_, err := c.modEngine.WarmupLearning(ctx, touchLLM, force)
+func (c *AppController) WarmupModeration(ctx context.Context, force bool) error {
+	_, err := c.modEngine.WarmupLearning(ctx, force)
 	return err
-}
-
-// ProbeReady checks if the LLM worker is healthy.
-func (c *AppController) ProbeReady(ctx context.Context) (bool, error) {
-	return c.aiManager.ProbeReady(ctx)
-}
-
-// RegisterWorker registers a remote AI worker.
-func (c *AppController) RegisterWorker(host string, port int) {
-	c.aiManager.RegisterWorker(host, port)
 }
 
 // --- Repository Actions ---
@@ -342,11 +317,6 @@ func (c *AppController) DeleteModeration(id int64) (int64, error) {
 // ClearHistory clears all moderation history.
 func (c *AppController) ClearHistory() (int64, error) {
 	return c.repo.ClearHistory()
-}
-
-// AddFeedback adds user feedback for moderation training.
-func (c *AppController) AddFeedback(comment, category, expected string) (int64, error) {
-	return c.repo.AddFeedback(comment, category, expected)
 }
 
 // GetRecentGifts returns recent gifts for the current live.
@@ -445,17 +415,6 @@ func (c *AppController) RecordPinnedComment(data monitor.EventData) (int64, erro
 func (c *AppController) GetRecentPinnedComments(limit int) ([]model.PinnedComment, error) {
 	state := c.monitor.GetState()
 	return c.repo.GetRecentPinnedComments(state.Username, limit)
-}
-
-// --- AI Actions ---
-
-// AskAI asks the AI a question with live context.
-func (c *AppController) AskAI(ctx context.Context, question string) (string, error) {
-	var cached []model.UserMessage
-	if c.msgCache != nil {
-		cached = c.msgCache.Snapshot()
-	}
-	return service.AskAI(ctx, question, c.aiManager, c.repo, cached)
 }
 
 // --- Ranking, Report & Profile Actions ---
@@ -653,9 +612,8 @@ func (c *AppController) SetMessageCache(mc MessageCache) {
 	c.msgCache = mc
 }
 
-// Stop shuts down the AI manager and the bridge child process.
+// Stop shuts down the bridge child process.
 func (c *AppController) Stop() {
-	c.aiManager.Stop()
 	if c.monitor != nil {
 		c.monitor.Close()
 	}

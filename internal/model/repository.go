@@ -9,22 +9,16 @@ import (
 // ErrCommentRequired is returned when comment is empty.
 var ErrCommentRequired = errors.New("comment is required")
 
-// ErrInvalidCategory is returned when category is invalid.
-var ErrInvalidCategory = errors.New("invalid category")
-
-// ErrInvalidExpected is returned when expected value is invalid.
-var ErrInvalidExpected = errors.New("invalid expected")
-
 // ErrInvalidID is returned when ID is invalid.
 var ErrInvalidID = errors.New("invalid id")
 
 // ErrUniqueIDRequired is returned when uniqueId is required but empty.
 var ErrUniqueIDRequired = errors.New("uniqueId is required")
 
-// FeedbackRepository handles persistence of user feedback.
+// FeedbackRepository handles the read-only consumption of the user feedback
+// persisted by the Python agent (feedback.db is owned by the agent since the
+// AI unification — see docs/plano-unificacao-ia.md).
 type FeedbackRepository interface {
-	AddFeedback(comment, category, expected string) (int64, error)
-	GetRecentFeedbacks(limit int) ([]Feedback, error)
 	GetFalsePositiveComments(limit int) ([]string, error)
 }
 

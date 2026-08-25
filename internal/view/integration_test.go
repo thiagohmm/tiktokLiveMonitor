@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/thiagohmm/tiktok-live-monitor/internal/ai"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
@@ -30,19 +29,16 @@ func setupTestServer(t *testing.T) (*HTTPServer, model.Repository, string, *moni
 	}
 	t.Cleanup(func() { repo.Close() })
 
-	aiMgr := ai.NewManager(filepath.Join(dir, "models"), filepath.Join(dir, "bin"))
-	t.Cleanup(func() { aiMgr.Stop() })
-
 	mon, err := monitor.New()
 	if err != nil {
 		t.Skipf("skip test (TikTok API unavailable): %v", err)
 	}
 
-	modEngine := moderation.NewEngine(aiMgr, repo)
+	modEngine := moderation.NewEngine(repo)
 
 	os.MkdirAll(filepath.Join(dir, "web"), 0755)
 
-	ctrl := controller.NewAppController(aiMgr, modEngine, mon, repo)
+	ctrl := controller.NewAppController(modEngine, mon, repo)
 
 	srv := New(Config{
 		Host:      "127.0.0.1",
@@ -225,7 +221,21 @@ func TestHandleClearHistory(t *testing.T) {
 func TestHandleFeedback(t *testing.T) {
 	srv, _, _, _ := setupTestServer(t)
 
-	t.Run("valid feedback", func(t *testing.T) {
+	var received map[string]interface{}
+	mockAgent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/feedback" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&received)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true}`))
+	}))
+	defer mockAgent.Close()
+	srv.cfg.AgentBaseURL = mockAgent.URL
+
+	t.Run("forwards to agent", func(t *testing.T) {
 		body := map[string]string{
 			"comment":  "spam msg",
 			"category": "SPAM",
@@ -236,37 +246,31 @@ func TestHandleFeedback(t *testing.T) {
 		rec := httptest.NewRecorder()
 		srv.handleFeedback(rec, req)
 		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d", rec.Code)
+			t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		if received == nil || received["comment"] != "spam msg" {
+			t.Fatalf("expected forwarded comment, got %v", received)
 		}
 	})
 
-	t.Run("invalid category", func(t *testing.T) {
-		body := map[string]string{
-			"comment":  "msg",
-			"category": "INVALID",
-			"expected": "SIM_SPAM",
+	t.Run("wrong method", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/feedback", nil)
+		rec := httptest.NewRecorder()
+		srv.handleFeedback(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("expected 405, got %d", rec.Code)
 		}
+	})
+
+	t.Run("agent unavailable", func(t *testing.T) {
+		srv.cfg.AgentBaseURL = "http://127.0.0.1:1"
+		body := map[string]string{"comment": "x", "category": "SPAM", "expected": "SIM_SPAM"}
 		data, _ := json.Marshal(body)
 		req := httptest.NewRequest(http.MethodPost, "/api/feedback", bytes.NewReader(data))
 		rec := httptest.NewRecorder()
 		srv.handleFeedback(rec, req)
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("expected 400, got %d", rec.Code)
-		}
-	})
-
-	t.Run("empty comment", func(t *testing.T) {
-		body := map[string]string{
-			"comment":  "",
-			"category": "SPAM",
-			"expected": "SIM_SPAM",
-		}
-		data, _ := json.Marshal(body)
-		req := httptest.NewRequest(http.MethodPost, "/api/feedback", bytes.NewReader(data))
-		rec := httptest.NewRecorder()
-		srv.handleFeedback(rec, req)
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("expected 400, got %d", rec.Code)
+		if rec.Code != http.StatusBadGateway {
+			t.Fatalf("expected 502, got %d", rec.Code)
 		}
 	})
 }
@@ -584,30 +588,6 @@ func TestHandleTargetGiftHistoryPending(t *testing.T) {
 	}
 }
 
-func TestHandleAskAI(t *testing.T) {
-	srv, _, _, _ := setupTestServer(t)
-
-	t.Run("missing question", func(t *testing.T) {
-		body := map[string]string{}
-		data, _ := json.Marshal(body)
-		req := httptest.NewRequest(http.MethodPost, "/api/ask-ai", bytes.NewReader(data))
-		rec := httptest.NewRecorder()
-		srv.handleAskAI(rec, req)
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("expected 400, got %d", rec.Code)
-		}
-	})
-
-	t.Run("wrong method", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/ask-ai", nil)
-		rec := httptest.NewRecorder()
-		srv.handleAskAI(rec, req)
-		if rec.Code != http.StatusMethodNotAllowed {
-			t.Fatalf("expected 405, got %d", rec.Code)
-		}
-	})
-}
-
 func TestHandleReadiness(t *testing.T) {
 	srv, _, _, _ := setupTestServer(t)
 
@@ -626,45 +606,6 @@ func TestHandleReadiness(t *testing.T) {
 	if _, ok := result["ready"]; !ok {
 		t.Error("expected 'ready' field")
 	}
-}
-
-func TestHandleProbeLLM(t *testing.T) {
-	srv, _, _, _ := setupTestServer(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/probe-llm", nil)
-	rec := httptest.NewRecorder()
-	srv.handleProbeLLM(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-}
-
-func TestHandleWorkerRegister(t *testing.T) {
-	srv, _, _, _ := setupTestServer(t)
-
-	t.Run("valid register", func(t *testing.T) {
-		body := map[string]interface{}{
-			"host": "192.168.1.100",
-			"port": 8080,
-		}
-		data, _ := json.Marshal(body)
-		req := httptest.NewRequest(http.MethodPost, "/api/worker/register", bytes.NewReader(data))
-		rec := httptest.NewRecorder()
-		srv.handleWorkerRegister(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d", rec.Code)
-		}
-	})
-
-	t.Run("wrong method", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/worker/register", nil)
-		rec := httptest.NewRecorder()
-		srv.handleWorkerRegister(rec, req)
-		if rec.Code != http.StatusMethodNotAllowed {
-			t.Fatalf("expected 405, got %d", rec.Code)
-		}
-	})
 }
 
 func TestServerStartPortEnv(t *testing.T) {

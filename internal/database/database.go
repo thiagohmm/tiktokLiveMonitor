@@ -4,6 +4,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -22,6 +23,9 @@ type DB struct {
 
 // Open creates or opens the SQLite database at the given directory.
 func Open(dir string) (*DB, error) {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("create db dir: %w", err)
+	}
 	dbPath := filepath.Join(dir, "feedback.db")
 	conn, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL")
 	if err != nil {
@@ -162,47 +166,6 @@ func (db *DB) ensureColumn(table, column, decl string) error {
 
 // --- FeedbackRepository ---
 
-// AddFeedback stores a user-provided classification example.
-func (db *DB) AddFeedback(comment, category, expected string) (int64, error) {
-	comment = strings.TrimSpace(comment)
-	category = strings.TrimSpace(strings.ToUpper(category))
-	expected = strings.TrimSpace(strings.ToUpper(expected))
-
-	if comment == "" {
-		return 0, model.ErrCommentRequired
-	}
-	if !model.ValidCategory[category] {
-		return 0, model.ErrInvalidCategory
-	}
-	if !model.ValidExpected[expected] {
-		return 0, model.ErrInvalidExpected
-	}
-
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	var existing int64
-	err := db.conn.QueryRow(
-		"SELECT id FROM false_positives WHERE comment = ? AND expected = ? LIMIT 1",
-		comment, expected,
-	).Scan(&existing)
-	if err == nil {
-		return 0, nil
-	}
-	if err != sql.ErrNoRows {
-		return 0, fmt.Errorf("lookup feedback: %w", err)
-	}
-
-	result, err := db.conn.Exec(
-		"INSERT INTO false_positives (comment, category, expected) VALUES (?, ?, ?)",
-		comment, category, expected,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("insert feedback: %w", err)
-	}
-	return result.LastInsertId()
-}
-
 // GetFalsePositiveComments returns distinct comments marked as false positives
 // (expected = 'NAO'), newest first.
 func (db *DB) GetFalsePositiveComments(limit int) ([]string, error) {
@@ -228,34 +191,6 @@ func (db *DB) GetFalsePositiveComments(limit int) ([]string, error) {
 			return nil, fmt.Errorf("scan false positive comment: %w", err)
 		}
 		out = append(out, c)
-	}
-	return out, rows.Err()
-}
-
-// GetRecentFeedbacks returns the latest N feedback entries.
-func (db *DB) GetRecentFeedbacks(limit int) ([]model.Feedback, error) {
-	if limit < 1 || limit > 200 {
-		limit = 10
-	}
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	rows, err := db.conn.Query(
-		"SELECT comment, category, expected FROM false_positives ORDER BY timestamp DESC LIMIT ?",
-		limit,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query feedbacks: %w", err)
-	}
-	defer rows.Close()
-
-	var out []model.Feedback
-	for rows.Next() {
-		var f model.Feedback
-		if err := rows.Scan(&f.Comment, &f.Category, &f.Expected); err != nil {
-			return nil, fmt.Errorf("scan feedback: %w", err)
-		}
-		out = append(out, f)
 	}
 	return out, rows.Err()
 }

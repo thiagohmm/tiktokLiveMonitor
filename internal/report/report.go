@@ -1,71 +1,26 @@
-// Package report generates AI-assisted post-live summaries using the local LLM.
+// Package report generates post-live summaries from deterministic live data.
 package report
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"strings"
 	"time"
 
-	"github.com/thiagohmm/tiktok-live-monitor/internal/ai"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 )
 
 // Generator produces post-live reports.
 type Generator struct {
-	ai   *ai.Manager
 	repo model.Repository
 }
 
 // New creates a report Generator.
-func New(aiManager *ai.Manager, repo model.Repository) *Generator {
-	return &Generator{ai: aiManager, repo: repo}
+func New(repo model.Repository) *Generator {
+	return &Generator{repo: repo}
 }
 
 // Prompt builds the prompt that asks the LLM to summarise a live.
-func Prompt(r model.LiveReport) string {
-	var b strings.Builder
-	b.WriteString("Você é um assistente de análise de transmissões ao vivo (TikTok Live).\n")
-	b.WriteString(fmt.Sprintf("Nome da live/streamer: %s\n", r.LiveName))
-	b.WriteString(fmt.Sprintf("Duração: %d minutos\n", r.DurationMinutes))
-	b.WriteString(fmt.Sprintf("Período: de %s até %s\n", r.StartedAt, r.EndedAt))
-	b.WriteString(fmt.Sprintf("Total de mensagens: %d\n", r.MessageCount))
-	b.WriteString(fmt.Sprintf("Participantes únicos: %d\n", r.ParticipantCount))
-	b.WriteString(fmt.Sprintf("Total de presentes: %d (valor estimado %d)\n", r.GiftCount, r.GiftTotal))
-
-	if len(r.TopSupporters) > 0 {
-		b.WriteString("\nPrincipais apoiadores:\n")
-		for _, s := range r.TopSupporters {
-			b.WriteString(fmt.Sprintf("- %s (%s): presentes=%d, mensagens=%d, perguntas=%d, score=%.1f\n",
-				s.Nickname, s.UniqueID, s.GiftCount, s.MessageCount, s.QuestionCount, s.Score))
-		}
-	}
-
-	if len(r.FrequentQuestions) > 0 {
-		b.WriteString("\nPerguntas frequentes:\n")
-		for _, q := range r.FrequentQuestions {
-			b.WriteString("- " + q + "\n")
-		}
-	}
-
-	if len(r.ModerationIssues) > 0 {
-		b.WriteString("\nProblemas de moderação (por categoria):\n")
-		for _, i := range r.ModerationIssues {
-			b.WriteString(fmt.Sprintf("- %s: %d ocorrência(s)\n", i.Category, i.Count))
-		}
-	}
-
-	b.WriteString("\n")
-	b.WriteString("Produza um relatório conciso em português (br) com até 8 linhas:\n")
-	b.WriteString("1) Resumo geral do clima da live.\n")
-	b.WriteString("2) Destaques de participação e apoio.\n")
-	b.WriteString("3) Perguntas mais recorrentes.\n")
-	b.WriteString("4) Observações de moderação e recomendações.\n")
-	b.WriteString("Responda apenas com o texto do relatório, sem marcações.\n")
-	return b.String()
-}
-
 // Generate builds a report for the given live name.
 func (g *Generator) Generate(ctx context.Context, liveName string) (model.LiveReport, error) {
 	var report model.LiveReport
@@ -106,20 +61,6 @@ func (g *Generator) Generate(ctx context.Context, liveName string) (model.LiveRe
 	report.ModerationIssues = issues
 
 	report.DurationMinutes = durationMinutes(report.StartedAt, report.EndedAt)
-
-	if g.ai != nil {
-		p := Prompt(report)
-		resp, err := g.ai.Complete(ctx, ai.CompletionRequest{
-			SystemContent: "Você é um analista de transmissões ao vivo.",
-			UserContent:   p,
-			MaxTokens:     512,
-		})
-		if err != nil {
-			log.Printf("[Report] AI report error: %v", err)
-		} else {
-			report.Summary = strings.TrimSpace(resp)
-		}
-	}
 
 	return report, nil
 }

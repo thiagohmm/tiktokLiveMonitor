@@ -13,22 +13,6 @@ type AnomalyLog struct {
 	Category  string `json:"category"`
 }
 
-// Feedback represents a user-provided classification example.
-type Feedback struct {
-	Comment  string `json:"comment"`
-	Category string `json:"category"`
-	Expected string `json:"expected"`
-}
-
-// FalsePositive represents a recorded false positive entry.
-type FalsePositive struct {
-	ID        int    `json:"id"`
-	Comment   string `json:"comment"`
-	Category  string `json:"category"`
-	Expected  string `json:"expected"`
-	Timestamp string `json:"timestamp"`
-}
-
 // UserMessage represents a user message from a live stream.
 type UserMessage struct {
 	ID        int64  `json:"id"`
@@ -79,28 +63,6 @@ type PinnedComment struct {
 	PinID      string `json:"pinId,omitempty"`
 	IsFollower *bool  `json:"isFollower,omitempty"`
 	Timestamp  string `json:"timestamp"`
-}
-
-// ValidExpected values for feedback.
-var ValidExpected = map[string]bool{
-	"NAO":              true,
-	"SIM_PERGUNTA":     true,
-	"SIM_PROSELITISMO": true,
-	"SIM_ODIO":         true,
-	"SIM_SPAM":         true,
-	"SIM_GOLPE":        true,
-	"SIM_OUTRO":        true,
-}
-
-// ValidCategory values for feedback.
-var ValidCategory = map[string]bool{
-	"OK":           true,
-	"PERGUNTA":     true,
-	"PROSELITISMO": true,
-	"ODIO":         true,
-	"SPAM":         true,
-	"GOLPE":        true,
-	"OUTRO":        true,
 }
 
 // Risk level constants used across ranking, alerts and profiles.
@@ -208,5 +170,3 @@ type UserLiveSummary struct {
 	FirstSeen string `json:"firstSeen"`
 	LastSeen  string `json:"lastSeen"`
 }
-
-// ValidExpected values for feedback.
