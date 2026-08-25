@@ -50,7 +50,10 @@ const allGiftsSection = document.getElementById('allGiftsSection');
 const allGiftsTableContainer = document.getElementById('allGiftsTableContainer');
 
 // --- New feature elements ---
-const rankingTableBody = document.getElementById('rankingTableBody');
+const adminLivesTableBody = document.getElementById('adminLivesTableBody');
+const adminLivesRefreshBtn = document.getElementById('adminLivesRefreshBtn');
+const adminLivesMoreBtn = document.getElementById('adminLivesMoreBtn');
+let adminLivesLimit = 100;
 const refreshRankingBtn = document.getElementById('refreshRankingBtn');
 const suggestionsContainer = document.getElementById('suggestionsContainer');
 const generateReportBtn = document.getElementById('generateReportBtn');
@@ -2278,6 +2281,87 @@ async function addTargetGift() {
 
 addTargetGiftBtn.addEventListener('click', addTargetGift);
 
+// --- Administração: lives e horários ---
+
+function formatAdminTime(value) {
+    if (!value) return '—';
+    const date = new Date(value);
+    if (isNaN(date.getTime())) return value;
+    return date.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function formatAdminDuration(startedAt, endedAt) {
+    const start = new Date(startedAt).getTime();
+    const end = new Date(endedAt).getTime();
+    if (isNaN(start) || isNaN(end) || end < start) return '—';
+    const minutes = Math.round((end - start) / 60000);
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    if (hours === 0) return `${rest}min`;
+    return `${hours}h ${rest}min`;
+}
+
+function renderAdminLives(lives) {
+    if (!adminLivesTableBody) return;
+    adminLivesTableBody.innerHTML = '';
+    if (!lives || lives.length === 0) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td colspan="6" style="text-align:center; opacity:0.6;">Nenhuma live registrada</td>';
+        adminLivesTableBody.appendChild(tr);
+        return;
+    }
+    lives.forEach(live => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td>${escapeHtml(live.name || '—')}</td>
+            <td>${escapeHtml(live.day || '—')}</td>
+            <td>${formatAdminTime(live.startedAt)}</td>
+            <td>${formatAdminTime(live.endedAt)}</td>
+            <td>${formatAdminDuration(live.startedAt, live.endedAt)}</td>
+            <td>${live.events ?? 0}</td>
+        `;
+        adminLivesTableBody.appendChild(tr);
+    });
+}
+
+async function loadAdminLives() {
+    if (!adminLivesTableBody) return;
+    try {
+        const response = await fetch(`/api/admin/lives?limit=${adminLivesLimit}`);
+        if (!response.ok) {
+            throw new Error(`status ${response.status}`);
+        }
+        const data = await response.json();
+        const lives = data.lives || [];
+        renderAdminLives(lives);
+        if (adminLivesMoreBtn) {
+            adminLivesMoreBtn.style.display = lives.length >= adminLivesLimit ? 'inline-block' : 'none';
+        }
+    } catch (error) {
+        console.error('[Frontend] Falha ao carregar lives da administração:', error);
+        if (adminLivesTableBody) {
+            adminLivesTableBody.innerHTML = '';
+            const tr = document.createElement('tr');
+            tr.innerHTML = '<td colspan="6" style="text-align:center; opacity:0.6;">Não foi possível carregar as lives</td>';
+            adminLivesTableBody.appendChild(tr);
+        }
+    }
+}
+
+if (adminLivesRefreshBtn) {
+    adminLivesRefreshBtn.addEventListener('click', () => {
+        adminLivesLimit = 100;
+        loadAdminLives();
+    });
+}
+
+if (adminLivesMoreBtn) {
+    adminLivesMoreBtn.addEventListener('click', () => {
+        adminLivesLimit += 100;
+        loadAdminLives();
+    });
+}
+
 async function bootstrap() {
     renderTargetGifts();
     applyInfractionsSectionTitle(false);
@@ -2297,6 +2381,7 @@ async function bootstrap() {
 
     await loadInitialState();
     setupEventStream();
+    loadAdminLives();
 }
 
 void bootstrap();
