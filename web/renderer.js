@@ -2306,7 +2306,7 @@ function renderAdminLives(lives) {
     adminLivesTableBody.innerHTML = '';
     if (!lives || lives.length === 0) {
         const tr = document.createElement('tr');
-        tr.innerHTML = '<td colspan="6" style="text-align:center; opacity:0.6;">Nenhuma live registrada</td>';
+        tr.innerHTML = '<td colspan="7" style="text-align:center; opacity:0.6;">Nenhuma live registrada</td>';
         adminLivesTableBody.appendChild(tr);
         return;
     }
@@ -2319,7 +2319,9 @@ function renderAdminLives(lives) {
             <td>${formatAdminTime(live.endedAt)}</td>
             <td>${formatAdminDuration(live.startedAt, live.endedAt)}</td>
             <td>${live.events ?? 0}</td>
+            <td><button class="small-btn" type="button" style="border-color: var(--pink);">Deletar</button></td>
         `;
+        tr.querySelector('button').addEventListener('click', () => deleteAdminLive(live.name));
         adminLivesTableBody.appendChild(tr);
     });
 }
@@ -2342,7 +2344,7 @@ async function loadAdminLives() {
         if (adminLivesTableBody) {
             adminLivesTableBody.innerHTML = '';
             const tr = document.createElement('tr');
-            tr.innerHTML = '<td colspan="6" style="text-align:center; opacity:0.6;">Não foi possível carregar as lives</td>';
+            tr.innerHTML = '<td colspan="7" style="text-align:center; opacity:0.6;">Não foi possível carregar as lives</td>';
             adminLivesTableBody.appendChild(tr);
         }
     }
@@ -2353,6 +2355,24 @@ if (adminLivesRefreshBtn) {
         adminLivesLimit = 100;
         loadAdminLives();
     });
+}
+
+async function deleteAdminLive(liveName) {
+    if (!liveName || liveName === '—') return;
+    const ok = confirm(`Deletar TODOS os dados da live "${liveName}" do banco?`);
+    if (!ok) return;
+    try {
+        const response = await fetch('/api/admin/lives/delete?live=' + encodeURIComponent(liveName), { method: 'POST' });
+        if (!response.ok) {
+            throw new Error(`status ${response.status}`);
+        }
+        const data = await response.json();
+        alert(`Live "${liveName}" deletada (${data.deleted ?? 0} registros removidos).`);
+        loadAdminLives();
+    } catch (error) {
+        console.error('[Frontend] Falha ao deletar live:', error);
+        alert('Não foi possível deletar a live.');
+    }
 }
 
 if (adminLivesMoreBtn) {

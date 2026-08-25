@@ -119,8 +119,17 @@ COUNT(*) AS events FROM (todas as tabelas com live_name) GROUP BY live_name`
 - [x] Estados vazio e de erro tratados sem quebrar a UI.
 - [x] Testes de backend passando.
 
+## Fase 7 — Exclusão de lives (acréscimo)
+
+- [x] **7.1** `DeleteLive(liveName)` na interface `RankingRepository` + implementação em `internal/database` (DELETE nas 6 tabelas com `live_name`, retorna total de linhas removidas).
+- [x] **7.2** `DeleteLive` no controller + rota `POST /api/admin/lives/delete?live=...` (400 sem `live`, 405 em método inválido, 500 em erro).
+- [x] **7.3** Front: botão "Deletar" por linha (coluna "Ações"), com `confirm()` e recarga da lista após sucesso.
+- [x] **7.4** Testes: `TestDeleteLive` (database) e `TestHandleAdminLivesDelete` (integração, incl. 400/405) — todos passando.
+
+---
+
 ## Fora de escopo (por enquanto)
 
-- Edição/criação/exclusão de lives e horários (read-only nesta fase).
+- Edição/criação de lives e horários (exclusão já implementada na Fase 7).
 - Autenticação da aba de administração.
 - Filtros avançados (busca por nome, intervalo de datas) — podem vir em fase futura.

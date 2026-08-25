@@ -1166,6 +1166,31 @@ func (db *DB) ListLives(limit int) ([]model.Live, error) {
 	return results, rows.Err()
 }
 
+// DeleteLive removes all rows for a live from every table that stores live_name.
+// It returns the total number of rows deleted.
+func (db *DB) DeleteLive(liveName string) (int64, error) {
+	if strings.TrimSpace(liveName) == "" {
+		return 0, fmt.Errorf("live name is required")
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tables := []string{"user_messages", "gifts", "shares", "anomaly_logs", "pinned_comments", "target_gift_history"}
+	total := int64(0)
+	for _, table := range tables {
+		res, err := db.conn.Exec(fmt.Sprintf("DELETE FROM %s WHERE live_name = ?", table), liveName)
+		if err != nil {
+			return total, fmt.Errorf("delete from %s: %w", table, err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, fmt.Errorf("rows affected in %s: %w", table, err)
+		}
+		total += n
+	}
+	return total, nil
+}
+
 // normalizeTime converts a SQLite timestamp string to RFC3339 UTC when possible.
 func normalizeTime(raw string) string {
 	at, err := parseSQLiteTime(raw)
