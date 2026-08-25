@@ -60,6 +60,7 @@ func main() {
 		log.Printf("[Agent] Falha ao iniciar agente Python: %v", err)
 	}
 	defer agentMgr.Stop()
+	ctrl.SetAgentBaseURL(agentMgr.BaseURL())
 
 	// View layer: HTTP server
 	port := 3001
