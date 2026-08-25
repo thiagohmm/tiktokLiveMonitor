@@ -67,12 +67,6 @@ const reportWrap = document.getElementById('reportWrap');
 const reportSummary = document.getElementById('reportSummary');
 const reportText = document.getElementById('reportText');
 const reportError = document.getElementById('reportError');
-const saveAlertConfigBtn = document.getElementById('saveAlertConfigBtn');
-const alertDiscord = document.getElementById('alertDiscord');
-const alertTelegramChat = document.getElementById('alertTelegramChat');
-const alertTelegramToken = document.getElementById('alertTelegramToken');
-const alertWhatsapp = document.getElementById('alertWhatsapp');
-const alertConfigStatus = document.getElementById('alertConfigStatus');
 
 let chart;
 let messageCount = 0;
@@ -857,9 +851,6 @@ if (refreshRankingBtn) {
 }
 if (generateReportBtn) {
     generateReportBtn.addEventListener('click', () => loadReport());
-}
-if (saveAlertConfigBtn) {
-    saveAlertConfigBtn.addEventListener('click', () => saveAlertConfig());
 }
 
 historyModalCloseBtn.addEventListener('click', closeHistoryModal);
@@ -1715,8 +1706,7 @@ async function loadInitialState() {
             ]);
         }
 
-        // Carrega config de alertas e ranking mesmo desconectado.
-        loadAlertConfig();
+        // Carrega ranking mesmo desconectado.
         loadRanking();
     } catch (error) {
         setStatus('Servidor indisponível', 'error');
@@ -2009,48 +1999,6 @@ function escapeHtml(value) {
         .replace(/&/g, '&')
         .replace(/</g, '<')
         .replace(/>/g, '>');
-}
-
-// --- Alertas Externos ---
-async function loadAlertConfig() {
-    try {
-        const response = await fetch('/api/alert-config');
-        const config = await response.json();
-        if (config.discordWebhook) alertDiscord.value = config.discordWebhook;
-        if (config.telegramChatId) alertTelegramChat.value = config.telegramChatId;
-        if (config.telegramToken) alertTelegramToken.value = config.telegramToken;
-        if (config.whatsappUrl) alertWhatsapp.value = config.whatsappUrl;
-    } catch (error) {
-        console.error('[Frontend] Falha ao carregar config de alertas:', error);
-    }
-}
-
-async function saveAlertConfig() {
-    const payload = {
-        discordWebhook: alertDiscord.value.trim(),
-        telegramChatId: alertTelegramChat.value.trim(),
-        telegramToken: alertTelegramToken.value.trim(),
-        whatsappUrl: alertWhatsapp.value.trim()
-    };
-    alertConfigStatus.textContent = '';
-    alertConfigStatus.className = 'alert-config-status';
-    try {
-        const response = await fetch('/api/alert-config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        if (response.ok) {
-            alertConfigStatus.textContent = 'Configuração salva.';
-            alertConfigStatus.className = 'alert-config-status ok';
-        } else {
-            throw new Error('Falha no servidor');
-        }
-    } catch (error) {
-        alertConfigStatus.textContent = 'Falha ao salvar configuração.';
-        alertConfigStatus.className = 'alert-config-status err';
-        console.error('[Frontend] Falha ao salvar config de alertas:', error);
-    }
 }
 
 function updateAllGiftsVisibility() {

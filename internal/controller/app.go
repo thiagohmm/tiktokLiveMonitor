@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/thiagohmm/tiktok-live-monitor/internal/alerts"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/ranking"
@@ -29,10 +28,9 @@ type AppController struct {
 	monitor       *monitor.Monitor
 	repo          model.Repository
 	msgCache      MessageCache
-	reportGen     *report.Generator
-	suggEngine    *suggestions.Engine
-	alertNotifier *alerts.Notifier
-	ranker        *ranking.Ranker
+	reportGen  *report.Generator
+	suggEngine *suggestions.Engine
+	ranker     *ranking.Ranker
 	monCtx        context.Context
 	monCancel     context.CancelFunc
 	monCancelMu   sync.Mutex
@@ -47,38 +45,30 @@ func NewAppController(
 ) *AppController {
 	mon.SetRepo(repo)
 	c := &AppController{
-		monitor:       mon,
-		repo:          repo,
-		reportGen:     report.New(repo),
-		suggEngine:    suggestions.New(repo),
-		alertNotifier: alerts.New(alerts.FromEnvironment()),
-		ranker:        ranking.New(ranking.DefaultWeights),
-		flagSeen:      make(map[string]struct{}),
+		monitor:    mon,
+		repo:       repo,
+		reportGen:  report.New(repo),
+		suggEngine: suggestions.New(repo),
+		ranker:     ranking.New(ranking.DefaultWeights),
+		flagSeen:   make(map[string]struct{}),
 	}
 	c.registerFeatureHandlers()
 	return c
 }
 
-// registerFeatureHandlers wires the alerts, suggestions and ranking features
-// to the monitor event stream.
+// SetAgentBaseURL configures the Python agent URL used to generate reply suggestions.
+func (c *AppController) SetAgentBaseURL(baseURL string) {
+	if c.suggEngine != nil {
+		c.suggEngine.SetAgentBaseURL(baseURL)
+	}
+}
+
+// registerFeatureHandlers wires suggestions to the monitor event stream.
 func (c *AppController) registerFeatureHandlers() {
 	mon := c.monitor
 	if mon == nil {
 		return
 	}
-	// Handlers run synchronously in the bridge reader goroutine (see
-	// Monitor.emit): a blocking handler stalls the WHOLE event pipeline, so
-	// every handler here must be async.
-	mon.OnEvent(func(eventType string, data monitor.EventData) {
-		switch eventType {
-		case monitor.EventFlaggedMessage:
-			go c.handleAnomalyEvent(data) // Send() does blocking HTTP calls
-		case monitor.EventConnectionStatus:
-			go c.handleConnectionEvent(data)
-		case monitor.EventAnyGift:
-			go c.handleHighValueGiftEvent(data)
-		}
-	})
 	// Suggestions run on every chat message in a goroutine so the event
 	// pipeline (chat, flagged-message and correlation events) is not blocked.
 	mon.OnEvent(func(eventType string, data monitor.EventData) {
@@ -86,73 +76,6 @@ func (c *AppController) registerFeatureHandlers() {
 			return
 		}
 		go c.handleSuggestionEvent(data)
-	})
-}
-
-func (c *AppController) handleAnomalyEvent(data monitor.EventData) {
-	if !c.alertNotifier.Enabled() {
-		return
-	}
-	nickname := eventString(data, "nickname")
-	uniqueID := eventString(data, "uniqueId", "userId")
-	comment := eventString(data, "comment")
-	reason := eventString(data, "reason")
-	category := eventString(data, "category")
-	state := c.monitor.GetState()
-	c.alertNotifier.Send(c.monCtx, model.AlertEvent{
-		Type:      "anomaly",
-		Title:     "Comportamento detectado: " + category,
-		Message:   fmt.Sprintf("%s (%s): %s — %s", nickname, uniqueID, comment, reason),
-		Severity:  model.AlertSeverityWarning,
-		UniqueID:  uniqueID,
-		Nickname:  nickname,
-		LiveName:  state.Username,
-		Timestamp: time.Now().Format(time.RFC3339),
-	})
-}
-
-func (c *AppController) handleConnectionEvent(data monitor.EventData) {
-	if !c.alertNotifier.Enabled() {
-		return
-	}
-	connected, _ := data["connected"].(bool)
-	status := eventString(data, "status")
-	if connected {
-		return
-	}
-	state := c.monitor.GetState()
-	c.alertNotifier.Send(c.monCtx, model.AlertEvent{
-		Type:      "disconnected",
-		Title:     "Live desconectada",
-		Message:   fmt.Sprintf("A transmissão foi desconectada. Status: %s", status),
-		Severity:  model.AlertSeverityError,
-		LiveName:  state.Username,
-		Timestamp: time.Now().Format(time.RFC3339),
-	})
-}
-
-func (c *AppController) handleHighValueGiftEvent(data monitor.EventData) {
-	if !c.alertNotifier.Enabled() {
-		return
-	}
-	value := eventInt(data, "value", 0)
-	if value <= 0 {
-		return
-	}
-	nickname := eventString(data, "nickname")
-	uniqueID := eventString(data, "uniqueId", "userId")
-	giftName := resolveGiftName(data)
-	state := c.monitor.GetState()
-	c.alertNotifier.Send(c.monCtx, model.AlertEvent{
-		Type:  "high-value-gift",
-		Title: fmt.Sprintf("Presente de alto valor (%d)", value),
-		Message: fmt.Sprintf("%s (%s) enviou %s",
-			coalesceStr(nickname, uniqueID, "desconhecido"), uniqueID, giftName),
-		Severity:  model.AlertSeverityInfo,
-		UniqueID:  uniqueID,
-		Nickname:  nickname,
-		LiveName:  state.Username,
-		Timestamp: time.Now().Format(time.RFC3339),
 	})
 }
 
@@ -176,7 +99,7 @@ func (c *AppController) handleSuggestionEvent(data monitor.EventData) {
 		"uniqueId":  cand.UniqueID,
 		"nickname":  cand.Nickname,
 		"question":  cand.Message,
-		"response":  cand.Suggested,
+		"suggested": cand.Suggested,
 		"reason":    cand.Reason,
 		"timestamp": cand.Timestamp,
 	})
@@ -185,15 +108,6 @@ func (c *AppController) handleSuggestionEvent(data monitor.EventData) {
 // handleModerationEvent was removed: message moderation (rules + RAG + LLM)
 // now lives entirely in the Python agent, which reports flags back through
 // POST /api/moderation/flag → ReportExternalFlag.
-
-func coalesceStr(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
-}
 
 // --- Monitor Actions ---
 
@@ -248,8 +162,8 @@ func (c *AppController) FetchAvailableGifts() ([]string, error) {
 // --- Moderation Actions ---
 
 // ReportExternalFlag ingests a moderation flag from the Python agent and
-// surfaces it through the existing flagged-message pipeline (alerts + UI),
-// logging the anomaly. This is plumbing only — no AI logic lives here.
+// surfaces it through the existing flagged-message pipeline (UI + anomaly log).
+// This is plumbing only — no AI logic lives here.
 func (c *AppController) ReportExternalFlag(data monitor.EventData) {
 	settings := c.monitor.GetSettings()
 	if !settings.ModerationEnabled {
@@ -495,23 +409,6 @@ func (c *AppController) GetUserProfile(uniqueID string) (model.UserProfile, erro
 	}
 	out.RiskLevel = risk
 	return out, nil
-}
-
-// GetAlertConfig returns the current alert configuration (secrets redacted).
-func (c *AppController) GetAlertConfig() alerts.Config {
-	return c.alertNotifier.GetConfig()
-}
-
-// SetAlertConfig updates the alert configuration.
-func (c *AppController) SetAlertConfig(cfg alerts.Config) {
-	if c.alertNotifier != nil {
-		c.alertNotifier.SetConfig(cfg)
-	}
-}
-
-// AlertEnabled reports whether external alerts are configured.
-func (c *AppController) AlertEnabled() bool {
-	return c.alertNotifier != nil && c.alertNotifier.Enabled()
 }
 
 // riskForUser classifies a user's risk based on their anomaly log count.

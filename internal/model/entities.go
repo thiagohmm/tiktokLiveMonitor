@@ -65,7 +65,7 @@ type PinnedComment struct {
 	Timestamp  string `json:"timestamp"`
 }
 
-// Risk level constants used across ranking, alerts and profiles.
+// Risk level constants used across ranking and profiles.
 const (
 	RiskLevelNone    = "none"
 	RiskLevelLow     = "low"
@@ -96,28 +96,6 @@ type LiveRanking struct {
 	UpdatedAt  string     `json:"updatedAt"`
 	TotalUsers int        `json:"totalUsers"`
 	UserRanks  []UserRank `json:"userRanks"`
-}
-
-// AlertSeverity describes how urgent an external alert is.
-type AlertSeverity string
-
-const (
-	AlertSeverityInfo    AlertSeverity = "info"
-	AlertSeverityWarning AlertSeverity = "warning"
-	AlertSeverityError   AlertSeverity = "error"
-	AlertSeverityCritical AlertSeverity = "critical"
-)
-
-// AlertEvent is a notification emitted for notable live events.
-type AlertEvent struct {
-	Type      string        `json:"type"`
-	Title     string        `json:"title"`
-	Message   string        `json:"message"`
-	Severity  AlertSeverity `json:"severity"`
-	UniqueID  string        `json:"uniqueId,omitempty"`
-	Nickname  string        `json:"nickname,omitempty"`
-	LiveName  string        `json:"liveName"`
-	Timestamp string        `json:"timestamp"`
 }
 
 // LiveReport is the AI-generated post-live summary.
