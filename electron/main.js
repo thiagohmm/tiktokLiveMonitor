@@ -34,6 +34,51 @@ function buildBinary() {
   return path.join(APP_ROOT, binaryName());
 }
 
+function resolveBundledPython() {
+  const candidates = [
+    path.join(APP_ROOT, 'runtime', 'python', 'python.exe'),
+    path.join(APP_ROOT, 'runtime', 'python', 'bin', 'python3'),
+    path.join(APP_ROOT, 'runtime', 'python', 'bin', 'python'),
+  ];
+  return candidates.find((p) => fs.existsSync(p)) || null;
+}
+
+function bundledPythonReady() {
+  const py = resolveBundledPython();
+  if (!py) return false;
+  const marker = path.join(APP_ROOT, 'runtime', 'python', '.tiktok-agent-deps-ok');
+  if (!fs.existsSync(marker)) return false;
+  const check = spawnSync(py, ['-c', 'import fastapi, uvicorn, httpx'], {
+    cwd: APP_ROOT,
+    stdio: 'ignore',
+    timeout: 30000,
+  });
+  return check.status === 0;
+}
+
+/** Garante runtime Python embutido (não depende de Python do sistema). */
+function ensurePythonRuntime() {
+  if (bundledPythonReady()) {
+    console.log('[Electron] Runtime Python embutido OK:', resolveBundledPython());
+    return;
+  }
+  console.log('[Electron] Preparando runtime Python embutido (setup-python)...');
+  const script = path.join(APP_ROOT, 'scripts', 'setup-python.js');
+  const retry = spawnSync('node', [script], {
+    cwd: APP_ROOT,
+    stdio: 'inherit',
+    env: process.env,
+  });
+  if (retry.error || retry.status !== 0) {
+    throw new Error(
+      'Falha ao preparar o runtime Python embutido. Rode: npm run setup-python'
+    );
+  }
+  if (!bundledPythonReady()) {
+    throw new Error('Runtime Python embutido incompleto após setup-python.');
+  }
+}
+
 function isReady(url, timeoutMs = 1500) {
   return new Promise((resolve) => {
     const req = http.get(url, { timeout: timeoutMs }, (res) => {
@@ -148,6 +193,7 @@ function stopServer() {
 
 app.whenReady().then(async () => {
   try {
+    ensurePythonRuntime();
     await startServer();
   } catch (err) {
     const message = err && err.message ? err.message : String(err);

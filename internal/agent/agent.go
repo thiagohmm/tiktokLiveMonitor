@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -64,11 +65,13 @@ func (m *Manager) Start() error {
 		return nil
 	}
 
-	python, err := findPython()
+	python, err := findPython(m.baseDir)
 	if err != nil {
 		log.Printf("[Agent] Python não encontrado; agente desabilitado (%v)", err)
+		log.Printf("[Agent] Dica: rode `npm run setup-python` para baixar um runtime embutido (sem Python do sistema).")
 		return nil
 	}
+	log.Printf("[Agent] Usando interpretador: %s", python)
 
 	monitorPort := os.Getenv("PORT")
 	if monitorPort == "" {
@@ -130,13 +133,26 @@ func (m *Manager) ProxyHandler() http.Handler {
 	return http.StripPrefix("/agent", proxy)
 }
 
-func findPython() (string, error) {
+func findPython(baseDir string) (string, error) {
+	// 1) Runtime portátil instalado por scripts/setup-python.js (sem Python do sistema).
+	bundled := []string{
+		filepath.Join(baseDir, "runtime", "python", "python.exe"),
+		filepath.Join(baseDir, "runtime", "python", "bin", "python3"),
+		filepath.Join(baseDir, "runtime", "python", "bin", "python"),
+	}
+	for _, candidate := range bundled {
+		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
+			return candidate, nil
+		}
+	}
+
+	// 2) Fallback opcional: Python do PATH (dev machines).
 	for _, name := range []string{"python3", "python"} {
 		if p, err := exec.LookPath(name); err == nil {
 			return p, nil
 		}
 	}
-	return "", fmt.Errorf("python3/python não localizado no PATH")
+	return "", fmt.Errorf("runtime/python ausente e python3/python não localizado no PATH")
 }
 
 // agentHealthy reports whether an agent is already serving /health on the

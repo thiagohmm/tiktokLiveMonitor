@@ -20,6 +20,7 @@ import (
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/config"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/llmsetup"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 )
@@ -37,6 +38,7 @@ type HTTPServer struct {
 	sseMu      sync.Mutex
 	webDir     string
 	cfg        Config
+	llmSetup   *llmsetup.Manager
 }
 
 // handleRoot serves the main UI (index.html) with a build-version query string
@@ -87,6 +89,7 @@ func New(cfg Config, ctrl *controller.AppController) *HTTPServer {
 		sseClients: make(map[http.ResponseWriter]bool),
 		webDir:     cfg.WebDir,
 		cfg:        cfg,
+		llmSetup:   llmsetup.New(cfg.ModelsDir),
 	}
 }
 
@@ -133,6 +136,9 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/profile", s.handleProfile)
 	mux.HandleFunc("/api/admin/lives", s.handleAdminLives)
 	mux.HandleFunc("/api/admin/lives/delete", s.handleAdminLivesDelete)
+	mux.HandleFunc("/api/models", s.handleModels)
+	mux.HandleFunc("/api/models/download", s.handleModelsDownload)
+	mux.HandleFunc("/api/models/select", s.handleModelsSelect)
 
 	// Agent proxy: forward /agent/* to the Python agent HTTP API.
 	if s.cfg.AgentProxy != nil {
@@ -149,8 +155,12 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 		http.ServeFile(w, r, filepath.Join(s.webDir, "vendor", "chart.umd.js"))
 	})
 
-	// Initialize config.
-	if err := config.InitConfig(s.webDir); err != nil {
+	// Initialize model-config.json next to models/ (project root), not under web/.
+	configDir := filepath.Dir(s.cfg.ModelsDir)
+	if configDir == "" || configDir == "." {
+		configDir = s.webDir
+	}
+	if err := config.InitConfig(configDir); err != nil {
 		log.Printf("[View] Warn: config init: %v", err)
 	}
 
@@ -702,6 +712,72 @@ func (s *HTTPServer) handleProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, profile)
+}
+
+func (s *HTTPServer) handleModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.llmSetup == nil {
+		writeError(w, http.StatusServiceUnavailable, "models unavailable")
+		return
+	}
+	writeJSON(w, s.llmSetup.Snapshot())
+}
+
+func (s *HTTPServer) handleModelsDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.llmSetup == nil {
+		writeError(w, http.StatusServiceUnavailable, "models unavailable")
+		return
+	}
+	var body struct {
+		Keys []string `json:"keys"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	started, err := s.llmSetup.StartDownload(body.Keys)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	snap := s.llmSetup.Snapshot()
+	writeJSON(w, map[string]interface{}{
+		"started":  started,
+		"snapshot": snap,
+	})
+}
+
+func (s *HTTPServer) handleModelsSelect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		Model string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Model == "" {
+		writeError(w, http.StatusBadRequest, "model is required")
+		return
+	}
+	if !config.SetSelectedModel(body.Model) {
+		writeError(w, http.StatusBadRequest, "modelo inválido")
+		return
+	}
+	if s.llmSetup == nil {
+		writeJSON(w, map[string]interface{}{"success": true, "selected": body.Model})
+		return
+	}
+	writeJSON(w, map[string]interface{}{
+		"success":  true,
+		"selected": body.Model,
+		"snapshot": s.llmSetup.Snapshot(),
+	})
 }
 
 // --- Helpers ---

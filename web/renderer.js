@@ -33,6 +33,10 @@ const setupProgressContainer = document.getElementById('setupProgressContainer')
 const setupStatusText = document.getElementById('setupStatusText');
 const setupPercentage = document.getElementById('setupPercentage');
 const setupProgressBar = document.getElementById('setupProgressBar');
+const llmModelStatus = document.getElementById('llmModelStatus');
+const downloadModelsBtn = document.getElementById('downloadModelsBtn');
+let modelsPollTimer = null;
+let modelsSelectBound = false;
 const targetGiftHistoryBtn = document.getElementById('targetGiftHistoryBtn');
 const targetGiftsList = document.getElementById('targetGiftsList');
 const availableGiftSelect = document.getElementById('availableGiftSelect');
@@ -1708,9 +1712,169 @@ async function loadInitialState() {
 
         // Carrega ranking mesmo desconectado.
         loadRanking();
+        refreshModelsUI();
     } catch (error) {
         setStatus('Servidor indisponível', 'error');
     }
+}
+
+function formatBytes(n) {
+    if (!n || n <= 0) return '';
+    const gb = n / (1024 ** 3);
+    if (gb >= 1) return `${gb.toFixed(1)} GB`;
+    const mb = n / (1024 ** 2);
+    return `${mb.toFixed(0)} MB`;
+}
+
+function stopModelsPoll() {
+    if (modelsPollTimer) {
+        clearInterval(modelsPollTimer);
+        modelsPollTimer = null;
+    }
+}
+
+function startModelsPoll() {
+    if (modelsPollTimer) return;
+    modelsPollTimer = setInterval(() => {
+        refreshModelsUI();
+    }, 600);
+}
+
+function applyModelsSnapshot(snap) {
+    if (!snap || !Array.isArray(snap.models)) return;
+
+    if (modelSelect) {
+        modelSelect.innerHTML = '';
+        snap.models.forEach(mod => {
+            const opt = document.createElement('option');
+            opt.value = mod.key;
+            opt.textContent = mod.exists ? mod.name : `${mod.name} (ausente)`;
+            if (mod.selected || mod.key === snap.selected) opt.selected = true;
+            modelSelect.appendChild(opt);
+        });
+        if (!modelsSelectBound) {
+            modelsSelectBound = true;
+            modelSelect.addEventListener('change', async () => {
+                try {
+                    const res = await fetch('/api/models/select', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ model: modelSelect.value })
+                    });
+                    const data = await res.json();
+                    if (data.snapshot) applyModelsSnapshot(data.snapshot);
+                    else refreshModelsUI();
+                } catch (err) {
+                    console.error('[Frontend] Falha ao trocar modelo:', err);
+                }
+            });
+        }
+    }
+
+    const progress = snap.progress || {};
+    const downloading = !!progress.active || progress.status === 'downloading';
+    const selected = snap.models.find(m => m.selected) || snap.models.find(m => m.key === snap.selected);
+    const selectedReady = !!(selected && selected.exists);
+
+    if (llmModelStatus) {
+        llmModelStatus.className = 'llm-status';
+        if (downloading) {
+            llmModelStatus.textContent = `Baixando ${progress.filename || 'modelo'}…`;
+        } else if (progress.status === 'error') {
+            llmModelStatus.classList.add('error');
+            llmModelStatus.textContent = progress.error || 'Falha no download';
+        } else if (selectedReady) {
+            llmModelStatus.classList.add('ready');
+            const size = selected.sizeBytes ? ` · ${formatBytes(selected.sizeBytes)}` : '';
+            llmModelStatus.textContent = `${selected.name}: já instalado${size}`;
+        } else if (selected) {
+            llmModelStatus.classList.add('missing');
+            llmModelStatus.textContent = `${selected.name} ausente`;
+        } else {
+            llmModelStatus.classList.add('missing');
+            llmModelStatus.textContent = 'Nenhum modelo configurado';
+        }
+    }
+
+    if (downloadModelsBtn) {
+        downloadModelsBtn.style.display = (!selectedReady && !downloading) ? 'inline-flex' : 'none';
+        downloadModelsBtn.disabled = downloading;
+        downloadModelsBtn.textContent = 'Baixar LLM';
+    }
+
+    if (setupProgressContainer) {
+        if (downloading) {
+            setupProgressContainer.style.display = 'flex';
+            const pct = Math.max(0, Math.min(100, Number(progress.percent) || 0));
+            if (setupStatusText) {
+                setupStatusText.textContent = progress.filename
+                    ? `Baixando ${progress.filename}`
+                    : 'Baixando modelo…';
+            }
+            if (setupPercentage) setupPercentage.textContent = `${pct}%`;
+            if (setupProgressBar) setupProgressBar.style.width = `${pct}%`;
+            startModelsPoll();
+        } else {
+            if (progress.status === 'done' || progress.status === 'exists') {
+                if (setupProgressBar) setupProgressBar.style.width = '100%';
+                if (setupPercentage) setupPercentage.textContent = '100%';
+                if (setupStatusText) {
+                    setupStatusText.textContent = progress.status === 'exists'
+                        ? 'Modelo já estava instalado'
+                        : 'Download concluído';
+                }
+                setTimeout(() => {
+                    if (setupProgressContainer) setupProgressContainer.style.display = 'none';
+                }, 900);
+            } else if (progress.status === 'error') {
+                setupProgressContainer.style.display = 'flex';
+                if (setupStatusText) setupStatusText.textContent = progress.error || 'Erro no download';
+            } else {
+                setupProgressContainer.style.display = 'none';
+            }
+            stopModelsPoll();
+        }
+    }
+}
+
+async function refreshModelsUI() {
+    try {
+        const res = await fetch('/api/models');
+        if (!res.ok) return;
+        applyModelsSnapshot(await res.json());
+    } catch (err) {
+        console.error('[Frontend] Falha ao consultar modelos:', err);
+        if (llmModelStatus) {
+            llmModelStatus.className = 'llm-status error';
+            llmModelStatus.textContent = 'Não foi possível verificar modelos';
+        }
+    }
+}
+
+async function downloadMissingModels() {
+    if (downloadModelsBtn) downloadModelsBtn.disabled = true;
+    try {
+        const res = await fetch('/api/models/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        });
+        const data = await res.json();
+        if (data.snapshot) applyModelsSnapshot(data.snapshot);
+        startModelsPoll();
+        refreshModelsUI();
+    } catch (err) {
+        console.error('[Frontend] Falha ao iniciar download:', err);
+        if (llmModelStatus) {
+            llmModelStatus.className = 'llm-status error';
+            llmModelStatus.textContent = 'Falha ao iniciar download';
+        }
+        if (downloadModelsBtn) downloadModelsBtn.disabled = false;
+    }
+}
+
+if (downloadModelsBtn) {
+    downloadModelsBtn.addEventListener('click', () => downloadMissingModels());
 }
 
 function setupEventStream() {

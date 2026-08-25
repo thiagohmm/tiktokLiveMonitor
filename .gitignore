@@ -27,6 +27,7 @@ models/embeddings/
 # Python
 __pycache__/
 *.py[cod]
+/runtime/
 
 # Binary files
 *.exe
