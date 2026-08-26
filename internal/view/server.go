@@ -61,7 +61,16 @@ func (s *HTTPServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := tmpl.Execute(w, map[string]string{"BuildVersion": BuildVersion}); err != nil {
+
+	// Cache-busting derivado do tempo de modificação do renderer.js: sempre que o
+	// arquivo mudar no disco, o navegador recarrega o script (resolve cache de
+	// navegador quando a BuildVersion de compilação permanece inalterada).
+	buildVersion := BuildVersion
+	if info, err := os.Stat(filepath.Join(s.webDir, "renderer.js")); err == nil {
+		buildVersion = fmt.Sprintf("dev-%d", info.ModTime().Unix())
+	}
+
+	if err := tmpl.Execute(w, map[string]string{"BuildVersion": buildVersion}); err != nil {
 		log.Printf("[View] Error rendering index.html: %v", err)
 	}
 }
@@ -164,6 +173,9 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 		}
 		if eventType == monitor.EventNewSocialEvent {
 			go s.controller.HandleShareEvent(data)
+		}
+		if eventType == monitor.EventNewLike {
+			go s.controller.HandleLikeEvent(data)
 		}
 		if eventType == monitor.EventGiftUser {
 			if id, err := s.controller.RecordTargetGiftReceived(data); err != nil {

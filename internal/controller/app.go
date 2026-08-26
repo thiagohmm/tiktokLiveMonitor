@@ -516,6 +516,32 @@ func (c *AppController) HandleShareEvent(data monitor.EventData) {
 	}
 }
 
+// HandleLikeEvent processes a live like (heart) event and stores it.
+func (c *AppController) HandleLikeEvent(data monitor.EventData) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("[Controller] panic storing like: %v", rec)
+		}
+	}()
+
+	uniqueID := eventString(data, "uniqueId", "userId")
+	if uniqueID == "" {
+		uniqueID = "unknown"
+	}
+	nickname := eventString(data, "nickname")
+	if nickname == "" {
+		nickname = uniqueID
+	}
+	likeCount := eventInt(data, "likeCount", 1)
+	if likeCount < 1 {
+		likeCount = 1
+	}
+	liveName := c.monitor.GetState().Username
+	if err := c.repo.AddLike(liveName, uniqueID, nickname, likeCount); err != nil {
+		log.Printf("[Controller] Error storing like: %v", err)
+	}
+}
+
 // GetMonitor returns the underlying monitor for event registration.
 func (c *AppController) GetMonitor() *monitor.Monitor {
 	return c.monitor

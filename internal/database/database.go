@@ -82,6 +82,14 @@ func (db *DB) migrate() error {
 			nickname TEXT NOT NULL,
 			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS likes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			live_name TEXT NOT NULL,
+			uniqueId TEXT NOT NULL,
+			nickname TEXT NOT NULL,
+			like_count INTEGER DEFAULT 1,
+			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
 		`CREATE TABLE IF NOT EXISTS user_messages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			live_name TEXT NOT NULL DEFAULT '',
@@ -521,6 +529,26 @@ func (db *DB) AddShare(liveName, uniqueID, nickname string) error {
 		liveName, uniqueID, nickname,
 	); err != nil {
 		return fmt.Errorf("insert share: %w", err)
+	}
+	return nil
+}
+
+// AddLike stores a batch of likes (hearts) sent by a participant during a live.
+// likeCount is the number of likes in this event (usually 1, but events can carry
+// a burst). The per-user total is obtained by SUM(like_count).
+func (db *DB) AddLike(liveName, uniqueID, nickname string, likeCount int) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if likeCount < 1 {
+		likeCount = 1
+	}
+
+	if _, err := db.conn.Exec(
+		"INSERT INTO likes (live_name, uniqueId, nickname, like_count) VALUES (?, ?, ?, ?)",
+		liveName, uniqueID, nickname, likeCount,
+	); err != nil {
+		return fmt.Errorf("insert like: %w", err)
 	}
 	return nil
 }
@@ -1094,6 +1122,7 @@ func (db *DB) LiveFirstSeen(liveName string) (string, error) {
 	query := `SELECT MIN(timestamp) FROM (
 		SELECT timestamp FROM user_messages WHERE live_name = ?
 		UNION ALL SELECT timestamp FROM gifts WHERE live_name = ?
+		UNION ALL SELECT timestamp FROM likes WHERE live_name = ?
 		UNION ALL SELECT received_at FROM target_gift_history WHERE live_name = ?
 		UNION ALL SELECT timestamp FROM anomaly_logs WHERE live_name = ?
 	)`
@@ -1175,7 +1204,7 @@ func (db *DB) DeleteLive(liveName string) (int64, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tables := []string{"user_messages", "gifts", "shares", "anomaly_logs", "pinned_comments", "target_gift_history"}
+	tables := []string{"user_messages", "gifts", "likes", "shares", "anomaly_logs", "pinned_comments", "target_gift_history"}
 	total := int64(0)
 	for _, table := range tables {
 		res, err := db.conn.Exec(fmt.Sprintf("DELETE FROM %s WHERE live_name = ?", table), liveName)
@@ -1321,6 +1350,43 @@ func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
 		stats[uid] = s
 	}
 	shareRows.Close()
+
+	// Likes (hearts).
+	likeRows, err := db.conn.Query(`
+		SELECT uniqueId, nickname, SUM(like_count) AS n,
+			MIN(timestamp) AS first, MAX(timestamp) AS last
+		FROM likes WHERE live_name = ? GROUP BY uniqueId`, liveName)
+	if err != nil {
+		return nil, fmt.Errorf("query live stats likes: %w", err)
+	}
+	for likeRows.Next() {
+		var uid, uname string
+		var n int
+		var first, last sql.NullString
+		if err := likeRows.Scan(&uid, &uname, &n, &first, &last); err != nil {
+			likeRows.Close()
+			return nil, fmt.Errorf("scan live stat like: %w", err)
+		}
+		if uid == "" {
+			continue
+		}
+		s := stats[uid]
+		s.UniqueID = uid
+		s.Nickname = coalesceStr(uname, uid)
+		s.LikeCount = n
+		if first.Valid && first.String != "" {
+			if s.FirstSeen == "" || first.String < s.FirstSeen {
+				s.FirstSeen = first.String
+			}
+		}
+		if last.Valid && last.String != "" {
+			if s.LastSeen == "" || last.String > s.LastSeen {
+				s.LastSeen = last.String
+			}
+		}
+		stats[uid] = s
+	}
+	likeRows.Close()
 
 	out := make([]model.LiveStat, 0, len(stats))
 	for _, s := range stats {
