@@ -18,6 +18,7 @@ function loadConnectionClass() {
 
 let ConnectionClass = null;
 let connectionClassError = null;
+let likeState = new Map();
 try {
     ConnectionClass = loadConnectionClass();
 } catch (err) {
@@ -459,6 +460,39 @@ async function doConnect(username) {
             }
         } catch (err) {
             send('error', { message: `gift handler: ${err.message}` });
+        }
+    });
+
+    connection.on('like', (data) => {
+        try {
+            const user = getUser(data);
+            const uniqueId = user.uniqueId || String(data.userId || '');
+            const nickname = user.nickname || user.uniqueId || String(data.userId || 'Nao identificado');
+
+            // WebcastLikeMessage.total é o total acumulado de curtidas deste usuário.
+            // Calculamos o delta em relação à última ocorrência para somar corretamente.
+            const total = Number(data.total ?? data.likeCount);
+            let delta = 1;
+            if (Number.isFinite(total) && total > 0) {
+                const prev = likeState.get(uniqueId) || 0;
+                delta = total - prev;
+                if (delta < 1) delta = 1;
+                likeState.set(uniqueId, total);
+            } else {
+                const inline = Number(data.count ?? 1);
+                delta = inline > 0 ? inline : 1;
+            }
+
+            send('new-like-event', {
+                uniqueId,
+                nickname,
+                likeCount: Math.max(1, delta | 0),
+                total: Number.isFinite(total) ? total : null,
+                isFollower: user.isFollower,
+                timestamp: Date.now()
+            });
+        } catch (err) {
+            send('error', { message: `like handler: ${err.message}` });
         }
     });
 

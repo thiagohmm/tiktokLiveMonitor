@@ -35,6 +35,7 @@ const (
 	EventNewFollower       = "new-follower"
 	EventNewSocialEvent    = "new-social-event"
 	EventGiftsList         = "gifts-list"
+	EventNewLike           = "new-like-event"
 )
 
 type EventData map[string]interface{}
@@ -561,6 +562,9 @@ func (m *Monitor) handleBridgeEvent(eventType string, data EventData) {
 
 	case "new-gift-user":
 		m.handleTargetGift(data)
+
+	case EventNewLike:
+		m.emit(EventNewLike, data)
 
 	case "pinned-comment":
 		m.mu.Lock()

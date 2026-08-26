@@ -76,6 +76,11 @@ type ShareRepository interface {
 	AddShare(liveName, uniqueID, nickname string) error
 }
 
+// LikeRepository tracks likes (hearts) sent by participants during a live.
+type LikeRepository interface {
+	AddLike(liveName, uniqueID, nickname string, likeCount int) error
+}
+
 // RankingRepository handles engagement ranking and live analytics.
 type RankingRepository interface {
 	// LiveFirstSeen returns the first recorded timestamp for a live (RFC3339).
@@ -102,6 +107,7 @@ type LiveStat struct {
 	GiftCount     int
 	GiftTotal     int
 	ShareCount    int
+	LikeCount     int
 	FirstSeen     string
 	LastSeen      string
 }
@@ -113,6 +119,7 @@ type Repository interface {
 	UserMessageRepository
 	GiftRepository
 	ShareRepository
+	LikeRepository
 	TargetGiftHistoryRepository
 	PinnedCommentRepository
 	SessionRepository

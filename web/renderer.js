@@ -1,5 +1,55 @@
 console.log('TikTok Live Monitor Renderer Loaded');
 
+// Tradução dos nomes de presentes para PT-BR (mesma fonte do backend gifts.js)
+const GIFT_TRANSLATIONS = {
+    "rose": "Rosa",
+    "heart": "Coração",
+    "hand heart": "Coração de Mão",
+    "finger heart": "Coração de Dedo",
+    "love heart": "Coração de Amor",
+    "beating heart": "Coração Batendo",
+    "heartbeat": "Batimento",
+    "sunglasses": "Óculos de Sol",
+    "mirror": "Espelho",
+    "cap": "Boné",
+    "hat": "Chapéu",
+    "money gun": "Metralhadora de Dinheiro",
+    "galaxy": "Galáxia",
+    "lion": "Leão",
+    "helicopter": "Helicóptero",
+    "race car": "Carro de Corrida",
+    "sports car": "Carro Esportivo",
+    "rocket": "Foguete",
+    "confetti": "Confete",
+    "fireworks": "Fogos de Artifício",
+    "disc": "Disco",
+    "disco": "Discoteca",
+    "gift box": "Caixa de Presente",
+    "present box": "Caixa de Presente",
+    "handbag": "Bolsa",
+    "crown": "Coroa",
+    "castle": "Castelo",
+    "whale": "Baleia",
+    "dolphin": "Golfinho",
+    "star": "Estrela",
+    "microphone": "Microfone",
+    "mic": "Microfone",
+    "basketball": "Basquete",
+    "football": "Futebol Americano",
+    "soccer": "Futebol",
+    "love bang": "Bomba de Amor",
+    "love letter": "Carta de Amor",
+    "i love you": "Eu Te Amo",
+    "applause": "Palmas"
+};
+
+function translateGiftName(name) {
+    if (typeof name !== 'string') return name;
+    const trimmed = name.trim();
+    if (!trimmed) return name;
+    return GIFT_TRANSLATIONS[trimmed.toLowerCase()] || trimmed;
+}
+
 function ensureBrowserChart() {
     if (typeof window.Chart !== 'undefined') {
         return Promise.resolve();
@@ -1860,7 +1910,7 @@ function renderRanking(ranking) {
     if (!rows.length) {
         const tr = document.createElement('tr');
         const td = document.createElement('td');
-        td.colSpan = 7;
+        td.colSpan = 8;
         td.style.textAlign = 'center';
         td.style.color = 'var(--text-muted)';
         td.textContent = 'Sem dados de engajamento ainda.';
@@ -1910,6 +1960,10 @@ function renderRanking(ranking) {
         const tdQuestions = document.createElement('td');
         tdQuestions.textContent = String(user.questionCount || 0);
         tr.appendChild(tdQuestions);
+
+        const tdLikes = document.createElement('td');
+        tdLikes.textContent = String(user.likeCount || 0);
+        tr.appendChild(tdLikes);
 
         rankingTableBody.appendChild(tr);
     });
@@ -2082,8 +2136,10 @@ function populateAvailableGifts(gifts) {
     availableGiftSelect.innerHTML = '<option value="">Selecione um presente...</option>';
     unique.forEach(gift => {
         const option = document.createElement('option');
+        // value mantém o nome original (ING) para o backend reconhecer o presente na live;
+        // apenas a exibição (textContent) é traduzida para PT-BR.
         option.value = gift;
-        option.textContent = gift;
+        option.textContent = translateGiftName(gift);
         availableGiftSelect.appendChild(option);
     });
     if (current && unique.includes(current)) {
