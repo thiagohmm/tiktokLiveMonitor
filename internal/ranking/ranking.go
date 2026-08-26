@@ -17,7 +17,9 @@ type Weights struct {
 	GiftPointPerGift float64
 	// GiftPointPerUnit awards points per unit of gift value (repeat count).
 	GiftPointPerUnit float64
-	// MessagePointPerMessage awards points per chat message.
+	// MessagePointPerMessage awards points per chat message. It is 0 by default
+	// because chat messages are not a ranking criterion (presents, shares,
+	// likes and questions are).
 	MessagePointPerMessage float64
 	// QuestionPointPerQuestion awards extra points per detected question.
 	QuestionPointPerQuestion float64
@@ -25,19 +27,22 @@ type Weights struct {
 	SharePointPerShare float64
 	// LikePointPerLike awards points per like (heart) sent by a participant.
 	LikePointPerLike float64
-	// AnomalyPenaltyPerEvent subtracts points per moderation anomaly.
+	// AnomalyPenaltyPerEvent subtracts 3 points from the score per repeated
+	// message / spam anomaly detected, reducing the ranking position.
 	AnomalyPenaltyPerEvent float64
 }
 
 // DefaultWeights are the default scoring weights.
+// The ranking priority is driven by: presents > shares > likes > questions.
+// Chat messages no longer determine who tops the ranking.
 var DefaultWeights = Weights{
-	GiftPointPerGift:         15,
+	GiftPointPerGift:         20,
 	GiftPointPerUnit:         5,
-	MessagePointPerMessage:   1,
-	QuestionPointPerQuestion: 3,
-	SharePointPerShare:       2,
-	LikePointPerLike:         1,
-	AnomalyPenaltyPerEvent:   8,
+	MessagePointPerMessage:   0,
+	QuestionPointPerQuestion: 2,
+	SharePointPerShare:       10,
+	LikePointPerLike:         3,
+	AnomalyPenaltyPerEvent:   3,
 }
 
 // ScoreResult is the computed score for a single participant.
@@ -75,6 +80,7 @@ func (r *Ranker) Compute(stats []model.LiveStat, anomaliesByUser map[string]int)
 		questionScore := r.weights.QuestionPointPerQuestion*float64(s.QuestionCount)
 		likeScore := r.weights.LikePointPerLike * float64(s.LikeCount)
 		shareScore := r.weights.SharePointPerShare * float64(s.ShareCount)
+		// Repeated messages / spam reduce the score (penalty subtracts, never adds).
 		anomalyCount := anomaliesByUser[s.UniqueID]
 		anomalyPenalty := r.weights.AnomalyPenaltyPerEvent * float64(anomalyCount)
 
