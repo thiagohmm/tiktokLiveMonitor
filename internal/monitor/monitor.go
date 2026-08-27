@@ -63,21 +63,21 @@ type ChatMessage struct {
 }
 
 type QuestionEntry struct {
-	UniqueID   string
-	Nickname   string
-	Comment    string
-	Timestamp  int64
-	IsFollower *bool
+	UniqueID   string `json:"uniqueId"`
+	Nickname   string `json:"nickname"`
+	Comment    string `json:"comment"`
+	Timestamp  int64  `json:"timestamp"`
+	IsFollower *bool  `json:"isFollower"`
 }
 
 type GiftPayload struct {
-	GiftName    string
-	UniqueID    string
-	Nickname    string
-	RepeatCount int
-	RepeatEnd   bool
-	GiftType    int
-	IsFollower  *bool
+	GiftName    string `json:"giftName"`
+	UniqueID    string `json:"uniqueId"`
+	Nickname    string `json:"nickname"`
+	RepeatCount int    `json:"repeatCount"`
+	RepeatEnd   bool   `json:"repeatEnd"`
+	GiftType    int    `json:"giftType"`
+	IsFollower  *bool  `json:"isFollower"`
 }
 
 type Settings struct {
@@ -139,8 +139,11 @@ type Monitor struct {
 	supDone           chan struct{}
 	supStopCh         chan struct{}
 
-	// LLMCorrelate is an optional fallback when the heuristic finds no match.
-	LLMCorrelate func(ctx context.Context, gift GiftPayload, candidates []QuestionEntry) *QuestionEntry
+	// LLMCorrelate (agente Python) escolhe, entre as candidatas, a mensagem que
+	// melhor se encaixa como pergunta referente ao presente-alvo dado. Retorna
+	// (mensagem, método, confiança); nil quando não há correspondência. Só é
+	// acionada para presentes-alvo escolhidos pelo streamer.
+	LLMCorrelate func(ctx context.Context, gift GiftPayload, candidates []QuestionEntry) (*QuestionEntry, string, string)
 }
 
 func New() (*Monitor, error) {

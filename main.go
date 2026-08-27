@@ -62,6 +62,12 @@ func main() {
 	defer agentMgr.Stop()
 	ctrl.SetAgentBaseURL(agentMgr.BaseURL())
 
+	// Correlação presente<->chat: a IA do agente Python escolhe, entre as
+	// últimas mensagens do doador, a pergunta que melhor se encaixa como
+	// referente ao presente-alvo dado. Só é acionada para presentes-alvo
+	// escolhidos pelo streamer; sem agente, o monitor cai para heurística.
+	mon.LLMCorrelate = agent.NewCorrelateFunc(agentMgr.BaseURL())
+
 	// View layer: HTTP server
 	port := 3001
 	if p := os.Getenv("PORT"); p != "" {

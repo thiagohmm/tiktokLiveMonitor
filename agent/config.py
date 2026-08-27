@@ -54,4 +54,8 @@ RAG_TOP_K = _env_int("RAG_TOP_K", 8)
 RAG_BACKFILL_LIMIT = _env_int("RAG_BACKFILL_LIMIT", 500)
 RAG_CONCURRENCY = _env_int("RAG_CONCURRENCY", 1)
 RAG_TIMEOUT = _env_int("RAG_TIMEOUT", 8)
+
+# --- Correlação presente<->chat ---
+# Timeout curto: o monitor Go aguarda no máximo 8s por resposta.
+CORRELATE_TIMEOUT = _env_int("CORRELATE_TIMEOUT", 7)
 RAG_CHAT_INDEX_ENABLED = _env("RAG_CHAT_INDEX_ENABLED", "1") == "1"

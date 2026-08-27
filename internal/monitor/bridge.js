@@ -469,9 +469,11 @@ async function doConnect(username) {
             const uniqueId = user.uniqueId || String(data.userId || '');
             const nickname = user.nickname || user.uniqueId || String(data.userId || 'Nao identificado');
 
-            // WebcastLikeMessage.total é o total acumulado de curtidas deste usuário.
-            // Calculamos o delta em relação à última ocorrência para somar corretamente.
-            const total = Number(data.total ?? data.likeCount);
+            // WebcastLikeMessage.totalLikeCount é o total acumulado de curtidas deste
+            // usuário (monotônico). O delta em relação à última ocorrência é a
+            // quantidade de curtidas deste evento, evitando contagens duplicadas.
+            // `likeCount` é só o total deste evento, usado como último fallback.
+            const total = Number(data.totalLikeCount ?? data.likeCount);
             let delta = 1;
             if (Number.isFinite(total) && total > 0) {
                 const prev = likeState.get(uniqueId) || 0;

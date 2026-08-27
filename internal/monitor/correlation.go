@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -15,6 +16,16 @@ type correlationPick struct {
 	confidence string
 }
 
+// correlateGiftWithQuestion correlaciona um presente-alvo com as mensagens do
+// doador na janela recente do chat.
+//
+// Fluxo:
+//  1. candidata única do doador -> heurística determinística (caminho rápido);
+//  2. múltiplas mensagens do doador (ou menção por apelido) -> a IA do agente
+//     Python verifica as últimas mensagens do usuário e escolhe a pergunta que
+//     melhor se encaixa como referente ao presente dado;
+//  3. IA indisponível ou sem correspondência -> fallback heurístico (baixa
+//     confiança) para a melhor mensagem do doador.
 func (m *Monitor) correlateGiftWithQuestion(gift GiftPayload) {
 	now := time.Now().UnixMilli()
 	correlationID := correlationIDFor(gift, now)
@@ -26,38 +37,79 @@ func (m *Monitor) correlateGiftWithQuestion(gift GiftPayload) {
 	llmFn := m.LLMCorrelate
 	m.mu.Unlock()
 
-	if len(questions) == 0 && len(recent) == 0 {
+	candidates := dedupeCandidates(questions, recent, now)
+	if len(candidates) == 0 {
 		log.Printf("[Correlation] NO_CANDIDATES | gift=%s | giftUser=%s", gift.GiftName, displayUser(gift.UniqueID, gift.Nickname))
 		return
 	}
 
-	if pick := chooseQuestionHeuristic(gift, questions, recent); pick != nil {
-		logCorrelation("HEURISTIC_MATCH", gift, pick)
+	heuristic := chooseQuestionHeuristic(gift, questions, recent)
+
+	// Caminho rápido: exatamente uma mensagem do doador na janela —
+	// correlação inequívoca, sem custo de IA.
+	if heuristic != nil && len(sameUserCandidates(gift, candidates)) == 1 {
+		logCorrelation("HEURISTIC_MATCH", gift, heuristic)
+		m.emitCorrelation(correlationID, gift, heuristic.match, heuristic.method, heuristic.confidence, false)
+		m.scheduleForwardReview(correlationID, gift, heuristic)
+		return
+	}
+
+	// Várias mensagens do doador (ou menção por apelido): a IA (Python)
+	// verifica as últimas mensagens do usuário e escolhe a que melhor se
+	// encaixa como pergunta referente ao presente dado.
+	if llmFn != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		match, method, confidence := llmFn(ctx, gift, candidates)
+		if match != nil {
+			if method == "" {
+				method = "llm"
+			}
+			if confidence == "" {
+				confidence = "medium"
+			}
+			pick := &correlationPick{match: *match, method: method, confidence: confidence}
+			logCorrelation("LLM_MATCH", gift, pick)
+			m.emitCorrelation(correlationID, gift, pick.match, pick.method, pick.confidence, false)
+			m.scheduleForwardReview(correlationID, gift, pick)
+			return
+		}
+		log.Printf("[Correlation] LLM_NO_MATCH | gift=%s | giftUser=%s", gift.GiftName, displayUser(gift.UniqueID, gift.Nickname))
+	}
+
+	if heuristic != nil {
+		pick := &correlationPick{
+			match:      heuristic.match,
+			method:     heuristic.method + "-fallback",
+			confidence: "low",
+		}
+		logCorrelation("HEURISTIC_FALLBACK", gift, pick)
 		m.emitCorrelation(correlationID, gift, pick.match, pick.method, pick.confidence, false)
 		m.scheduleForwardReview(correlationID, gift, pick)
 		return
 	}
 
-	if llmFn == nil {
-		log.Printf("[Correlation] NO_MATCH | gift=%s | giftUser=%s", gift.GiftName, displayUser(gift.UniqueID, gift.Nickname))
-		return
-	}
+	log.Printf("[Correlation] NO_MATCH | gift=%s | giftUser=%s", gift.GiftName, displayUser(gift.UniqueID, gift.Nickname))
+}
 
-	candidates := dedupeCandidates(questions, recent, now)
-	if len(candidates) == 0 {
-		return
+// sameUserCandidates filtra as candidatas enviadas pelo próprio doador do
+// presente (por uid; cai para apelido quando não há uid).
+func sameUserCandidates(gift GiftPayload, candidates []QuestionEntry) []QuestionEntry {
+	giftUID := normalizeID(gift.UniqueID)
+	giftNickFold := foldText(gift.Nickname)
+	var out []QuestionEntry
+	for _, c := range candidates {
+		if giftUID != "" {
+			if normalizeID(c.UniqueID) == giftUID {
+				out = append(out, c)
+			}
+			continue
+		}
+		if giftNickFold != "" && foldText(c.Nickname) == giftNickFold {
+			out = append(out, c)
+		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	llmPick := llmFn(ctx, gift, candidates)
-	if llmPick == nil {
-		log.Printf("[Correlation] LLM_NO_MATCH | gift=%s | giftUser=%s", gift.GiftName, displayUser(gift.UniqueID, gift.Nickname))
-		return
-	}
-	pick := &correlationPick{match: *llmPick, method: "llm-fallback", confidence: "medium"}
-	logCorrelation("LLM_MATCH", gift, pick)
-	m.emitCorrelation(correlationID, gift, pick.match, pick.method, pick.confidence, false)
-	m.scheduleForwardReview(correlationID, gift, pick)
+	return out
 }
 
 func chooseQuestionHeuristic(gift GiftPayload, questions, recent []QuestionEntry) *correlationPick {
@@ -275,6 +327,11 @@ func dedupeCandidates(questions, recent []QuestionEntry, now int64) []QuestionEn
 	}
 	appendUnique(questions)
 	appendUnique(recent)
+	// Ordem cronológica (mais antigo -> mais recente): o agente Python
+	// recebe esta lista numerada no prompt da IA.
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].Timestamp < out[j].Timestamp
+	})
 	if len(out) > 8 {
 		out = out[len(out)-8:]
 	}
