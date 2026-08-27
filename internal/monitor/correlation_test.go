@@ -1,6 +1,8 @@
 package monitor
 
 import (
+	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -124,6 +126,184 @@ func TestHandleTargetGiftStartsCorrelation(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected correlation after target gift")
+	}
+}
+
+func TestCorrelateUsesAgentWhenMultipleSameUserCandidates(t *testing.T) {
+	m, _ := New()
+	m.SetSettings(Settings{TargetGifts: []string{"Rosa"}})
+
+	var mu sync.Mutex
+	var got EventData
+	m.OnEvent(func(eventType string, data EventData) {
+		if eventType == EventGiftQuestionCorr {
+			mu.Lock()
+			got = data
+			mu.Unlock()
+		}
+	})
+
+	var agentCalls int
+	m.LLMCorrelate = func(ctx context.Context, gift GiftPayload, candidates []QuestionEntry) (*QuestionEntry, string, string) {
+		agentCalls++
+		for i := range candidates {
+			if strings.Contains(candidates[i].Comment, "?") {
+				return &candidates[i], "llm", "high"
+			}
+		}
+		return nil, "", ""
+	}
+
+	// Pergunta ANTES do presente: o usuário escreve duas mensagens e depois
+	// envia o presente-alvo.
+	m.handleBridgeEvent("new-chat-message", EventData{
+		"uniqueId": "alice", "nickname": "Alice", "comment": "oi galera",
+	})
+	m.handleBridgeEvent("new-chat-message", EventData{
+		"uniqueId": "alice", "nickname": "Alice", "comment": "qual a sua música favorita?",
+	})
+	m.correlateGiftWithQuestion(GiftPayload{GiftName: "Rosa", UniqueID: "alice", Nickname: "Alice"})
+
+	if agentCalls != 1 {
+		t.Fatalf("agentCalls = %d, want 1", agentCalls)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if got == nil {
+		t.Fatal("expected gift-question-correlation event")
+	}
+	if got["question"] != "qual a sua música favorita?" {
+		t.Fatalf("question = %v", got["question"])
+	}
+	if got["method"] != "llm" {
+		t.Fatalf("method = %v, want llm", got["method"])
+	}
+	if got["confidence"] != "high" {
+		t.Fatalf("confidence = %v, want high", got["confidence"])
+	}
+}
+
+func TestCorrelateFastPathSkipsAgentForSingleCandidate(t *testing.T) {
+	m, _ := New()
+	m.SetSettings(Settings{TargetGifts: []string{"Rosa"}})
+
+	var mu sync.Mutex
+	var got EventData
+	m.OnEvent(func(eventType string, data EventData) {
+		if eventType == EventGiftQuestionCorr {
+			mu.Lock()
+			got = data
+			mu.Unlock()
+		}
+	})
+
+	agentCalls := 0
+	m.LLMCorrelate = func(ctx context.Context, gift GiftPayload, candidates []QuestionEntry) (*QuestionEntry, string, string) {
+		agentCalls++
+		return nil, "", ""
+	}
+
+	m.handleBridgeEvent("new-chat-message", EventData{
+		"uniqueId": "alice", "nickname": "Alice", "comment": "oi galera",
+	})
+	m.correlateGiftWithQuestion(GiftPayload{GiftName: "Rosa", UniqueID: "alice", Nickname: "Alice"})
+
+	if agentCalls != 0 {
+		t.Fatalf("agentCalls = %d, want 0 (caminho rápido)", agentCalls)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if got == nil {
+		t.Fatal("expected gift-question-correlation event")
+	}
+	if got["method"] != "same-user-recent-message" {
+		t.Fatalf("method = %v, want same-user-recent-message", got["method"])
+	}
+}
+
+func TestCorrelateHeuristicFallbackWhenAgentNil(t *testing.T) {
+	m, _ := New()
+	m.SetSettings(Settings{TargetGifts: []string{"Rosa"}})
+
+	var mu sync.Mutex
+	var got EventData
+	m.OnEvent(func(eventType string, data EventData) {
+		if eventType == EventGiftQuestionCorr {
+			mu.Lock()
+			got = data
+			mu.Unlock()
+		}
+	})
+
+	m.LLMCorrelate = func(ctx context.Context, gift GiftPayload, candidates []QuestionEntry) (*QuestionEntry, string, string) {
+		return nil, "", ""
+	}
+
+	m.handleBridgeEvent("new-chat-message", EventData{
+		"uniqueId": "alice", "nickname": "Alice", "comment": "oi galera",
+	})
+	m.handleBridgeEvent("new-chat-message", EventData{
+		"uniqueId": "alice", "nickname": "Alice", "comment": "qual a sua religiao?",
+	})
+	m.correlateGiftWithQuestion(GiftPayload{GiftName: "Rosa", UniqueID: "alice", Nickname: "Alice"})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got == nil {
+		t.Fatal("expected gift-question-correlation event")
+	}
+	if got["question"] != "qual a sua religiao?" {
+		t.Fatalf("question = %v", got["question"])
+	}
+	if got["method"] != "same-user-question-fallback" {
+		t.Fatalf("method = %v, want same-user-question-fallback", got["method"])
+	}
+	if got["confidence"] != "low" {
+		t.Fatalf("confidence = %v, want low", got["confidence"])
+	}
+}
+
+func TestCorrelateNoMatchWhenAgentNilAndNoHeuristic(t *testing.T) {
+	m, _ := New()
+	m.SetSettings(Settings{TargetGifts: []string{"Rosa"}})
+
+	evicted := false
+	m.OnEvent(func(eventType string, data EventData) {
+		if eventType == EventGiftQuestionCorr {
+			evicted = true
+		}
+	})
+
+	m.LLMCorrelate = func(ctx context.Context, gift GiftPayload, candidates []QuestionEntry) (*QuestionEntry, string, string) {
+		return nil, "", ""
+	}
+
+	m.handleBridgeEvent("new-chat-message", EventData{
+		"uniqueId": "bob", "nickname": "Bob", "comment": "booot",
+	})
+	m.correlateGiftWithQuestion(GiftPayload{GiftName: "Rosa", UniqueID: "alice", Nickname: "Alice"})
+
+	if evicted {
+		t.Fatal("did not expect correlation event")
+	}
+}
+
+func TestSameUserCandidates(t *testing.T) {
+	gift := GiftPayload{UniqueID: "alice", Nickname: "Alice", GiftName: "Rosa"}
+	candidates := []QuestionEntry{
+		{UniqueID: "bob", Nickname: "Bob", Comment: "oi"},
+		{UniqueID: "alice", Nickname: "Alice", Comment: "oi"},
+		{UniqueID: "ALICE", Nickname: "Alice", Comment: "qual a música?"},
+	}
+	got := sameUserCandidates(gift, candidates)
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+
+	byNick := GiftPayload{UniqueID: "", Nickname: "Alice", GiftName: "Rosa"}
+	got = sameUserCandidates(byNick, candidates)
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
 	}
 }
 

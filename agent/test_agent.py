@@ -7,6 +7,7 @@ import unittest
 from fastapi.testclient import TestClient
 
 from . import api
+from . import correlate
 from . import feedback as feedback_mod
 from . import moderate
 from . import router
@@ -417,6 +418,139 @@ class SuggestionServiceTest(unittest.TestCase):
         text = suggest.build_user_prompt("quanto custa?", "Ana")
         self.assertIn("quanto custa?", text)
         self.assertIn("Ana", text)
+
+
+class GiftQuestionCorrelatorTest(unittest.TestCase):
+    def _gift(self):
+        return {"giftName": "Rosa", "uniqueId": "alice", "nickname": "Alice"}
+
+    def test_no_candidates_returns_none(self):
+        svc = correlate.GiftQuestionCorrelator(model=_FakeModel())
+        self.assertIsNone(asyncio.run(svc.correlate(self._gift(), [])))
+
+    def test_single_candidate_skips_llm(self):
+        model = _FakeModel()
+        svc = correlate.GiftQuestionCorrelator(model=model)
+        cands = [{"uniqueId": "alice", "nickname": "Alice", "comment": "oi galera", "timestamp": 1}]
+        result = asyncio.run(svc.correlate(self._gift(), cands))
+        self.assertEqual(0, len(model.calls))
+        self.assertEqual("single-candidate", result["method"])
+        self.assertEqual("medium", result["confidence"])
+
+    def test_single_candidate_question_high_confidence(self):
+        svc = correlate.GiftQuestionCorrelator(model=_FakeModel())
+        cands = [{"uniqueId": "alice", "nickname": "Alice", "comment": "qual a sua música?", "timestamp": 1}]
+        result = asyncio.run(svc.correlate(self._gift(), cands))
+        self.assertEqual("high", result["confidence"])
+
+    def test_llm_picks_best_question(self):
+        model = _FakeModel(reply="MATCH:2")
+        svc = correlate.GiftQuestionCorrelator(model=model)
+        cands = [
+            {"uniqueId": "alice", "nickname": "Alice", "comment": "oi galera", "timestamp": 1},
+            {"uniqueId": "alice", "nickname": "Alice", "comment": "qual a sua música favorita?", "timestamp": 2},
+            {"uniqueId": "alice", "nickname": "Alice", "comment": "kkkkkk", "timestamp": 3},
+        ]
+        result = asyncio.run(svc.correlate(self._gift(), cands))
+        self.assertEqual(1, len(model.calls))
+        self.assertEqual("llm", result["method"])
+        self.assertEqual("qual a sua música favorita?", result["comment"])
+        self.assertEqual("high", result["confidence"])
+
+    def test_llm_none_falls_back_to_heuristic(self):
+        model = _FakeModel(reply="NONE")
+        svc = correlate.GiftQuestionCorrelator(model=model)
+        cands = [
+            {"uniqueId": "alice", "nickname": "Alice", "comment": "oi galera", "timestamp": 1},
+            {"uniqueId": "alice", "nickname": "Alice", "comment": "qual a sua religiao?", "timestamp": 2},
+        ]
+        result = asyncio.run(svc.correlate(self._gift(), cands))
+        self.assertEqual("heuristic-fallback", result["method"])
+        self.assertEqual("qual a sua religiao?", result["comment"])
+        self.assertEqual("medium", result["confidence"])
+
+    def test_llm_unavailable_falls_back_to_heuristic(self):
+        class _Boom:
+            async def chat(self, messages, max_tokens=512, temperature=0.1):
+                raise RuntimeError("llm down")
+
+        svc = correlate.GiftQuestionCorrelator(model=_Boom())
+        cands = [
+            {"uniqueId": "alice", "nickname": "Alice", "comment": "oi", "timestamp": 1},
+            {"uniqueId": "alice", "nickname": "Alice", "comment": "tem como cantar?", "timestamp": 2},
+        ]
+        result = asyncio.run(svc.correlate(self._gift(), cands))
+        self.assertEqual("heuristic-fallback", result["method"])
+        self.assertEqual("tem como cantar?", result["comment"])
+
+    def test_no_model_uses_heuristic(self):
+        svc = correlate.GiftQuestionCorrelator(model=None)
+        cands = [
+            {"uniqueId": "alice", "nickname": "Alice", "comment": "oi galera", "timestamp": 1},
+            {"uniqueId": "alice", "nickname": "Alice", "comment": "quando termina?", "timestamp": 2},
+        ]
+        result = asyncio.run(svc.correlate(self._gift(), cands))
+        self.assertEqual("heuristic-fallback", result["method"])
+        self.assertEqual("quando termina?", result["comment"])
+
+    def test_buffer_candidates_from_agent_buffer(self):
+        buf = MessageBuffer()
+        buf._add_message({"uniqueId": "alice", "nickname": "Alice", "comment": "oi", "timestamp": 1})
+        buf._add_message({"uniqueId": "bob", "nickname": "Bob", "comment": "qual o nome?", "timestamp": 2})
+        buf._add_message({"uniqueId": "alice", "nickname": "Alice", "comment": "qual a sua música?", "timestamp": 3})
+        svc = correlate.GiftQuestionCorrelator(model=None, buffer=buf)
+        cands = svc.buffer_candidates(self._gift())
+        self.assertEqual(2, len(cands))
+        self.assertTrue(all(m["uniqueId"] == "alice" for m in cands))
+        # Sem candidatos do monitor, o correlator usa o próprio buffer.
+        result = asyncio.run(svc.correlate(self._gift()))
+        self.assertEqual("qual a sua música?", result["comment"])
+
+
+class CorrelateGiftEndpointTest(unittest.TestCase):
+    def test_ok_with_candidates(self):
+        api.app.state.correlator = correlate.GiftQuestionCorrelator(_FakeModel(reply="MATCH:2"))
+        client = TestClient(api.app)
+        payload = {
+            "gift": {"giftName": "Rosa", "uniqueId": "alice", "nickname": "Alice"},
+            "isTarget": True,
+            "candidates": [
+                {"uniqueId": "alice", "nickname": "Alice", "comment": "oi", "timestamp": 1},
+                {"uniqueId": "alice", "nickname": "Alice", "comment": "qual a sua música?", "timestamp": 2},
+            ],
+        }
+        resp = client.post("/correlate-gift", json=payload)
+        self.assertEqual(200, resp.status_code)
+        body = resp.json()
+        self.assertEqual("qual a sua música?", body["match"]["comment"])
+        self.assertEqual("llm", body["method"])
+        self.assertEqual("high", body["confidence"])
+
+    def test_disabled_when_not_target_gift(self):
+        api.app.state.correlator = correlate.GiftQuestionCorrelator(_FakeModel())
+        client = TestClient(api.app)
+        resp = client.post("/correlate-gift", json={
+            "gift": {"giftName": "Rosa", "uniqueId": "alice", "nickname": "Alice"},
+            "isTarget": False,
+            "candidates": [{"uniqueId": "alice", "nickname": "Alice", "comment": "oi", "timestamp": 1}],
+        })
+        self.assertEqual(200, resp.status_code)
+        self.assertIsNone(resp.json()["match"])
+
+    def test_missing_gift_name(self):
+        client = TestClient(api.app)
+        resp = client.post("/correlate-gift", json={"gift": {"uniqueId": "alice"}})
+        self.assertEqual(400, resp.status_code)
+
+    def test_no_candidates_and_no_buffer(self):
+        api.app.state.correlator = correlate.GiftQuestionCorrelator(_FakeModel())
+        client = TestClient(api.app)
+        resp = client.post("/correlate-gift", json={
+            "gift": {"giftName": "Rosa", "uniqueId": "alice", "nickname": "Alice"},
+            "candidates": [],
+        })
+        self.assertEqual(200, resp.status_code)
+        self.assertIsNone(resp.json()["match"])
 
 
 class SuggestEndpointTest(unittest.TestCase):

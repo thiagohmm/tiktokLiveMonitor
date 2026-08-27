@@ -35,8 +35,11 @@ class LiveBuffer(Protocol):
     def active_participants(self) -> list: ...
     def top_repetitions(self, limit: int = 10) -> list: ...
     def top_gifts(self, limit: int = 10) -> list: ...
+    def participant_gift_matrix(self, limit: int | None = None) -> list: ...
+    def gift_chat_correlation(self) -> dict: ...
     def recent_flagged(self, limit: int = 20) -> list: ...
     def participant_uid_by_name(self, name: str) -> str | None: ...
+    def recent_messages_by_user(self, uid: str, nickname: str, limit: int = 20) -> list: ...
     def total_messages(self) -> int: ...
 
 
@@ -170,6 +173,60 @@ class MessageBuffer:
             for (nickname, gift_name), count in agg.most_common(limit)
         ]
 
+    def participant_gift_matrix(self, limit=None):
+        """Cruzamento presentes x mensagens por participante (SRP).
+
+        Cruza os usuários que deram presentes com os que comentaram,
+        permitindo ver quem dá presentes também comenta (e vice-versa). A
+        ordêação prioriza quem dá presentes e, em seguida, o volume
+        combinado de presentes e mensagens.
+        """
+        msgs_by_uid = defaultdict(int)
+        gifts_by_uid = defaultdict(int)
+        nicks = {}
+
+        for m in self.messages:
+            key = _norm_id(m["uniqueId"]) or "?"
+            msgs_by_uid[key] += 1
+            nicks.setdefault(key, m["nickname"] or "")
+
+        for (uid, nickname, _gift_name), count in self.gift_counts.items():
+            gifts_by_uid[uid] += count
+            nicks.setdefault(uid, nickname or "")
+
+        rows = []
+        for uid in set(msgs_by_uid) | set(gifts_by_uid):
+            rows.append({
+                "user": nicks.get(uid) or uid,
+                "uid": uid,
+                "gifts": gifts_by_uid.get(uid, 0),
+                "messages": msgs_by_uid.get(uid, 0),
+                "gave_gifts": uid in gifts_by_uid,
+                "commented": uid in msgs_by_uid,
+            })
+        rows.sort(key=lambda r: (not r["gave_gifts"], -r["gifts"], -r["messages"]))
+        return rows[:limit] if limit is not None else rows
+
+    def gift_chat_correlation(self):
+        """Resumo da correlação presentes <-> chat.
+
+        Resume, em um dicionário, quantos participantes deram presentes,
+        quantos comentaram e quantos fizeram as duas coisas. A lista
+        completa (por participante) fica em participant_gift_matrix.
+        """
+        rows = self.participant_gift_matrix()
+        both = [r for r in rows if r["gave_gifts"] and r["commented"]]
+        gifts_only = [r for r in rows if r["gave_gifts"] and not r["commented"]]
+        comments_only = [r for r in rows if r["commented"] and not r["gave_gifts"]]
+        return {
+            "total_participants": len(rows),
+            "gift_givers": len({r["uid"] for r in rows if r["gave_gifts"]}),
+            "commenters": len({r["uid"] for r in rows if r["commented"]}),
+            "both": len(both),
+            "gifts_only": len(gifts_only),
+            "comments_only": len(comments_only),
+            "rows": rows,
+        }
     def recent_flagged(self, limit=20):
         return list(self.flagged)[-limit:]
 
@@ -181,3 +238,21 @@ class MessageBuffer:
             if _norm_id(m["nickname"]) == needle or _norm_id(m["uniqueId"]) == needle:
                 return m["uniqueId"]
         return None
+
+    def recent_messages_by_user(self, uid, nickname, limit=20):
+        """Últimas mensagens de um usuário (por uid; cai para nickname).
+
+        Usado pelo correlator presente<->chat para verificar as últimas
+        mensagens do doador de um presente-alvo.
+        """
+        uid = _norm_id(uid)
+        nickname = str(nickname or "").strip().lower()
+        if not uid and not nickname:
+            return []
+        rows = []
+        for m in self.messages:
+            if uid and _norm_id(m["uniqueId"]) == uid:
+                rows.append(m)
+            elif nickname and not uid and _norm_id(m["nickname"]) == nickname:
+                rows.append(m)
+        return rows[-limit:]

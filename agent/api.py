@@ -16,7 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from . import config, embed, feedback, llm, moderate, sse, suggest, summary, vectors
+from . import config, correlate, embed, feedback, llm, moderate, sse, suggest, summary, vectors
 from .buffer import MessageBuffer
 from .history import AskAIService
 from .llm_worker import LlamaWorker
@@ -66,6 +66,11 @@ async def lifespan(app: FastAPI):
         embedder=embedder, store=vector_store, model=model, rules=rules, monitor=monitor
     )
 
+    # Correlação presente<->chat usa um cliente LLM com timeout curto:
+    # o monitor Go aguarda no máximo 8s e cai para heurística local.
+    correlate_model = llm.LlamaServerChatModel(timeout=config.CORRELATE_TIMEOUT)
+    correlator = correlate.GiftQuestionCorrelator(model=correlate_model, buffer=buffer)
+
     ask_ai = AskAIService(model=model, monitor=monitor, buffer=buffer)
     copilot = Copilot(
         model=model,
@@ -85,6 +90,7 @@ async def lifespan(app: FastAPI):
     app.state.copilot = copilot
     app.state.summarizer = summarizer
     app.state.suggester = suggester
+    app.state.correlator = correlator
     app.state.sse = sse_client
     app.state.moderator = moderator
     app.state.embedder = embedder
@@ -230,6 +236,49 @@ async def moderate_comment(request: Request):
     except Exception as exc:  # noqa: BLE001
         return JSONResponse(status_code=503, content={"error": f"moderation unavailable: {exc}"})
     return result
+
+
+@app.post("/correlate-gift")
+async def correlate_gift(request: Request):
+    """Correlação presente-alvo <-> chat (chamado pelo monitor Go).
+
+    O monitor só chama quando o presente é um presente-alvo escolhido pelo
+    streamer (``isTarget``); caso contrário a função não é ativada.
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse(status_code=400, content={"error": "invalid body"})
+    if not isinstance(body, dict):
+        return JSONResponse(status_code=400, content={"error": "invalid body"})
+    gift = body.get("gift")
+    if not isinstance(gift, dict) or not str(gift.get("giftName") or "").strip():
+        return JSONResponse(status_code=400, content={"error": "gift.giftName is required"})
+    if body.get("isTarget") is False:
+        return {"match": None, "method": "", "confidence": ""}
+    candidates = body.get("candidates")
+    if not isinstance(candidates, list):
+        candidates = None
+    correlator = getattr(request.app.state, "correlator", None)
+    if correlator is None:
+        return JSONResponse(status_code=503, content={"error": "correlation unavailable"})
+    try:
+        match = await correlator.correlate(gift, candidates)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(status_code=500, content={"error": f"correlation error: {exc}"})
+    if match is None:
+        return {"match": None, "method": "", "confidence": ""}
+    return {
+        "match": {
+            "uniqueId": match.get("uniqueId", ""),
+            "nickname": match.get("nickname", ""),
+            "comment": match.get("comment", ""),
+            "timestamp": match.get("timestamp"),
+            "isFollower": bool(match.get("isFollower")),
+        },
+        "method": match.get("method", ""),
+        "confidence": match.get("confidence", ""),
+    }
 
 
 @app.post("/ask-ai")
