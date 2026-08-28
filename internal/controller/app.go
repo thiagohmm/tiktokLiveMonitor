@@ -14,7 +14,6 @@ import (
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/ranking"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/report"
-	"github.com/thiagohmm/tiktok-live-monitor/internal/suggestions"
 )
 
 // MessageCache is an in-memory write-behind buffer for user messages.
@@ -29,9 +28,7 @@ type AppController struct {
 	repo          model.Repository
 	msgCache      MessageCache
 	reportGen  *report.Generator
-	suggEngine *suggestions.Engine
 	ranker     *ranking.Ranker
-	monCtx        context.Context
 	monCancel     context.CancelFunc
 	monCancelMu   sync.Mutex
 	flagSeen      map[string]struct{}
@@ -48,66 +45,11 @@ func NewAppController(
 		monitor:    mon,
 		repo:       repo,
 		reportGen:  report.New(repo),
-		suggEngine: suggestions.New(repo),
 		ranker:     ranking.New(ranking.DefaultWeights),
 		flagSeen:   make(map[string]struct{}),
 	}
-	c.registerFeatureHandlers()
 	return c
 }
-
-// SetAgentBaseURL configures the Python agent URL used to generate reply suggestions.
-func (c *AppController) SetAgentBaseURL(baseURL string) {
-	if c.suggEngine != nil {
-		c.suggEngine.SetAgentBaseURL(baseURL)
-	}
-}
-
-// registerFeatureHandlers wires suggestions to the monitor event stream.
-func (c *AppController) registerFeatureHandlers() {
-	mon := c.monitor
-	if mon == nil {
-		return
-	}
-	// Suggestions run on every chat message in a goroutine so the event
-	// pipeline (chat, flagged-message and correlation events) is not blocked.
-	mon.OnEvent(func(eventType string, data monitor.EventData) {
-		if eventType != monitor.EventChatMessage {
-			return
-		}
-		go c.handleSuggestionEvent(data)
-	})
-}
-
-func (c *AppController) handleSuggestionEvent(data monitor.EventData) {
-	if c.suggEngine == nil {
-		return
-	}
-	nickname := eventString(data, "nickname")
-	uniqueID := eventString(data, "uniqueId", "userId")
-	comment := eventString(data, "comment")
-	state := c.monitor.GetState()
-	if state.Username == "" {
-		return
-	}
-	cand, ok := c.suggEngine.Suggest(c.monCtx, state.Username, uniqueID, nickname, comment)
-	if !ok {
-		return
-	}
-	// Emit a suggestion event without auto-publishing.
-	c.monitor.Emit(suggestions.EventSuggested, monitor.EventData{
-		"uniqueId":  cand.UniqueID,
-		"nickname":  cand.Nickname,
-		"question":  cand.Message,
-		"suggested": cand.Suggested,
-		"reason":    cand.Reason,
-		"timestamp": cand.Timestamp,
-	})
-}
-
-// handleModerationEvent was removed: message moderation (rules + RAG + LLM)
-// now lives entirely in the Python agent, which reports flags back through
-// POST /api/moderation/flag → ReportExternalFlag.
 
 // --- Monitor Actions ---
 
@@ -115,7 +57,6 @@ func (c *AppController) handleSuggestionEvent(data monitor.EventData) {
 func (c *AppController) StartMonitoring(ctx context.Context, username string) error {
 	c.monCancelMu.Lock()
 	monCtx, cancel := context.WithCancel(context.Background())
-	c.monCtx = monCtx
 	c.monCancel = cancel
 	c.monCancelMu.Unlock()
 

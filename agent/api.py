@@ -16,13 +16,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from . import config, correlate, embed, feedback, llm, moderate, sse, suggest, summary, vectors
+from . import config, correlate, embed, feedback, llm, moderate, sse, summary, vectors
 from .buffer import MessageBuffer
 from .history import AskAIService
 from .llm_worker import LlamaWorker
 from .router import Copilot, ToolRegistry
 from .rules import RulesEngine
-from .suggest import SuggestionService
 from .tools import MonitorClient
 
 log = logging.getLogger("agent.api")
@@ -80,7 +79,6 @@ async def lifespan(app: FastAPI):
         store=vector_store,
     )
     summarizer = summary.LiveSummarizer(model, buffer)
-    suggester = SuggestionService(model)
     sse_client = sse.SSEClient([buffer, moderator])
 
     app.state.buffer = buffer
@@ -89,7 +87,6 @@ async def lifespan(app: FastAPI):
     app.state.ask_ai = ask_ai
     app.state.copilot = copilot
     app.state.summarizer = summarizer
-    app.state.suggester = suggester
     app.state.correlator = correlator
     app.state.sse = sse_client
     app.state.moderator = moderator
@@ -297,26 +294,3 @@ async def ask_ai(request: Request):
     except Exception as exc:  # noqa: BLE001
         return JSONResponse(status_code=500, content={"error": f"AI error: {exc}"})
     return {"question": question, "answer": answer}
-
-
-@app.post("/suggest")
-async def suggest_reply(request: Request):
-    """Gera resposta sugerida (curta) para uma pergunta do chat ao vivo."""
-    try:
-        body = await request.json()
-    except Exception:  # noqa: BLE001
-        return JSONResponse(status_code=400, content={"error": "invalid body"})
-    question = str(body.get("question") or body.get("comment") or "").strip()
-    if not question:
-        return JSONResponse(status_code=400, content={"error": "question is required"})
-    nickname = str(body.get("nickname") or "").strip() or None
-    suggester = getattr(request.app.state, "suggester", None)
-    if suggester is None:
-        return JSONResponse(status_code=503, content={"error": "suggestions unavailable"})
-    try:
-        result = await suggester.suggest(question, nickname=nickname)
-    except Exception as exc:  # noqa: BLE001
-        return JSONResponse(status_code=503, content={"error": f"suggestions unavailable: {exc}"})
-    if result is None:
-        return {"suggested": "", "reason": ""}
-    return result

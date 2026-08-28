@@ -888,7 +888,7 @@ func (m *Monitor) StopMonitoring() {
 }
 
 // Emit dispatches an event to all registered handlers. It is exported so the
-// controller layer can surface derived events (e.g. reply suggestions).
+// controller layer can surface derived events.
 func (m *Monitor) Emit(eventType string, data EventData) {
 	m.emit(eventType, data)
 }

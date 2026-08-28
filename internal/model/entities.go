@@ -121,13 +121,6 @@ type AnomalySummary struct {
 	Count    int    `json:"count"`
 }
 
-// SuggestedResponse is an AI-prepared reply for a question (not auto-published).
-type SuggestedResponse struct {
-	Question  string `json:"question"`
-	Suggested string `json:"suggested"`
-	Reason    string `json:"reason"`
-}
-
 // UserProfile aggregates a participant's full history across lives.
 type UserProfile struct {
 	UniqueID      string            `json:"uniqueId"`
