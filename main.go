@@ -60,7 +60,6 @@ func main() {
 		log.Printf("[Agent] Falha ao iniciar agente Python: %v", err)
 	}
 	defer agentMgr.Stop()
-	ctrl.SetAgentBaseURL(agentMgr.BaseURL())
 
 	// Correlação presente<->chat: a IA do agente Python escolhe, entre as
 	// últimas mensagens do doador, a pergunta que melhor se encaixa como

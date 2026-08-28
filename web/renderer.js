@@ -748,7 +748,6 @@ const adminLivesRefreshBtn = document.getElementById('adminLivesRefreshBtn');
 const adminLivesMoreBtn = document.getElementById('adminLivesMoreBtn');
 let adminLivesLimit = 100;
 const refreshRankingBtn = document.getElementById('refreshRankingBtn');
-const suggestionsContainer = document.getElementById('suggestionsContainer');
 const generateReportBtn = document.getElementById('generateReportBtn');
 const reportWrap = document.getElementById('reportWrap');
 const reportSummary = document.getElementById('reportSummary');
@@ -2505,14 +2504,6 @@ function setupEventStream() {
         markUserRed(JSON.parse(event.data));
     });
 
-    eventSource.addEventListener('suggested-response', event => {
-        try {
-            addSuggestion(JSON.parse(event.data));
-        } catch (error) {
-            console.error('[Frontend] Falha ao registrar resposta sugerida:', error, event.data);
-        }
-    });
-
     eventSource.addEventListener('settings-update', event => {
         renderTargetGifts();
     });
@@ -2628,35 +2619,6 @@ function renderRanking(ranking) {
 
         rankingTableBody.appendChild(tr);
     });
-}
-
-// --- Respostas Sugeridas ---
-function addSuggestion(data) {
-    if (!suggestionsContainer) return;
-    const card = document.createElement('div');
-    card.className = 'suggestion-card';
-
-    const q = document.createElement('div');
-    q.className = 'suggestion-q';
-    q.textContent = 'P: ' + (data.question || '(pergunta)');
-    card.appendChild(q);
-
-    const a = document.createElement('div');
-    a.className = 'suggestion-a';
-    a.textContent = data.suggested || '';
-    card.appendChild(a);
-
-    if (data.reason) {
-        const reason = document.createElement('div');
-        reason.className = 'suggestion-reason';
-        reason.textContent = '💡 ' + data.reason;
-        card.appendChild(reason);
-    }
-
-    suggestionsContainer.prepend(card);
-    while (suggestionsContainer.children.length > 25) {
-        suggestionsContainer.lastChild.remove();
-    }
 }
 
 // --- Relatório Pós-Live ---
