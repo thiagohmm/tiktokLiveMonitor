@@ -40,7 +40,644 @@ const GIFT_TRANSLATIONS = {
     "love bang": "Bomba de Amor",
     "love letter": "Carta de Amor",
     "i love you": "Eu Te Amo",
-    "applause": "Palmas"
+    "applause": "Palmas",
+    "a shard of hope": "Um Fragmento de Esperança",
+    "accelerator crown": "Coroa Aceleradora",
+    "adam’s dream": "O Sonho de Adam",
+    "alien buddy": "Amigo Alienígena",
+    "amped up": "Animadinho",
+    "amusement park": "Parque de Diversões",
+    "animal band": "Banda Animal",
+    "arabian cheetah": "Guepardo Árabe",
+    "arcane card": "Carta Arcana",
+    "arepas": "Arepas",
+    "astrobear": "Urso Astro",
+    "aurora groove": "Groove Aurora",
+    "autumn leaves": "Folhas de Outono",
+    "autumn picnic": "Piquenique de Outono",
+    "baby chicks": "Pintinhos",
+    "baby hippo": "Hipopotaminho",
+    "backing monkey": "Macaco de Apoio",
+    "baglama": "Baglama",
+    "balloon crown": "Coroa de Balão",
+    "banana peel": "Casca de Banana",
+    "bat headwear": "Chapeuzinho de Morcego",
+    "batting cutie": "Doce Batedor",
+    "battle champion": "Campeão da Batalha",
+    "batwing hat": "Chapéu de Asa de Morcego",
+    "beach date": "Encontro na Praia",
+    "beach day": "Dia de Praia",
+    "beach maracas": "Maracas de Praia",
+    "beat wings": "Asas de Batida",
+    "become kitten": "Vira Gatinho",
+    "beijo": "Beijo",
+    "big shout out": "Saudação Especial",
+    "black paw": "Pata Preta",
+    "black wolf": "Lobo Preto",
+    "blast drum": "Tambor Explosivo",
+    "bloom brass": "Sopro Florescente",
+    "bloom melody": "Melodia Florescente",
+    "blooming heart": "Coração Florescendo",
+    "blooming ribbons": "Laços Florescentes",
+    "blossom fairy": "Fada das Flores",
+    "blow a kiss": "Sopro de Beijo",
+    "blow rosy kisses": "Sopro de Beijos da Rosie",
+    "blue lightning": "Relâmpago Azul",
+    "boné": "Boné",
+    "bounce speakers": "Caixas de Som Saltitantes",
+    "bouquet flower": "Buquê de Flores",
+    "bowknot": "Laço",
+    "box of destiny": "Caixa do Destino",
+    "boxing gloves": "Luvas de Boxe",
+    "bravo!": "Bravo!",
+    "brazilian vibe cap": "Boné Vibe Brasileira",
+    "brown paw": "Pata Marrom",
+    "bubble gum": "Balinha",
+    "bubbly kiss": "Beijo Espumante",
+    "budding heart": "Coração Brota",
+    "bunny crown": "Coroa de Coelhinho",
+    "bunny dj": "DJ Coelhinho",
+    "butterfly for you": "Borboleta Para Você",
+    "butterfly vibe": "Vibe Borboleta",
+    "by the glaziers": "Pelos Vidraceiros",
+    "cactus shuffle": "Shuffle de Cacto",
+    "café": "Café",
+    "cake slice": "Fatia de Bolo",
+    "candy blast": "Explosão de Doces",
+    "candy bouquet": "Buquê de Doces",
+    "candy loot": "Saque de Doces",
+    "candy puffs": "Sonhos de Doces",
+    "captured vocals": "Vocais Capturados",
+    "capybara": "Capivara",
+    "carro esportivo": "Carro Esportivo",
+    "castle fantasy": "Fantasia de Castelo",
+    "caterpillar chaos": "Caos da Lagarta",
+    "catrina": "Catrina",
+    "celebration hat": "Chapéu de Celebração",
+    "celebration tape": "Fita de Celebração",
+    "celebration time": "Hora da Celebração",
+    "cello romance": "Romance de Cello",
+    "charmer bow": "Laço Encantador",
+    "chasing the dream": "Perseguindo o Sonho",
+    "chatting popcorn": "Pipoca Tagarela",
+    "cheeky pup": "Filhote Travesso",
+    "cheer for you": "Torcida Para Você",
+    "cheer mic": "Microfone de Torcida",
+    "cheer you up": "Te Animando",
+    "cheering crab": "Caranguejo Torcedor",
+    "cheering towel": "Toalha de Torcida",
+    "cheetah": "Guepardo",
+    "chick stampede": "Esmagamento de Pintinhos",
+    "chirpy kisses": "Beijos Chirotantes",
+    "chocolate": "Chocolate",
+    "chopin in the rain": "Chopin na Chuva",
+    "chrono rewinder": "Rebobinador do Tempo",
+    "city pop": "City Pop",
+    "clap clap": "Clap Clap",
+    "cloud dj": "DJ das Nuvens",
+    "clover hat": "Chapéu de Trevo",
+    "clown boogie": "Boogie de Palhaço",
+    "club cheers": "Brindes do Clube",
+    "club music": "Música do Clube",
+    "club power": "Poder do Clube",
+    "club victory": "Vitória do Clube",
+    "coco": "Coco",
+    "coconut drink": "Bebida de Coco",
+    "coconut juice": "Suco de Coco",
+    "coffee magic": "Magia do Café",
+    "colorful wings": "Asas Coloridas",
+    "come on!": "Vamos!",
+    "community gift": "Presente da Comunidade",
+    "community heart": "Coração da Comunidade",
+    "community legends": "Lendas da Comunidade",
+    "community power": "Poder da Comunidade",
+    "community rally": "Aclamação da Comunidade",
+    "community style": "Estilo da Comunidade",
+    "confete": "Confete",
+    "confetti bear": "Urso de Confete",
+    "congratulations": "Parabéns",
+    "cooper flies home": "Cooper Voa Para Casa",
+    "coração": "Coração",
+    "coração batendo": "Coração Batendo",
+    "coração de dedo": "Coração de Dedo",
+    "coração de mão": "Coração de Mão",
+    "coral": "Coral",
+    "corgi": "Corgi",
+    "corgi's drone show": "Show de Drone do Corgi",
+    "coroa": "Coroa",
+    "courage potion": "Poção de Coragem",
+    "cow-napping": "Roubo de Vaca",
+    "cozy xmas set": "Kit Natal Aconchegante",
+    "craft dreamer": "Sonhador Artesão",
+    "creeper": "Creeper",
+    "crocodile": "Crocodilo",
+    "crowd cheering": "Torcida da Multidão",
+    "crystal dreams": "Sonhos de Cristal",
+    "crystal heart": "Coração de Cristal",
+    "cub on clouds": "Filhote nas Nuvens",
+    "cupid koala": "Koala Cupido",
+    "cyber roar": "Rugido Cibernético",
+    "daylight debut": "Estreia ao Sol",
+    "desert blitzy": "Blitzy do Deserto",
+    "desert cooper": "Cooper do Deserto",
+    "desert diny": "Diny do Deserto",
+    "desert survivals": "Sobreviventes do Deserto",
+    "desert tom": "Tom do Deserto",
+    "desert wolf": "Lobo do Deserto",
+    "devoted heart": "Coração Devoto",
+    "diamond flight": "Voo de Diamante",
+    "diamond gun": "Pistola de Diamante",
+    "diamond shield": "Escudo de Diamante",
+    "diamond tree": "Árvore de Diamante",
+    "divine fingers": "Dedos Divinos",
+    "dj glasses": "Óculos de DJ",
+    "dj set": "DJ Set",
+    "dj wave": "Onda DJ",
+    "djembe master": "Mestre Djembe",
+    "doll new year greeting": "Saudação de Ano Novo da Boneca",
+    "doughnut": "Donut",
+    "dragon crown": "Coroa de Dragão",
+    "dragon flame": "Chama do Dragão",
+    "dream big": "Sonhe Grande",
+    "dream ride": "Viagem dos Sonhos",
+    "dreamy hat": "Chapéu Sonhador",
+    "dreamy strings": "Cordas Sonhadoras",
+    "drum genius": "Gênio do Tambor",
+    "drum hamster": "Hamster Tamborilador",
+    "drum pop": "Pop de Tambor",
+    "duit raya": "Duit Raya",
+    "dynamic music": "Música Dinâmica",
+    "echo mom": "Mãe Eco",
+    "eid gift box": "Caixa de Presente do EID",
+    "electro vibes": "Vibes Eletrônicas",
+    "electronic love song": "Canção de Amor Eletrônica",
+    "ellie the elephant": "Ellie, a Elefanta",
+    "encore clap": "Palmas do Bis",
+    "encore ticket": "Ingresso de Bis",
+    "energy capsule": "Cápsula de Energia",
+    "epic pianist": "Pianista Épico",
+    "exclusive spark": "Faísca Exclusiva",
+    "face-pulling": "Puxando o Rosto",
+    "fairy hide": "Disfarce de Fada",
+    "fairy locket": "Medalhão de Fada",
+    "fairy wings": "Asas de Fada",
+    "falcon": "Falcão",
+    "fan cat": "Gato Torcedor",
+    "fandom cheer": "Torcida FANDOM",
+    "fandom fan": "Fã FANDOM",
+    "fandom fever": "Febre FANDOM",
+    "fandom stamp": "Carimbo FANDOM",
+    "fantastic fly love": "Voo do Amor Fantástico",
+    "feather mask": "Máscara de Pena",
+    "feather tiara": "Tiara de Pena",
+    "fênix": "Fênix",
+    "festival bracelet": "Pulseira do Festival",
+    "fiery dragon": "Dragão Flamejante",
+    "fiesta accordion": "Acordeão de Festa",
+    "fire phoenix": "Fênix de Fogo",
+    "firelight kingdom": "Reino da Luz do Fogo",
+    "firepit blitzy": "Blitzy da Fogueira",
+    "firepit cooper": "Cooper da Fogueira",
+    "firepit diny": "Diny da Fogueira",
+    "firepit tom": "Tom da Fogueira",
+    "flamingo floaty": "Flamingo Flutuante",
+    "flamingo groove": "Groove do Flamingo",
+    "floating octopus": "Polvo Flutuante",
+    "floral serenade": "Serenata Floral",
+    "flower headband": "Tiara de Flores",
+    "flower show": "Show de Flores",
+    "fluffy buddies": "Amigos Fofochos",
+    "fly love": "Voo do Amor",
+    "flying jets": "Jatos Voadores",
+    "fogos de artifício": "Fogos de Artifício",
+    "fondue": "Fondue",
+    "forest beginnings": "Começos da Floresta",
+    "forest elf": "Elfo da Floresta",
+    "forever rosa": "Rosa Para Sempre",
+    "fox legend": "Lenda da Raposa",
+    "freestyle": "Freestyle",
+    "friendship necklace": "Colar de Amizade",
+    "frog conductor": "Sapo Regente",
+    "fruit friends": "Amigos Frutinhas",
+    "fully bloomed sakura": "Sakura em Plena Florescimento",
+    "funky hatter": "Chapéu Funky",
+    "futebol americano": "Futebol Americano",
+    "future city": "Cidade do Futuro",
+    "future encounter": "Encontro do Futuro",
+    "future journey": "Jornada do Futuro",
+    "g.o.a.t. busker": "Músico de Rua G.O.A.T.",
+    "galáxia": "Galáxia",
+    "galaxy's bestest": "Amizade Galáctica",
+    "garland headpiece": "Adorno de Flores",
+    "gate to treasure": "Porta do Tesouro",
+    "gem gun": "Pistola de Joias",
+    "getting ready": "Preparando",
+    "gingerbread man": "Homem de Biscoito",
+    "girafa": "Girafa",
+    "glorious chef": "Chef Glorioso",
+    "glow stick": "Bastão Luminoso",
+    "go hamster": "Vai, Hamster!",
+    "go home": "Vá Para Casa",
+    "go popular": "Vai Virar Popular",
+    "goal highlight-us": "Golaço em Destaque (US)",
+    "gold necklace": "Colar Dourado",
+    "golden gallop": "Galope Dourado",
+    "good job": "Bom Trabalho",
+    "gorilla": "Gorila",
+    "grand prix stage": "Palco Grand Prix",
+    "grand show": "Show Grandioso",
+    "greeting card": "Cartão de Saudação",
+    "greeting heart": "Coração de Saudação",
+    "groove clarinet": "Clarineta Groove",
+    "groove guitar": "Guitarra Groove",
+    "groove straw": "Canudo Groove",
+    "guanajuato": "Guanajuato",
+    "guarda-chuva": "Guarda-Chuva",
+    "guardian's pledge": "Juramento do Guardião",
+    "gyeongbokgung": "Gyeongbokgung",
+    "halloween fun hat": "Chapéu Divertido de Halloween",
+    "hands up": "Mãos Para Cima",
+    "hanging lights": "Luzes Penduradas",
+    "happy party": "Festa Alegre",
+    "hat and mustache": "Chapéu e Bigode",
+    "hat of joy": "Chapéu da Alegria",
+    "health potion": "Poção de Vida",
+    "heart gaze": "Olhar de Coração",
+    "heart guitar": "Guitarra de Coração",
+    "heart hood": "Capuz de Coração",
+    "heart me": "Me Ama",
+    "heart my earthling": "Amo Minha Terrestre",
+    "heartbeat keys": "Teclas de Batida",
+    "heartbeats": "Batimentos",
+    "hearts": "Corações",
+    "here we go": "Vamos Lá",
+    "hero landing": "Pouso Heroico",
+    "hi! rosie!": "Oi! Rosie!",
+    "hip-hop hen": "Galinha Hip-Hop",
+    "hive escape": "Fuga da Colmeia",
+    "honey strummer": "Dedilhado Meloso",
+    "hug it better": "Abraço Melhor",
+    "hydrangea sea": "Mar de Hortênsias",
+    "i like what i see": "Gosto do Que Vejo",
+    "ice cream cone": "Sorvete de Cone",
+    "ice cream mic": "Microfone de Sorvete",
+    "ice cream truck": "Caminhão de Sorvete",
+    "ignition check": "Checagem de Partida",
+    "infinite heart": "Coração Infinito",
+    "interstellar": "Interestelar",
+    "interstellar trek": "Viagem Interestelar",
+    "intimacy": "Intimidade",
+    "invincible hammer": "Martelo Invencível",
+    "it's match time": "É Hora do Jogo",
+    "join butterflies": "Junte-se às Borboletas",
+    "joker ball": "Bola do Coringa",
+    "jollie the joy bean": "Jollie, o Feijão da Alegria",
+    "jollie's community": "Comunidade da Jollie",
+    "jollie's heartland": "Terra do Coração da Jollie",
+    "journey pass": "Passe de Jornada",
+    "joy floats": "Flutuações da Alegria",
+    "juicy cap": "Boné Suculento",
+    "julius the champion": "Julius, o Campeão",
+    "jungle blitzy": "Blitzy da Selva",
+    "jungle cooper": "Cooper da Selva",
+    "jungle diny": "Diny da Selva",
+    "jungle tom": "Tom da Selva",
+    "kangaroo": "Canguru",
+    "key master": "Mestre das Teclas",
+    "kicker challenge": "Desafio do Batedor",
+    "kindom of night": "Reino da Noite",
+    "king leonardo": "Rei Leonardo",
+    "kitten kneading": "Gatinho Sovando",
+    "knight": "Cavaleiro",
+    "kudos for my star": "Elogios Para Minha Estrela",
+    "labor power": "Poder do Trabalho",
+    "last riff roar": "Último Rugido do Riff",
+    "laughing taco": "Taco Risonho",
+    "league ball": "Bola da Liga",
+    "league countdown": "Contagem Regressiva da Liga",
+    "league fandom": "Fandom da Liga",
+    "league trophy": "Troféu da Liga",
+    "leão": "Leão",
+    "legend marcellus": "Lenda Marcellus",
+    "legendary aegis": "Égide Lendária",
+    "leon and lili": "Leon e Lili",
+    "leon and lion": "Leon e o Leão",
+    "leon the kitten": "Leon, o Gatinho",
+    "leon's sigil cape": "Capa do Símbolo de Leon",
+    "leopard": "Leopardo",
+    "let butterfly dances": "Deixe as Borboletas Dançarem",
+    "level ship": "Navio de Nível",
+    "level-up sparks": "Faíscas de Level-up",
+    "level-up spectacle": "Espetáculo de Level-up",
+    "level-up spotlight": "Holofote de Level-up",
+    "light castle": "Castelo de Luz",
+    "like-pop": "Like-Pop",
+    "lili the leopard": "Lili, a Leopardo",
+    "little crown": "Coroa Pequena",
+    "live pro badge": "Emblema LIVE Pro",
+    "live ranking crown": "Coroa do Ranking LIVE",
+    "live ranking headband": "Faixa do Ranking LIVE",
+    "live ranking medal": "Medalha do Ranking LIVE",
+    "live ranking party": "Festa do Ranking LIVE",
+    "live ranking ticket": "Ingresso do Ranking LIVE",
+    "lobo": "Lobo",
+    "look up": "Olhe Para Cima",
+    "lost in your music": "Perdido na Sua Música",
+    "love call": "Chamada de Amor",
+    "love drop": "Gota de Amor",
+    "love flight": "Voo do Amor",
+    "love glasses": "Óculos do Amor",
+    "love in scent": "Amor no Perfume",
+    "love painting": "Pintura de Amor",
+    "love you": "Te Amo",
+    "love you so much": "Te Amo Muito",
+    "lover’s lock": "Tranca do Amor",
+    "lucky airdrop box": "Caixa de Airdrop da Sorte",
+    "lucky crown": "Coroa da Sorte",
+    "lucky pony": "Pônei da Sorte",
+    "luvx cheer": "Torcida LUVX",
+    "magic accordion": "Acordeão Mágico",
+    "magic genie": "Gênio Mágico",
+    "magic potion": "Poção Mágica",
+    "magic prop": "Adereço Mágico",
+    "magic rhythm": "Ritmo Mágico",
+    "magic world": "Mundo Mágico",
+    "magnifying glass": "Lupa",
+    "majestic hearts": "Corações Majestosos",
+    "manifesting": "Manifestando",
+    "mark of love": "Selo do Amor",
+    "marked with love": "Marcado com Amor",
+    "maro spider man": "Maro Spider-Man",
+    "marvelous confetti": "Confete Marveloso",
+    "masquerade": "Máscara",
+    "matador": "Matador",
+    "match maniac": "Maníaco da Partida",
+    "match master": "Mestre da Partida",
+    "matchtacular!": "Matchtacular!",
+    "melodic birds": "Pássaros Melódicos",
+    "melody glasses": "Óculos de Melodia",
+    "melody headset": "Fone de Melodia",
+    "meowsic trumpet": "Trompete Meowsic",
+    "meteor shower": "Chuva de Meteoros",
+    "metralhadora de dinheiro": "Metralhadora de Dinheiro",
+    "mic champ": "Campeão do Microfone",
+    "mind blown": "Mente Explodida",
+    "mishka bear": "Urso Mishka",
+    "mom's bonnet": "Chapeuzinho da Mamãe",
+    "motorcycle": "Motocicleta",
+    "music  album": "Álbum Musical",
+    "music album": "Álbum Musical",
+    "music bubbles": "Bolhas de Música",
+    "music burst": "Explosão Musical",
+    "music cloud": "Nuvem Musical",
+    "music conductor": "Regente Musical",
+    "music mate": "Amigo Musical",
+    "music on stage": "Música no Palco",
+    "my dream stage": "Meu Palco dos Sonhos",
+    "my first rose": "Minha Primeira Rosa",
+    "mystery box": "Caixa Misteriosa",
+    "mystery firework": "Foguete Misterioso",
+    "name shoutout": "Saudação do Nome",
+    "naughty chicken": "Galinha Travessa",
+    "neon rockstar": "Rockstar Neon",
+    "obelisk argentina": "Obelisco Argentina",
+    "óculos de sol": "Óculos de Sol",
+    "office penguin": "Pinguim do Escritório",
+    "oldies": "Oldies (Clássicos)",
+    "out pops jollie!": "Sai o Jollie!",
+    "over the cloud": "Por Cima da Nuvem",
+    "overreact": "Reação Exagerada",
+    "palm breeze": "Brisa de Palma",
+    "panda snap": "Panda Snap",
+    "papa capybara": "Papai Capivara",
+    "paper crane": "Grifo de Papel",
+    "paris": "Paris",
+    "party blossom": "Flor da Festa",
+    "party bus": "Ônibus da Festa",
+    "party laser": "Laser de Festa",
+    "party on&on": "Festa Sempre",
+    "party pony": "Pônei da Festa",
+    "paw call": "Chamado da Pata",
+    "pearl chime": "Sininho de Pérola",
+    "pegasus": "Pégaso",
+    "penguin snowpal": "Pinguim da Neve",
+    "penlight": "Luz de Caneta",
+    "perfume": "Perfume",
+    "pinata": "Piñata",
+    "pinch face": "Apertando o Rosto",
+    "pink cowboy": "Cowboy Rosa",
+    "pink dream": "Sonho Rosa",
+    "pirate's treasure": "Tesouro do Pirata",
+    "play for you": "Toco Para Você",
+    "poetry score": "Partitura Poética",
+    "pony lantern": "Luminária do Pônei",
+    "pop parrot": "Papagaio Pop",
+    "potato to fries": "Batata a Fritas",
+    "power chip": "Chip de Poder",
+    "powerful mind": "Mente Poderosa",
+    "prairie blitzy": "Blitzy da Campina",
+    "prairie cooper": "Cooper da Campina",
+    "prairie diny": "Diny da Campina",
+    "prairie tom": "Tom da Campina",
+    "premium shuttle": "Balsa Premium",
+    "pretzel": "Pão Torcido",
+    "private jet": "Jato Privado",
+    "proof of the king": "Prova do Rei",
+    "punch cuddle": "Abraço Soco",
+    "puppy kisses": "Beijos de Filhote",
+    "racing debut": "Estreia nas Corridas",
+    "racing helmet": "Capacete de Corrida",
+    "rain doll": "Boneca da Chuva",
+    "rainbow slide": "Escorregador Arco-Íris",
+    "raving snail": "Lesma em Festa",
+    "raya gift card": "Cartão-Prenda Raya",
+    "red devil corgi": "Corgi Diabólico",
+    "red lightning": "Relâmpago Vermelho",
+    "reindeer milk": "Leite de Rena",
+    "relaxed goose": "Ganso Relaxado",
+    "retro headset": "Fone Retrô",
+    "retro melody": "Melodia Retrô",
+    "rhythm bot": "Robô de Ritmo",
+    "rhythm crown": "Coroa do Ritmo",
+    "rhythmic bear": "Urso Rítmico",
+    "ribbit ribbit": "Croac Croac",
+    "rin the snowborn": "Rin, a Nascida da Neve",
+    "ring of honor-cube": "Cubo do Ring of Honor",
+    "rock and roll": "Rock and Roll",
+    "rock cats": "Gatos do Rock",
+    "rock idol": "Ídolo do Rock",
+    "rock star": "Rock Star",
+    "rocking shroom": "Cogumelo Balançante",
+    "rocky the rock bean": "Rocky, o Feijão do Rock",
+    "rocky's punch": "Soco do Rocky",
+    "roo mother": "Mãe Canguru",
+    "rookies cup": "Taça dos Novatos",
+    "rosa": "Rosa",
+    "rosa nebula": "Nebulosa Rosa",
+    "rose bear": "Urso de Rosa",
+    "rose hand": "Mão de Rosa",
+    "rose soundwave": "Onda Sonora de Rosa",
+    "rosie on stage": "Rosie no Palco",
+    "rosie the rose bean": "Rosie, o Feijão de Rosa",
+    "rosie's concert": "Concerto da Rosie",
+    "rust reforged": "Rust Reforged",
+    "rust vs world": "Rust vs World",
+    "safari park": "Parque Safari",
+    "sage the smart bean": "Sage, o Feijão Sabido",
+    "sage's coinbot": "Coinbot do Sage",
+    "sage's slash": "Corte do Sage",
+    "sage’s venture": "Empreitada do Sage",
+    "sakura-style dj": "DJ Estilo Sakura",
+    "sam in new city": "Sam na Nova Cidade",
+    "samfaring tom": "Tom Samfaring",
+    "santa owl surprise": "Surpresa da Coruja Natalina",
+    "sax appeal": "Atrativo de Sax",
+    "sax groove": "Groove de Sax",
+    "scroll": "Pergaminho",
+    "sea blitzy": "Blitzy do Mar",
+    "sea cooper": "Cooper do Mar",
+    "sea diny": "Diny do Mar",
+    "sea tom": "Tom do Mar",
+    "seahorse pop": "Cavalo-Marinho Pop",
+    "semsemia": "Semsemia",
+    "shell of a warrior": "Concha de Guerreiro",
+    "shine bright": "Brilhe Muito",
+    "shiny air balloon": "Balão Brilhante",
+    "shoot the apple": "Acerte a Maçã",
+    "side by side": "Lado a Lado",
+    "signature jet": "Jato Assinado",
+    "sing in sync": "Canto em Sincronia",
+    "sing together": "Canto Junto",
+    "singing frog": "Sapo Cantor",
+    "singing magic": "Magia Cantada",
+    "singing mushroom": "Cogumelo Cantor",
+    "singing sax": "Sax Cantor",
+    "sky drift": "Deriva no Céu",
+    "skyforge citadel": "Cidadela do Skyforge",
+    "sloth peek": "Preguiça Espiando",
+    "slow motion": "Câmera Lenta",
+    "smile latte": "Latte de Sorriso",
+    "sneaky jockey": "Joqueiro Esperto",
+    "snow bloom": "Flor da Neve",
+    "snowmoon parasol": "Guarda-Sol da Lua de Neve",
+    "so cute": "Tão Fofo",
+    "soccer ball": "Bola de Futebol",
+    "soccer holo": "Futebol Holo",
+    "songs of live": "Músicas do LIVE",
+    "sound spell": "Feitiço Sonoro",
+    "space love": "Amor Espacial",
+    "sparkle dance": "Dança Cintilante",
+    "sparkle pony": "Pônei Cintilante",
+    "spartan helmet": "Elmo Espártaco",
+    "spider web": "Teia de Aranha",
+    "spider web 2.0": "Teia de Aranha 2.0",
+    "spidey pin": "Pin do Spidey",
+    "spin seal": "Selo Giratório",
+    "spinning soccer": "Futebol Giratório",
+    "spooky cat": "Gato Assustador",
+    "spring bouquet": "Buquê da Primavera",
+    "spring sprout": "Brotinho da Primavera",
+    "squirrel": "Esquilo",
+    "stadium": "Estádio",
+    "stage of ring": "Palco do Ring",
+    "stage of spiderman": "Palco do Spider-Man",
+    "stage wiggle": "Balanço de Palco",
+    "star goggles": "Óculos de Estrela",
+    "star of red carpet": "Estrela do Tapete Vermelho",
+    "star throne": "Trono da Estrela",
+    "starry fluff": "Pelinho Estrelado",
+    "starry seal": "Selo Estrelado",
+    "storm blade": "Lâmina da Tempestade",
+    "stormwave armor": "Armadura da Onda Tempestuosa",
+    "strike a pose": "Faça uma Pose",
+    "strong finish": "Finalização Forte",
+    "style me up": "Me Estiliza",
+    "sugar whiskers": "Bigodinhos de Açúcar",
+    "suitcase": "Mala",
+    "summoning horn": "Chifre de Invocação",
+    "sundae bowl": "Tigela de Sundae",
+    "sunny side up": "Ovo Do Lado do Sol",
+    "sunset speedway": "Pista do Pôr do Sol",
+    "super dad": "Super Pai",
+    "super popular": "Super Popular",
+    "superwoman": "Supermulher",
+    "surfing penguin": "Pinguim Surfeiro",
+    "surprise baby mob": "Turma de Bebezinhos Surpresa",
+    "swan": "Cisne",
+    "sweet flutter": "Voo Doce",
+    "swing cello": "Cello Swing",
+    "take the mic": "Pega o Microfone",
+    "talking heartbeat": "Batimento Falante",
+    "team bracelet": "Pulseira do Time",
+    "tempo flute": "Flauta de Tempo",
+    "the trial of sea": "O Julgamento do Mar",
+    "thumbs up": "Da Paz",
+    "thunder falcon": "Falcão do Trovão",
+    "tidecaller trident": "Tridente do Chamador das Marés",
+    "tiger lift": "Levantada do Tigre",
+    "tiktok red carpet": "Tapete Vermelho do TikTok",
+    "tiktok shuttle": "Balsa do TikTok",
+    "tiktok stars": "Estrelas do TikTok",
+    "tiktok universe": "Universo TikTok",
+    "tiktok universe+": "Universo TikTok+",
+    "time warp": "Distorção do Tempo",
+    "tiny diny": "Diny Minúscula",
+    "tom bear beret": "Boina do Tom Urso",
+    "tom thunderfoot": "Tom Pés de Trovão",
+    "tom's hug": "Abraço do Tom",
+    "traffic cone": "Cone de Trânsito",
+    "train": "Trem",
+    "travel with you": "Viagem Com Você",
+    "treasure clover": "Trevo do Tesouro",
+    "treasure's key": "Chave do Tesouro",
+    "treasured voice": "Voz Preciosa",
+    "trending figure": "Figura em Alta",
+    "tropical mask": "Máscara Tropical",
+    "tundra blitzy": "Blitzy da Tundra",
+    "tundra cooper": "Cooper da Tundra",
+    "tundra diny": "Diny da Tundra",
+    "tundra tom": "Tom da Tundra",
+    "ukulele player": "Músico de Ukulelê",
+    "ultimate fandom": "FANDOM Definitivo",
+    "umbrella of love": "Guarda-Chuva do Amor",
+    "under control": "Sob Controle",
+    "undersea kingdom": "Reino Submarino",
+    "unicorn fantasy": "Fantasia de Unicórnio",
+    "united heart": "Coração Unido",
+    "valerian's oath": "Juramento de Valerian",
+    "valiant odyssey": "Odisseia Valente",
+    "vespa tater": "Batata Vespa",
+    "vibrant stage": "Palco Vibrante",
+    "viking hammer": "Martelo Viking",
+    "vintage flight": "Voo Vintage",
+    "vinyl flip": "Revirando o Vinil",
+    "vocal bear": "Urso Vocal",
+    "vr goggles": "Óculos de RV",
+    "w": "W",
+    "wakey mallow": "Marshmallow Acordador",
+    "warm cocoa": "Cacau Quentinho",
+    "water buffalo": "Búfalo",
+    "watermelon love": "Amor de Melancia",
+    "wave firework": "Foguete em Onda",
+    "wave lights": "Luzes em Onda",
+    "welcome dallah": "Boas-Vindas Dallah",
+    "whale diving": "Baleia Mergulhando",
+    "white rose": "Rosa Branca",
+    "wild mic": "Microfone Selvagem",
+    "wind on kemenche": "Vento na Kemençe",
+    "wink charm": "Encanto de Piscadela",
+    "wink wink": "Pisca Pisca",
+    "wishing cake": "Bolo dos Desejos",
+    "work hard play harder": "Esforce Mais, Brinque Mais",
+    "xmas tree hat": "Chapéu de Pinheirinho",
+    "xxxl flowers": "Flores XXXL",
+    "yellow lightning": "Relâmpago Amarelo",
+    "you’re amazing": "Você É Incrível",
+    "you're awesome": "Você É Massa",
+    "you're so fly": "Você É Fantástico",
+    "your concert": "Seu Concerto",
+    "yuki's vigilance": "Vigilância da Yuki",
+    "zeus": "Zeus"
 };
 
 function translateGiftName(name) {
@@ -1177,6 +1814,7 @@ function addUserToList(user, options = {}) {
     }
 
     const userTd = document.createElement('td');
+    userTd.setAttribute('data-label', 'Usuário');
     const userSpan = document.createElement('span');
     userSpan.className = 'user-name';
     userSpan.textContent = user.nickname;
@@ -1195,11 +1833,13 @@ function addUserToList(user, options = {}) {
     tr.appendChild(userTd);
 
     const giftTd = document.createElement('td');
+    giftTd.setAttribute('data-label', 'Presente');
     giftTd.className = 'gift-name-cell';
     giftTd.textContent = user.giftName;
     tr.appendChild(giftTd);
 
     const actionTd = document.createElement('td');
+    actionTd.setAttribute('data-label', 'Ação');
     const actionBtn = document.createElement('button');
     actionBtn.className = 'action-btn';
     actionBtn.dataset.uniqueId = user.uniqueId;
@@ -1414,6 +2054,7 @@ function addAllGiftToList(gift) {
     }
 
     const userTd = document.createElement('td');
+    userTd.setAttribute('data-label', 'Usuário');
     const userSpan = document.createElement('span');
     userSpan.className = 'user-name';
     userSpan.textContent = gift.nickname;
@@ -1431,11 +2072,13 @@ function addAllGiftToList(gift) {
     tr.appendChild(userTd);
 
     const giftTd = document.createElement('td');
+    giftTd.setAttribute('data-label', 'Presente');
     giftTd.className = 'gift-name-cell';
     giftTd.textContent = gift.giftName;
     tr.appendChild(giftTd);
 
     const countTd = document.createElement('td');
+    countTd.setAttribute('data-label', 'Qtd');
     countTd.className = 'gift-count-cell';
     countTd.textContent = String(total);
     tr.appendChild(countTd);
@@ -1477,6 +2120,7 @@ function addPinnedCommentToList(pinnedComment, options = {}) {
     tr.dataset.pinKey = key;
 
     const userTd = document.createElement('td');
+    userTd.setAttribute('data-label', 'Usuário');
     const userSpan = document.createElement('span');
     userSpan.className = 'user-name';
     userSpan.innerText = pinnedComment.nickname || pinnedComment.uniqueId || 'Nao identificado';
@@ -1493,6 +2137,7 @@ function addPinnedCommentToList(pinnedComment, options = {}) {
     }
 
     const commentTd = document.createElement('td');
+    commentTd.setAttribute('data-label', 'Comentário');
     commentTd.className = 'comment-cell';
     commentTd.innerText = pinnedComment.comment || '[sem texto identificado]';
 
@@ -1557,6 +2202,7 @@ function addFlaggedMessageToList(data) {
     tr.dataset.messageKey = messageKey;
 
     const tdUser = document.createElement('td');
+    tdUser.setAttribute('data-label', 'Usuário');
     const spanUser = document.createElement('span');
     spanUser.className = 'user-name';
     spanUser.textContent = data.nickname != null ? String(data.nickname) : '';
@@ -1573,10 +2219,12 @@ function addFlaggedMessageToList(data) {
     }
 
     const tdMsg = document.createElement('td');
+    tdMsg.setAttribute('data-label', 'Mensagem');
     tdMsg.className = 'comment-cell';
     tdMsg.textContent = data.comment != null ? String(data.comment) : '';
 
     const tdCat = document.createElement('td');
+    tdCat.setAttribute('data-label', 'Tipo');
     const spanCat = document.createElement('span');
     spanCat.className = 'infraction-category';
     spanCat.textContent = infractionCategoryLabel(category);
@@ -1584,6 +2232,7 @@ function addFlaggedMessageToList(data) {
     tdCat.appendChild(spanCat);
 
     const tdReason = document.createElement('td');
+    tdReason.setAttribute('data-label', 'Detalhe');
     tdReason.textContent = data.reason != null ? String(data.reason) : '';
 
     const aiCategories = ['PROSELITISMO', 'SPAM', 'GOLPE', 'ODIO', 'OUTRO'];
@@ -1673,6 +2322,7 @@ function addCorrelationMessageToList(data) {
     }
 
     const tdGiftUser = document.createElement('td');
+    tdGiftUser.setAttribute('data-label', 'Usuário');
     const spanGiftUser = document.createElement('span');
     spanGiftUser.className = 'user-name';
     const userLabel = data.giftNickname || data.giftUserId || 'Nao identificado';
@@ -1682,16 +2332,19 @@ function addCorrelationMessageToList(data) {
     tdGiftUser.appendChild(spanGiftUser);
 
     const tdQuestion = document.createElement('td');
+    tdQuestion.setAttribute('data-label', 'Mensagem');
     tdQuestion.className = 'comment-cell';
     tdQuestion.textContent = data.question || '[pergunta não encontrada]';
 
     const tdConfidence = document.createElement('td');
+    tdConfidence.setAttribute('data-label', 'Tipo');
     const confidenceBadge = document.createElement('span');
     confidenceBadge.className = 'infraction-category';
     confidenceBadge.textContent = String(data.confidence || 'medium').toUpperCase();
     tdConfidence.appendChild(confidenceBadge);
 
     const tdMethod = document.createElement('td');
+    tdMethod.setAttribute('data-label', 'Detalhe');
     const methodLabel = String(data.method || 'heuristica');
     tdMethod.textContent = data.replacement ? `${methodLabel} (ajustada)` : methodLabel;
 
@@ -1924,11 +2577,13 @@ function renderRanking(ranking) {
         tr.dataset.uniqueId = user.uniqueId || '';
 
         const tdRank = document.createElement('td');
+        tdRank.setAttribute('data-label', '#');
         tdRank.className = 'ranking-rank';
         tdRank.textContent = String(index + 1);
         tr.appendChild(tdRank);
 
         const tdUser = document.createElement('td');
+        tdUser.setAttribute('data-label', 'Usuário');
         const spanUser = document.createElement('span');
         spanUser.className = 'user-name';
         spanUser.style.cursor = 'pointer';
@@ -1942,26 +2597,32 @@ function renderRanking(ranking) {
         tr.appendChild(tdUser);
 
         const tdScore = document.createElement('td');
+        tdScore.setAttribute('data-label', 'Score');
         tdScore.textContent = (user.score != null ? user.score.toFixed(1) : '0');
         tr.appendChild(tdScore);
 
         const tdGifts = document.createElement('td');
+        tdGifts.setAttribute('data-label', 'Presentes');
         tdGifts.textContent = String(user.giftCount || 0);
         tr.appendChild(tdGifts);
 
         const tdShares = document.createElement('td');
+        tdShares.setAttribute('data-label', 'Compart.');
         tdShares.textContent = String(user.shareCount || 0);
         tr.appendChild(tdShares);
 
         const tdMessages = document.createElement('td');
+        tdMessages.setAttribute('data-label', 'Mensagens');
         tdMessages.textContent = String(user.messageCount || 0);
         tr.appendChild(tdMessages);
 
         const tdQuestions = document.createElement('td');
+        tdQuestions.setAttribute('data-label', 'Perguntas');
         tdQuestions.textContent = String(user.questionCount || 0);
         tr.appendChild(tdQuestions);
 
         const tdLikes = document.createElement('td');
+        tdLikes.setAttribute('data-label', 'Curtidas');
         tdLikes.textContent = String(user.likeCount || 0);
         tr.appendChild(tdLikes);
 
@@ -2137,9 +2798,13 @@ function populateAvailableGifts(gifts) {
     unique.forEach(gift => {
         const option = document.createElement('option');
         // value mantém o nome original (ING) para o backend reconhecer o presente na live;
-        // apenas a exibição (textContent) é traduzida para PT-BR.
+        // a exibição é traduzida para PT-BR, mas o nome original é mantido entre parênteses:
+        // a busca por digitação do <select> só procura no texto visível, então assim
+        // encontra o presente pelo nome PT-BR OU inglês (ex.: digitar "soccer" acha
+        // "Bola de Futebol (Soccer Ball)").
+        const label = translateGiftName(gift);
         option.value = gift;
-        option.textContent = translateGiftName(gift);
+        option.textContent = label !== gift ? `${label} (${gift})` : label;
         availableGiftSelect.appendChild(option);
     });
     if (current && unique.includes(current)) {
@@ -2316,13 +2981,13 @@ function renderAdminLives(lives) {
     lives.forEach(live => {
         const tr = document.createElement('tr');
         tr.innerHTML = `
-            <td>${escapeHtml(live.name || '—')}</td>
-            <td>${escapeHtml(live.day || '—')}</td>
-            <td>${formatAdminTime(live.startedAt)}</td>
-            <td>${formatAdminTime(live.endedAt)}</td>
-            <td>${formatAdminDuration(live.startedAt, live.endedAt)}</td>
-            <td>${live.events ?? 0}</td>
-            <td><button class="small-btn" type="button" style="border-color: var(--pink);">Deletar</button></td>
+            <td data-label="Live">${escapeHtml(live.name || '—')}</td>
+            <td data-label="Dia">${escapeHtml(live.day || '—')}</td>
+            <td data-label="Início">${formatAdminTime(live.startedAt)}</td>
+            <td data-label="Fim">${formatAdminTime(live.endedAt)}</td>
+            <td data-label="Duração">${formatAdminDuration(live.startedAt, live.endedAt)}</td>
+            <td data-label="Eventos">${live.events ?? 0}</td>
+            <td data-label="Ações"><button class="small-btn" type="button" style="border-color: var(--pink);">Deletar</button></td>
         `;
         tr.querySelector('button').addEventListener('click', () => deleteAdminLive(live.name));
         adminLivesTableBody.appendChild(tr);

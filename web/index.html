@@ -149,6 +149,7 @@
         .table-container {
             max-height: 320px;
             overflow-y: auto;
+            overflow-x: auto;
             border: 1px solid var(--border);
             border-radius: var(--radius);
             margin-bottom: 24px;
@@ -843,6 +844,171 @@
             height: 100%;
             background: linear-gradient(90deg, var(--pink), var(--cyan));
             transition: width 0.3s ease;
+        }
+
+        /* ============================================================
+           Layout responsivo — tablet
+           ============================================================ */
+        @media (max-width: 1024px) {
+            body { padding: 16px; }
+            .container { max-width: none; padding: 22px; }
+            .page-head { flex-direction: column; align-items: stretch; gap: 12px; }
+            .controls { width: 100%; }
+            .chart-section canvas { height: 160px !important; }
+        }
+        @media (max-width: 900px) {
+            th { padding: 12px 12px; }
+            .user-row td,
+            .gift-row td,
+            .pinned-comment-row td {
+                padding: 12px 12px;
+            }
+            .tbl-ranking th:nth-child(2) { width: 140px; }
+        }
+
+        /* ============================================================
+           Layout responsivo — celular
+           ============================================================ */
+        @media (max-width: 640px) {
+            body { padding: 8px; }
+            .container {
+                padding: 14px;
+                border-radius: 12px;
+            }
+
+            /* Cabeçalho e controles empilhados, botões em largura total */
+            .page-head { flex-direction: column; gap: 12px; }
+            .brand-mark { width: 40px; height: 40px; font-size: 1.25em; border-radius: 12px; }
+            .brand h1 { font-size: 1.1em; }
+            .controls {
+                width: 100%;
+                flex-direction: column;
+                align-items: stretch;
+                gap: 8px;
+            }
+            .controls input[type="text"] { width: 100%; min-width: 0; }
+            .controls button { width: 100%; }
+            #status { margin-bottom: 14px; }
+            .status-bar { margin-bottom: 14px; padding: 9px 12px; }
+
+            /* Assistente de IA */
+            .ai-card { padding: 14px; margin-bottom: 18px; border-radius: 12px; }
+            .ai-question-row { max-width: none; }
+            .ai-question-row input { min-width: 0; flex: 1 1 150px; }
+            .ai-question-row button { flex: 1 1 auto; white-space: nowrap; }
+
+            /* Gráfico e títulos de seção */
+            .chart-section { margin-bottom: 18px; padding: 12px; }
+            .chart-section canvas { height: 150px !important; }
+            .section-title { flex-direction: column; align-items: flex-start; gap: 8px; }
+            .section-title-actions { width: 100%; justify-content: flex-start; }
+            #giftSearchInput { flex: 1 1 100%; min-width: 0; }
+
+            /* Tabelas */
+            .table-container {
+                max-height: 420px;
+                border-radius: 12px;
+                margin-bottom: 18px;
+            }
+            th {
+                padding: 11px 12px;
+            }
+
+            /* Ranking e lives: muitas colunas → rolagem horizontal */
+            table.tbl-ranking { min-width: 720px; }
+            table.tbl-lives { min-width: 680px; }
+
+            /* Demais tabelas viram cartões: cada célula mostra o rótulo da coluna */
+            table.tbl-users,
+            table.tbl-comments,
+            table.tbl-gifts,
+            table.tbl-correlation {
+                table-layout: auto;
+            }
+            table.tbl-users thead,
+            table.tbl-comments thead,
+            table.tbl-gifts thead,
+            table.tbl-correlation thead {
+                display: none;
+            }
+            table.tbl-users tr,
+            table.tbl-comments tr,
+            table.tbl-gifts tr,
+            table.tbl-correlation tr {
+                display: block;
+                border: 1px solid var(--border);
+                border-radius: 12px;
+                margin: 0 8px 10px;
+                background: rgba(255, 255, 255, 0.03);
+                overflow: hidden;
+            }
+            table.tbl-users td,
+            table.tbl-comments td,
+            table.tbl-gifts td,
+            table.tbl-correlation td {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                justify-content: space-between;
+                gap: 4px 14px;
+                padding: 11px 14px;
+                border-bottom: 1px dashed rgba(255, 255, 255, 0.07);
+            }
+            table.tbl-users td:last-child,
+            table.tbl-comments td:last-child,
+            table.tbl-gifts td:last-child,
+            table.tbl-correlation td:last-child {
+                border-bottom: none;
+            }
+            table.tbl-users td::before,
+            table.tbl-comments td::before,
+            table.tbl-gifts td::before,
+            table.tbl-correlation td::before {
+                content: attr(data-label);
+                flex-shrink: 0;
+                font-size: 0.68em;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+                color: var(--text-muted);
+            }
+            table.tbl-users td:not([data-label])::before,
+            table.tbl-comments td:not([data-label])::before,
+            table.tbl-gifts td:not([data-label])::before,
+            table.tbl-correlation td:not([data-label])::before {
+                content: none;
+            }
+            /* Células de texto longo: rótulo acima, conteúdo em largura total */
+            table.tbl-comments td.comment-cell,
+            table.tbl-correlation td.comment-cell,
+            table.tbl-correlation td:last-child {
+                display: block;
+            }
+            table.tbl-comments td.comment-cell::before,
+            table.tbl-correlation td.comment-cell::before,
+            table.tbl-correlation td:last-child::before {
+                display: block;
+                margin-bottom: 4px;
+            }
+
+            /* Modais em tela cheia */
+            .modal-backdrop { padding: 0; }
+            .modal,
+            .delete-live-modal {
+                width: 100%;
+                height: 100%;
+                max-height: none;
+                border-radius: 0;
+            }
+            .modal-header { padding: 16px; }
+            .modal-body { padding: 14px 16px 20px; }
+
+            /* Diversos */
+            .report-box { padding: 12px; }
+            .report-stat .stat-value { font-size: 1.2em; }
+            .suggestion-card { padding: 10px 12px; }
+            .chips-row { gap: 5px; }
+            .target-gift-chip { padding: 4px 10px; }
         }
     </style>
 </head>
