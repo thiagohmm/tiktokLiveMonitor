@@ -402,6 +402,36 @@ func TestUpdateGoal(t *testing.T) {
 	}
 }
 
+func TestGoalUnlockedNotRepeatedOnPlainProgress(t *testing.T) {
+	c := newTestController(t, "live1")
+
+	var updates []GoalUpdate
+	c.SetGoalCallback(func(u GoalUpdate) { updates = append(updates, u) })
+
+	if _, err := c.CreateGoal("Meta", "", 100, []model.GoalMilestone{
+		{AtUnits: 50, Reward: "música especial"},
+	}); err != nil {
+		t.Fatalf("create goal: %v", err)
+	}
+
+	c.HandleGiftEvent(giftData("u1", 60))
+	if len(updates) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(updates))
+	}
+	if len(updates[0].NewlyUnlockedMilestones) != 1 {
+		t.Fatalf("expected 1 newly unlocked, got %d", len(updates[0].NewlyUnlockedMilestones))
+	}
+
+	// +5 units: progress only, milestone already unlocked — no new unlock event.
+	c.HandleGiftEvent(giftData("u2", 5))
+	if len(updates) != 2 {
+		t.Fatalf("expected 2 updates, got %d", len(updates))
+	}
+	if len(updates[1].NewlyUnlockedMilestones) != 0 {
+		t.Fatalf("expected no newly unlocked on plain progress, got %+v", updates[1].NewlyUnlockedMilestones)
+	}
+}
+
 func TestCreateGoalWithoutLive(t *testing.T) {
 	c := newTestController(t, "")
 	if _, err := c.CreateGoal("meta", "", 10, nil); err == nil {

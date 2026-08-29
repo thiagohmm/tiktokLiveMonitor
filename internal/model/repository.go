@@ -28,6 +28,8 @@ type AnomalyRepository interface {
 	GetRecentModerations(limit int) ([]AnomalyLog, error)
 	GetRecentAnomalyLogs(limit int) ([]AnomalyLog, error)
 	GetAnomalyLogsByLiveName(liveName string) ([]AnomalyLog, error)
+	// GetAnomalyLogsByUser returns anomaly logs for a participant (case-insensitive).
+	GetAnomalyLogsByUser(uniqueID string, limit int) ([]AnomalyLog, error)
 	GetTodayAnomalyLogs(liveName string) ([]AnomalyLog, error)
 	ClearHistory() (int64, error)
 	DeleteModeration(id int64) (int64, error)
@@ -42,7 +44,7 @@ type UserMessageRepository interface {
 	// (newest first).
 	GetUserMessagesRecent(uniqueID string, limit int) ([]UserMessage, error)
 	GetAllUserMessages() (map[string][]UserMessage, error)
-	GetTodayUserMessages() ([]UserMessage, error)
+	GetTodayUserMessages(liveName string) ([]UserMessage, error)
 }
 
 // GiftRepository handles persistence of gifts.

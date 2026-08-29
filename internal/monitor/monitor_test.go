@@ -259,7 +259,7 @@ func TestRestoreOrPurgeDeletesStaleSession(t *testing.T) {
 	if len(gifts) != 0 {
 		t.Fatalf("expected gifts deleted, got %d", len(gifts))
 	}
-	msgs, err := db.GetTodayUserMessages()
+	msgs, err := db.GetTodayUserMessages("live1")
 	if err != nil {
 		t.Fatalf("messages: %v", err)
 	}

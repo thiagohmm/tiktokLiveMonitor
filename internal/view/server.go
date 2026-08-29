@@ -175,7 +175,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// Goal progress updates (fired by the controller after gift events).
 	s.controller.SetGoalCallback(func(update controller.GoalUpdate) {
 		s.broadcastSSE("goal-update", update)
-		if len(update.UnlockedMilestones) > 0 {
+		if len(update.NewlyUnlockedMilestones) > 0 {
 			s.broadcastSSE("goal-unlocked", update)
 		}
 		if update.Completed {

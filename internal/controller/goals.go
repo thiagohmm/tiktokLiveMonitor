@@ -20,9 +20,10 @@ type GoalProgress struct {
 // GoalUpdate is emitted through the goal callback when progress changes:
 // crossed milestones and/or completion of the active goal.
 type GoalUpdate struct {
-	Progress           GoalProgress          `json:"progress"`
-	UnlockedMilestones []model.GoalMilestone `json:"unlockedMilestones,omitempty"`
-	Completed          bool                  `json:"completed"`
+	Progress               GoalProgress          `json:"progress"`
+	UnlockedMilestones     []model.GoalMilestone `json:"unlockedMilestones,omitempty"`
+	NewlyUnlockedMilestones []model.GoalMilestone `json:"newlyUnlockedMilestones,omitempty"`
+	Completed              bool                  `json:"completed"`
 }
 
 // GoalsState is the full view of goals for the current live. Multiple goals
@@ -217,7 +218,7 @@ func (c *AppController) checkSingleGoal(active *model.GiftGoal) {
 		return
 	}
 
-	changed := c.crossMilestones(active, units)
+	changed, newlyUnlocked := c.crossMilestones(active, units)
 	completedNow := false
 	if active.Status == model.GoalStatusActive && units >= active.TargetUnits {
 		now := time.Now().UTC().Format(time.RFC3339)
@@ -234,7 +235,7 @@ func (c *AppController) checkSingleGoal(active *model.GiftGoal) {
 	// Emit whenever the units moved, so the UI progress bar/percent tracks
 	// every gift even without milestones or completion.
 	if c.unitsChanged(active.ID, units) || completedNow {
-		c.emitGoalUpdate(*active, units, completedNow)
+		c.emitGoalUpdate(*active, units, completedNow, newlyUnlocked)
 	}
 }
 
@@ -256,9 +257,10 @@ func (c *AppController) unitsChanged(goalID int64, units int) bool {
 }
 
 // crossMilestones unlocks not-yet-unlocked milestones crossed by the given
-// units; it reports whether anything changed.
-func (c *AppController) crossMilestones(active *model.GiftGoal, units int) bool {
+// units; it reports whether anything changed and which milestones were newly unlocked.
+func (c *AppController) crossMilestones(active *model.GiftGoal, units int) (bool, []model.GoalMilestone) {
 	changed := false
+	newlyUnlocked := make([]model.GoalMilestone, 0)
 	for i := range active.Milestones {
 		m := &active.Milestones[i]
 		if m.Unlocked || m.AtUnits <= 0 || units < m.AtUnits {
@@ -268,12 +270,13 @@ func (c *AppController) crossMilestones(active *model.GiftGoal, units int) bool 
 		m.Unlocked = true
 		m.UnlockedAt = &now
 		changed = true
+		newlyUnlocked = append(newlyUnlocked, *m)
 	}
-	return changed
+	return changed, newlyUnlocked
 }
 
 // emitGoalUpdate fires the goal callback (if registered) with the new state.
-func (c *AppController) emitGoalUpdate(goal model.GiftGoal, units int, completedNow bool) {
+func (c *AppController) emitGoalUpdate(goal model.GiftGoal, units int, completedNow bool, newlyUnlocked []model.GoalMilestone) {
 	c.goals.mu.Lock()
 	fn := c.goals.callback
 	c.goals.mu.Unlock()
@@ -293,8 +296,9 @@ func (c *AppController) emitGoalUpdate(goal model.GiftGoal, units int, completed
 			Units:   units,
 			Percent: progressPercent(units, goal.TargetUnits),
 		},
-		UnlockedMilestones: unlocked,
-		Completed:          completedNow,
+		UnlockedMilestones:      unlocked,
+		NewlyUnlockedMilestones: newlyUnlocked,
+		Completed:               completedNow,
 	})
 }
 
