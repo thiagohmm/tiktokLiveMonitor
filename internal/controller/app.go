@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -328,19 +327,14 @@ func (c *AppController) GetLiveRanking(liveName string) (model.LiveRanking, erro
 	if stats == nil {
 		stats = []model.LiveStat{}
 	}
-	// Calibração da contagem de likes: o stream do TikTok entrega apenas uma
-	// amostra dos eventos de like (a soma por usuário fica abaixo do total da
-	// sala). Proporcionalmente ao total acumulado da sala, reescalamos o
-	// LikeCount de cada usuário para a contagem refletir o valor real.
-	var roomTotal, delivered int64
-	if rt, dl, err := c.repo.LikeTotals(liveName); err == nil {
-		roomTotal, delivered = rt, dl
-	}
-	if roomTotal > delivered && delivered > 0 {
-		factor := float64(roomTotal) / float64(delivered)
-		for i := range stats {
-			stats[i].LikeCount = int(math.Round(float64(stats[i].LikeCount) * factor))
-		}
+	// O `total` do stream é o contador ACUMULADO da sala desde o início da
+	// live (inclui curtidas anteriores à conexão), por isso não pode ser usado
+	// para reescalar a contagem por usuário — o faria inflar. Cada usuário é
+	// exibido com a soma dos eventos de like efetivamente entregues ao
+	// monitor; TotalLikes mostra o contador oficial da sala.
+	var roomTotal int64
+	if rt, _, err := c.repo.LikeTotals(liveName); err == nil {
+		roomTotal = rt
 	}
 	anomaliesByUser := map[string]int{}
 	if logs, err := c.repo.GetAnomalyLogsByLiveName(liveName); err == nil {
