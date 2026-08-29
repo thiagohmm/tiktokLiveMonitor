@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
@@ -133,4 +134,86 @@ func TestEventBoolPtr(t *testing.T) {
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+func TestGetUserProfile(t *testing.T) {
+	c := newTestController(t, "live1")
+
+	// 12 distinct messages (the store keeps at most 10 per user; the
+	// profile must surface the 10 most recent).
+	for i := 0; i < 12; i++ {
+		c.HandleChatMessageEvent(monitor.EventData{
+			"uniqueId": "user1",
+			"nickname": "User One",
+			"comment":  fmt.Sprintf("msg %d", i),
+		})
+	}
+
+	// 2 gift events: 1 + 5 units.
+	c.HandleGiftEvent(giftData("user1", 1))
+	c.HandleGiftEvent(giftData("user1", 5))
+
+	// Likes: 3 + 4 = 7 (the "total" room counter is irrelevant here).
+	c.HandleLikeEvent(monitor.EventData{"uniqueId": "user1", "nickname": "User One", "likeCount": 3})
+	c.HandleLikeEvent(monitor.EventData{"uniqueId": "user1", "nickname": "User One", "likeCount": 4})
+
+	// 2 shares.
+	c.HandleShareEvent(monitor.EventData{"uniqueId": "user1", "nickname": "User One"})
+	c.HandleShareEvent(monitor.EventData{"uniqueId": "user1", "nickname": "User One"})
+
+	prof, err := c.GetUserProfile("user1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if prof.Nickname != "User One" {
+		t.Fatalf("expected nickname 'User One', got %q", prof.Nickname)
+	}
+	if len(prof.Messages) != 10 || prof.TotalMessages != 10 {
+		t.Fatalf("expected 10 messages, got %d (total %d)", len(prof.Messages), prof.TotalMessages)
+	}
+	// Newest first: the 12 seeded messages are FIFO-capped to the last 10.
+	if prof.Messages[0].Message != "msg 11" {
+		t.Fatalf("expected most recent message first, got %q", prof.Messages[0].Message)
+	}
+	if prof.TotalGifts != 2 {
+		t.Fatalf("expected 2 gifts, got %d", prof.TotalGifts)
+	}
+	if prof.TotalGiftUnits != 6 {
+		t.Fatalf("expected 6 gift units, got %d", prof.TotalGiftUnits)
+	}
+	if prof.TotalLikes != 7 {
+		t.Fatalf("expected 7 likes, got %d", prof.TotalLikes)
+	}
+	if prof.TotalShares != 2 {
+		t.Fatalf("expected 2 shares, got %d", prof.TotalShares)
+	}
+
+	// Case-insensitive lookup.
+	prof, err = c.GetUserProfile("USER1")
+	if err != nil {
+		t.Fatalf("unexpected error (case-insensitive): %v", err)
+	}
+	if prof.TotalLikes != 7 || prof.TotalShares != 2 || prof.TotalGiftUnits != 6 {
+		t.Fatalf("expected same totals for USER1, got likes=%d shares=%d units=%d",
+			prof.TotalLikes, prof.TotalShares, prof.TotalGiftUnits)
+	}
+
+	// Unknown user: zeroed profile, no error.
+	prof, err = c.GetUserProfile("nobody")
+	if err != nil {
+		t.Fatalf("unexpected error for unknown user: %v", err)
+	}
+	if prof.TotalMessages != 0 || prof.TotalGifts != 0 || prof.TotalGiftUnits != 0 ||
+		prof.TotalLikes != 0 || prof.TotalShares != 0 {
+		t.Fatalf("expected zeroed profile, got %+v", prof)
+	}
+
+	// Empty uid: no error, empty profile.
+	prof, err = c.GetUserProfile("  ")
+	if err != nil {
+		t.Fatalf("unexpected error for empty uid: %v", err)
+	}
+	if prof.UniqueID != "  " {
+		t.Fatalf("expected echoed uid, got %q", prof.UniqueID)
+	}
 }

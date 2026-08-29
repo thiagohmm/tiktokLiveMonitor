@@ -38,6 +38,9 @@ type AnomalyRepository interface {
 type UserMessageRepository interface {
 	AddUserMessageDedup(liveName, uniqueID, username, message string) error
 	GetUserMessages(uniqueID string) ([]UserMessage, error)
+	// GetUserMessagesRecent returns the last `limit` messages of a user
+	// (newest first).
+	GetUserMessagesRecent(uniqueID string, limit int) ([]UserMessage, error)
 	GetAllUserMessages() (map[string][]UserMessage, error)
 	GetTodayUserMessages() ([]UserMessage, error)
 }
@@ -85,11 +88,15 @@ type SessionRepository interface {
 // ShareRepository tracks social shares of the live made by participants.
 type ShareRepository interface {
 	AddShare(liveName, uniqueID, nickname string) error
+	// GetUserShareCount returns the total number of share events made by a user.
+	GetUserShareCount(uniqueID string) (int, error)
 }
 
 // LikeRepository tracks likes (hearts) sent by participants during a live.
 type LikeRepository interface {
 	AddLike(liveName, uniqueID, nickname string, likeCount int) error
+	// GetUserLikeTotal returns the sum of like_count over all like events of a user.
+	GetUserLikeTotal(uniqueID string) (int64, error)
 	// UpsertRoomLikeTotal stores the room-level cumulative like counter as
 	// reported by the stream (monotonic: only the highest value is kept).
 	UpsertRoomLikeTotal(liveName string, total int64) error

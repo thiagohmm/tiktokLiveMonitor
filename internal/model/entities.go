@@ -157,15 +157,22 @@ type AnomalySummary struct {
 
 // UserProfile aggregates a participant's full history across lives.
 type UserProfile struct {
-	UniqueID      string            `json:"uniqueId"`
-	Nickname      string            `json:"nickname"`
-	Messages      []UserMessage     `json:"messages"`
-	Gifts         []Gift            `json:"gifts"`
-	Alerts        []AnomalyLog      `json:"alerts"`
-	RiskLevel     string            `json:"riskLevel"`
-	TotalMessages int               `json:"totalMessages"`
-	TotalGifts    int               `json:"totalGifts"`
-	LastLives     []UserLiveSummary `json:"lastLives"`
+	UniqueID      string        `json:"uniqueId"`
+	Nickname      string        `json:"nickname"`
+	Messages      []UserMessage `json:"messages"`
+	Gifts         []Gift        `json:"gifts"`
+	Alerts        []AnomalyLog  `json:"alerts"`
+	RiskLevel     string        `json:"riskLevel"`
+	TotalMessages int           `json:"totalMessages"`
+	TotalGifts    int           `json:"totalGifts"`
+	// TotalGiftUnits is the sum of repeat_count over the user's gifts
+	// (same metric used by gift goals and reports).
+	TotalGiftUnits int `json:"totalGiftUnits"`
+	// TotalLikes is the sum of like_count over the user's like events.
+	TotalLikes int `json:"totalLikes"`
+	// TotalShares is the number of share events made by the user.
+	TotalShares int               `json:"totalShares"`
+	LastLives   []UserLiveSummary `json:"lastLives"`
 }
 
 // UserLiveSummary describes one live a participant appeared in.

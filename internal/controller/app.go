@@ -29,16 +29,16 @@ type MessageCache interface {
 
 // AppController orchestrates all application services.
 type AppController struct {
-	monitor       *monitor.Monitor
-	repo          model.Repository
-	msgCache      MessageCache
-	reportGen  *report.Generator
-	ranker     *ranking.Ranker
-	monCancel     context.CancelFunc
-	monCancelMu   sync.Mutex
-	flagSeen      map[string]struct{}
-	flagSeenMu    sync.Mutex
-	goals         goalState
+	monitor     *monitor.Monitor
+	repo        model.Repository
+	msgCache    MessageCache
+	reportGen   *report.Generator
+	ranker      *ranking.Ranker
+	monCancel   context.CancelFunc
+	monCancelMu sync.Mutex
+	flagSeen    map[string]struct{}
+	flagSeenMu  sync.Mutex
+	goals       goalState
 }
 
 // NewAppController creates a new application controller.
@@ -372,13 +372,36 @@ func (c *AppController) GetUserProfile(uniqueID string) (model.UserProfile, erro
 	if strings.TrimSpace(uniqueID) == "" {
 		return out, nil
 	}
-	out.Messages, _ = c.repo.GetUserMessages(uniqueID)
+	out.Messages, _ = c.repo.GetUserMessagesRecent(uniqueID, 10)
 	out.Gifts, _ = c.repo.GetGiftsByUser(uniqueID)
 	out.LastLives, _ = c.repo.RecentLivesForUser(uniqueID, 10)
 
 	// Aggregate totals.
 	out.TotalMessages = len(out.Messages)
 	out.TotalGifts = len(out.Gifts)
+	for _, g := range out.Gifts {
+		out.TotalGiftUnits += g.RepeatCount
+	}
+	if total, err := c.repo.GetUserLikeTotal(uniqueID); err == nil {
+		out.TotalLikes = int(total)
+	}
+	if count, err := c.repo.GetUserShareCount(uniqueID); err == nil {
+		out.TotalShares = count
+	}
+
+	// Best-effort nickname from stored events (messages store username,
+	// gifts/shares store nickname).
+	if out.Nickname == "" {
+		for _, g := range out.Gifts {
+			if g.Nickname != "" {
+				out.Nickname = g.Nickname
+				break
+			}
+		}
+	}
+	if out.Nickname == "" && len(out.Messages) > 0 {
+		out.Nickname = out.Messages[0].Username
+	}
 
 	// Derive a risk level from recent anomaly logs.
 	var risk string

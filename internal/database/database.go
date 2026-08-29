@@ -1745,6 +1745,84 @@ func (db *DB) SetSetting(key, value string) error {
 	return nil
 }
 
+// --- User engagement lookups (profiles) ---
+
+// GetUserMessagesRecent returns the last `limit` messages of a user, newest
+// first. A limit <= 0 returns all messages.
+func (db *DB) GetUserMessagesRecent(uniqueID string, limit int) ([]model.UserMessage, error) {
+	uniqueID = strings.ToLower(strings.TrimSpace(uniqueID))
+	if uniqueID == "" {
+		return nil, model.ErrUniqueIDRequired
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	query := "SELECT id, live_name, uniqueId, username, message, timestamp FROM user_messages WHERE LOWER(uniqueId) = ? ORDER BY timestamp DESC"
+	if limit > 0 {
+		query += " LIMIT ?"
+	}
+	args := []any{uniqueID}
+	if limit > 0 {
+		args = append(args, limit)
+	}
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query recent user messages: %w", err)
+	}
+	defer rows.Close()
+
+	var out []model.UserMessage
+	for rows.Next() {
+		var um model.UserMessage
+		if err := rows.Scan(&um.ID, &um.LiveName, &um.UniqueID, &um.Username, &um.Message, &um.Timestamp); err != nil {
+			return nil, fmt.Errorf("scan user message: %w", err)
+		}
+		out = append(out, um)
+	}
+	return out, rows.Err()
+}
+
+// GetUserShareCount returns the total number of share events made by a user.
+func (db *DB) GetUserShareCount(uniqueID string) (int, error) {
+	uniqueID = strings.ToLower(strings.TrimSpace(uniqueID))
+	if uniqueID == "" {
+		return 0, model.ErrUniqueIDRequired
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var count int
+	err := db.conn.QueryRow(
+		"SELECT COUNT(*) FROM shares WHERE LOWER(uniqueId) = ?",
+		uniqueID,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count user shares: %w", err)
+	}
+	return count, nil
+}
+
+// GetUserLikeTotal returns the sum of like_count over all like events of a user.
+func (db *DB) GetUserLikeTotal(uniqueID string) (int64, error) {
+	uniqueID = strings.ToLower(strings.TrimSpace(uniqueID))
+	if uniqueID == "" {
+		return 0, model.ErrUniqueIDRequired
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var total int64
+	err := db.conn.QueryRow(
+		"SELECT COALESCE(SUM(like_count), 0) FROM likes WHERE LOWER(uniqueId) = ?",
+		uniqueID,
+	).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("sum user likes: %w", err)
+	}
+	return total, nil
+}
+
 // --- Repository interface ---
 
 var _ model.Repository = (*DB)(nil)
