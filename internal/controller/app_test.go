@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 )
 
@@ -215,5 +216,39 @@ func TestGetUserProfile(t *testing.T) {
 	}
 	if prof.UniqueID != "  " {
 		t.Fatalf("expected echoed uid, got %q", prof.UniqueID)
+	}
+}
+
+func TestGetUserProfileAlertsAndRisk(t *testing.T) {
+	c := newTestController(t, "live1")
+
+	// Seed moderation alerts via the controller (persists to anomaly_logs).
+	c.ReportExternalFlag(monitor.EventData{
+		"uniqueId": "baduser", "nickname": "Bad", "comment": "spam one", "category": "SPAM", "reason": "SPAM",
+	})
+	c.ReportExternalFlag(monitor.EventData{
+		"uniqueId": "baduser", "nickname": "Bad", "comment": "spam two", "category": "REPETICAO", "reason": "REPETICAO",
+	})
+	c.ReportExternalFlag(monitor.EventData{
+		"uniqueId": "gooduser", "nickname": "Good", "comment": "ok", "category": "SPAM", "reason": "SPAM",
+	})
+
+	prof, err := c.GetUserProfile("baduser")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(prof.Alerts) != 2 {
+		t.Fatalf("expected 2 alerts, got %d", len(prof.Alerts))
+	}
+	if prof.RiskLevel != model.RiskLevelMedium {
+		t.Fatalf("expected medium risk for 2 anomalies, got %q", prof.RiskLevel)
+	}
+
+	prof, err = c.GetUserProfile("BADUSER")
+	if err != nil {
+		t.Fatalf("case-insensitive lookup failed: %v", err)
+	}
+	if len(prof.Alerts) != 2 {
+		t.Fatalf("expected case-insensitive alerts, got %d", len(prof.Alerts))
 	}
 }

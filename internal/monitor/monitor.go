@@ -942,24 +942,28 @@ func (m *Monitor) loadTodayData() {
 	currentUsername := m.currentUsername
 	m.mu.Unlock()
 
-	todayMsgs, err := m.repo.GetTodayUserMessages()
+	todayMsgs, err := m.repo.GetTodayUserMessages(currentUsername)
 	if err != nil {
 		log.Printf("[Monitor] Error loading today's messages: %v", err)
 	} else if len(todayMsgs) > 0 {
 		m.mu.Lock()
 		for _, um := range todayMsgs {
+			if um.LiveName != "" && !strings.EqualFold(um.LiveName, currentUsername) {
+				continue
+			}
+			ts := parseStoredTimestampMillis(um.Timestamp, now)
 			m.chatBuffer = append(m.chatBuffer, ChatMessage{
 				UniqueID:  um.UniqueID,
 				Nickname:  um.Username,
 				Comment:   um.Message,
-				Timestamp: now,
+				Timestamp: ts,
 			})
 			if looksLikeQuestion(um.Message) {
 				m.questionBuffer = append(m.questionBuffer, QuestionEntry{
 					UniqueID:  um.UniqueID,
 					Nickname:  um.Username,
 					Comment:   um.Message,
-					Timestamp: now,
+					Timestamp: ts,
 				})
 			}
 		}
@@ -1302,6 +1306,26 @@ func truthy(v interface{}) bool {
 	default:
 		return false
 	}
+}
+
+// parseStoredTimestampMillis converts a DB timestamp string to Unix milliseconds.
+// Falls back to fallback when parsing fails.
+func parseStoredTimestampMillis(raw string, fallback int64) int64 {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+	} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t.UnixMilli()
+		}
+	}
+	return fallback
 }
 
 func coalesce(values ...string) string {

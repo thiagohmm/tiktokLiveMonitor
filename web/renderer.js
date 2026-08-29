@@ -2423,7 +2423,7 @@ function setupEventStream() {
                 if (card) updateGoalCard(card, data.progress);
                 else loadGoals();
             }
-            const unlocked = data.unlockedMilestones || [];
+            const unlocked = data.newlyUnlockedMilestones || data.unlockedMilestones || [];
             if (unlocked.length > 0) {
                 const percent = data.progress ? Math.round(data.progress.percent) : 0;
                 const reward = unlocked[0].reward ? translateGiftName(unlocked[0].reward) : 'recompensa';

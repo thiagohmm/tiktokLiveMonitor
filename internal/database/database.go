@@ -317,6 +317,45 @@ func (db *DB) GetAnomalyLogsByLiveName(liveName string) ([]model.AnomalyLog, err
 	return out, rows.Err()
 }
 
+// GetAnomalyLogsByUser returns anomaly logs for a participant (case-insensitive).
+func (db *DB) GetAnomalyLogsByUser(uniqueID string, limit int) ([]model.AnomalyLog, error) {
+	uniqueID = strings.TrimSpace(uniqueID)
+	if uniqueID == "" {
+		return nil, fmt.Errorf("uniqueId is required")
+	}
+	if limit < 1 || limit > 500 {
+		limit = 50
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	rows, err := db.conn.Query(
+		`SELECT id, live_name, day, timestamp, uniqueId, comment, is_anomaly, category
+		 FROM anomaly_logs
+		 WHERE LOWER(uniqueId) = LOWER(?) AND is_anomaly = 1
+		 ORDER BY timestamp DESC
+		 LIMIT ?`,
+		uniqueID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query anomaly logs by user: %w", err)
+	}
+	defer rows.Close()
+
+	var out []model.AnomalyLog
+	for rows.Next() {
+		var a model.AnomalyLog
+		var isAnomaly bool
+		if err := rows.Scan(&a.ID, &a.LiveName, &a.Day, &a.Timestamp, &a.UniqueID, &a.Comment, &isAnomaly, &a.Category); err != nil {
+			return nil, fmt.Errorf("scan anomaly log: %w", err)
+		}
+		a.IsAnomaly = isAnomaly
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // ClearHistory removes all anomaly logs.
 func (db *DB) ClearHistory() (int64, error) {
 	db.mu.Lock()
@@ -751,16 +790,22 @@ func (db *DB) GetGiftUnits(liveName string, giftNames ...string) (units, count i
 	return units, count, nil
 }
 
-// GetTodayUserMessages returns all user messages from today.
-func (db *DB) GetTodayUserMessages() ([]model.UserMessage, error) {
+// GetTodayUserMessages returns today's user messages for the given live.
+func (db *DB) GetTodayUserMessages(liveName string) ([]model.UserMessage, error) {
+	liveName = strings.TrimSpace(liveName)
+	if liveName == "" {
+		return []model.UserMessage{}, nil
+	}
+
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	rows, err := db.conn.Query(
 		`SELECT id, live_name, uniqueId, username, message, timestamp
 		 FROM user_messages
-		 WHERE date(timestamp) = date('now')
+		 WHERE live_name = ? AND date(timestamp) = date('now')
 		 ORDER BY timestamp ASC`,
+		liveName,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query today user messages: %w", err)

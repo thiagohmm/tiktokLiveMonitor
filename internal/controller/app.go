@@ -396,15 +396,17 @@ func (c *AppController) GetUserProfile(uniqueID string) (model.UserProfile, erro
 		out.Nickname = out.Messages[0].Username
 	}
 
-	// Derive a risk level from recent anomaly logs.
-	var risk string
-	if logs, err := c.repo.GetAnomalyLogsByLiveName(""); err == nil {
-		risk = riskForUser(logs, uniqueID)
+	// Derive a risk level from the user's anomaly history.
+	alerts, err := c.repo.GetAnomalyLogsByUser(uniqueID, 50)
+	if err != nil {
+		log.Printf("[Controller] Error fetching user alerts: %v", err)
+	} else {
+		out.Alerts = alerts
+		out.RiskLevel = riskForUser(alerts, uniqueID)
 	}
-	if risk == "" {
-		risk = model.RiskLevelNone
+	if out.RiskLevel == "" {
+		out.RiskLevel = model.RiskLevelNone
 	}
-	out.RiskLevel = risk
 	return out, nil
 }
 
