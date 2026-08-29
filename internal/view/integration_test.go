@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -907,8 +908,18 @@ func TestHandleGoals(t *testing.T) {
 	})
 
 	t.Run("POST complete", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/goals/complete", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/goals", nil)
 		rec := httptest.NewRecorder()
+		srv.handleGoals(rec, req)
+		var st controller.GoalsState
+		if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+			t.Fatalf("decode JSON: %v", err)
+		}
+		if st.Active == nil {
+			t.Fatalf("expected an active goal to complete: %+v", st)
+		}
+		req = httptest.NewRequest(http.MethodPost, "/api/goals/complete?id="+strconv.FormatInt(st.Active.Goal.ID, 10), nil)
+		rec = httptest.NewRecorder()
 		srv.handleGoalComplete(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
@@ -916,7 +927,7 @@ func TestHandleGoals(t *testing.T) {
 		req = httptest.NewRequest(http.MethodGet, "/api/goals", nil)
 		rec = httptest.NewRecorder()
 		srv.handleGoals(rec, req)
-		var st controller.GoalsState
+		st = controller.GoalsState{}
 		if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
 			t.Fatalf("decode JSON: %v", err)
 		}
@@ -927,10 +938,15 @@ func TestHandleGoals(t *testing.T) {
 
 	t.Run("POST cancel", func(t *testing.T) {
 		body := map[string]interface{}{"title": "nova meta", "targetUnits": 10}
-		if rec := postJSON(t, srv.handleGoals, "/api/goals", body); rec.Code != http.StatusOK {
-			t.Fatalf("create: expected 200, got %d body=%s", rec.Code, rec.Body.String())
+		createRec := postJSON(t, srv.handleGoals, "/api/goals", body)
+		if createRec.Code != http.StatusOK {
+			t.Fatalf("create: expected 200, got %d body=%s", createRec.Code, createRec.Body.String())
 		}
-		req := httptest.NewRequest(http.MethodPost, "/api/goals/cancel", nil)
+		var created model.GiftGoal
+		if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+			t.Fatalf("decode JSON: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/goals/cancel?id="+strconv.FormatInt(created.ID, 10), nil)
 		rec := httptest.NewRecorder()
 		srv.handleGoalCancel(rec, req)
 		if rec.Code != http.StatusOK {

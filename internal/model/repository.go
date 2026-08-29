@@ -90,6 +90,12 @@ type ShareRepository interface {
 // LikeRepository tracks likes (hearts) sent by participants during a live.
 type LikeRepository interface {
 	AddLike(liveName, uniqueID, nickname string, likeCount int) error
+	// UpsertRoomLikeTotal stores the room-level cumulative like counter as
+	// reported by the stream (monotonic: only the highest value is kept).
+	UpsertRoomLikeTotal(liveName string, total int64) error
+	// LikeTotals returns the room-level cumulative like total and the sum of
+	// the per-event likes actually delivered by the stream for a live.
+	LikeTotals(liveName string) (roomTotal, delivered int64, err error)
 }
 
 // RankingRepository handles engagement ranking and live analytics.

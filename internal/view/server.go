@@ -804,7 +804,12 @@ func (s *HTTPServer) handleGoalCancel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if err := s.controller.CancelGoal(); err != nil {
+	id, err := goalIDParam(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.controller.CancelGoal(id); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -816,11 +821,26 @@ func (s *HTTPServer) handleGoalComplete(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if err := s.controller.CompleteGoal(); err != nil {
+	id, err := goalIDParam(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.controller.CompleteGoal(id); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	writeJSON(w, map[string]bool{"success": true})
+}
+
+// goalIDParam reads the required ?id= query parameter of the goal
+// cancel/complete endpoints (a live can have several active goals).
+func goalIDParam(r *http.Request) (int64, error) {
+	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	if err != nil || id <= 0 {
+		return 0, fmt.Errorf("id é obrigatório")
+	}
+	return id, nil
 }
 
 // findGoal locates a goal by ID in the live's goal state.

@@ -91,6 +91,11 @@ func (db *DB) migrate() error {
 			like_count INTEGER DEFAULT 1,
 			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS room_like_totals (
+			live_name TEXT PRIMARY KEY,
+			total INTEGER NOT NULL DEFAULT 0,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
 		`CREATE TABLE IF NOT EXISTS user_messages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			live_name TEXT NOT NULL DEFAULT '',
@@ -571,6 +576,51 @@ func (db *DB) AddLike(liveName, uniqueID, nickname string, likeCount int) error 
 		return fmt.Errorf("insert like: %w", err)
 	}
 	return nil
+}
+
+// UpsertRoomLikeTotal stores the room-level cumulative like counter reported
+// by the stream. The stream value is monotonic per live, so only the highest
+// value seen is kept.
+func (db *DB) UpsertRoomLikeTotal(liveName string, total int64) error {
+	if total <= 0 {
+		return nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if _, err := db.conn.Exec(
+		`INSERT INTO room_like_totals (live_name, total, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+		 ON CONFLICT(live_name) DO UPDATE SET
+			total = MAX(total, excluded.total),
+			updated_at = CURRENT_TIMESTAMP`,
+		liveName, total,
+	); err != nil {
+		return fmt.Errorf("upsert room like total: %w", err)
+	}
+	return nil
+}
+
+// LikeTotals returns the room-level cumulative like total (as reported by the
+// stream) and the sum of per-event likes delivered by the stream for a live.
+// roomTotal is 0 when the stream never reported one.
+func (db *DB) LikeTotals(liveName string) (int64, int64, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var roomTotal int64
+	if err := db.conn.QueryRow(
+		"SELECT COALESCE(MAX(total), 0) FROM room_like_totals WHERE live_name = ?", liveName,
+	).Scan(&roomTotal); err != nil {
+		return 0, 0, fmt.Errorf("query room like total: %w", err)
+	}
+
+	var delivered int64
+	if err := db.conn.QueryRow(
+		"SELECT COALESCE(SUM(like_count), 0) FROM likes WHERE live_name = ?", liveName,
+	).Scan(&delivered); err != nil {
+		return 0, 0, fmt.Errorf("query delivered likes: %w", err)
+	}
+	return roomTotal, delivered, nil
 }
 
 // GetRecentGifts returns the latest N gifts.
@@ -1392,7 +1442,7 @@ func (db *DB) DeleteLive(liveName string) (int64, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tables := []string{"user_messages", "gifts", "likes", "shares", "anomaly_logs", "pinned_comments", "target_gift_history", "gift_goals"}
+	tables := []string{"user_messages", "gifts", "likes", "room_like_totals", "shares", "anomaly_logs", "pinned_comments", "target_gift_history", "gift_goals"}
 	total := int64(0)
 	for _, table := range tables {
 		res, err := db.conn.Exec(fmt.Sprintf("DELETE FROM %s WHERE live_name = ?", table), liveName)

@@ -57,8 +57,8 @@ func TestCreateGoalAndState(t *testing.T) {
 	if st.LiveName != "live1" {
 		t.Fatalf("expected live1, got %q", st.LiveName)
 	}
-	if st.Active == nil {
-		t.Fatal("expected an active goal")
+	if st.Active == nil || len(st.Actives) != 1 {
+		t.Fatalf("expected an active goal, got active=%+v actives=%d", st.Active, len(st.Actives))
 	}
 	if st.Active.Units != 0 || st.Active.Percent != 0 {
 		t.Fatalf("expected 0 units/0%%, got %d/%.1f", st.Active.Units, st.Active.Percent)
@@ -68,7 +68,7 @@ func TestCreateGoalAndState(t *testing.T) {
 	}
 }
 
-func TestCreateGoalCancelsPreviousActive(t *testing.T) {
+func TestCreateMultipleGoalsCoexist(t *testing.T) {
 	c := newTestController(t, "live1")
 
 	if _, err := c.CreateGoal("meta antiga", "", 10, nil); err != nil {
@@ -82,11 +82,74 @@ func TestCreateGoalCancelsPreviousActive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get state: %v", err)
 	}
-	if st.Active == nil || st.Active.Goal.Title != "meta nova" {
-		t.Fatalf("expected new active goal, got %+v", st.Active)
+	if len(st.Actives) != 2 {
+		t.Fatalf("expected 2 active goals, got %d: %+v", len(st.Actives), st.Actives)
 	}
-	if len(st.History) != 1 || st.History[0].Status != model.GoalStatusCancelled {
-		t.Fatalf("expected cancelled previous goal, got %+v", st.History)
+	for i := range st.Actives {
+		if st.Actives[i].Goal.Status != model.GoalStatusActive {
+			t.Fatalf("expected active goal, got %+v", st.Actives[i])
+		}
+	}
+	if len(st.History) != 0 {
+		t.Fatalf("expected empty history, got %+v", st.History)
+	}
+}
+
+func TestMultipleGoalsCompleteIndependently(t *testing.T) {
+	c := newTestController(t, "live1")
+
+	var updates []GoalUpdate
+	c.SetGoalCallback(func(u GoalUpdate) { updates = append(updates, u) })
+
+	g1, err := c.CreateGoal("meta pequena", "", 10, nil)
+	if err != nil {
+		t.Fatalf("create first: %v", err)
+	}
+	if _, err := c.CreateGoal("meta grande", "", 100, nil); err != nil {
+		t.Fatalf("create second: %v", err)
+	}
+
+	// 10 units: the small goal completes, the big one keeps progressing.
+	c.HandleGiftEvent(giftData("u1", 10))
+	if len(updates) != 2 {
+		t.Fatalf("expected updates for both goals, got %d: %+v", len(updates), updates)
+	}
+	byID := map[int64]GoalUpdate{}
+	for _, u := range updates {
+		byID[u.Progress.Goal.ID] = u
+	}
+	if !byID[g1.ID].Completed {
+		t.Fatalf("expected small goal completed, got %+v", byID[g1.ID])
+	}
+	if _, ok := byID[2]; !ok {
+		t.Fatalf("expected big goal progress, got %+v", updates)
+	}
+
+	st, err := c.GetGoalsState()
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	if len(st.Actives) != 1 || st.Actives[0].Goal.ID != 2 {
+		t.Fatalf("expected only the big goal active, got %+v", st.Actives)
+	}
+	if st.Actives[0].Units != 10 {
+		t.Fatalf("expected 10 units on the big goal, got %d", st.Actives[0].Units)
+	}
+	if len(st.History) != 1 || st.History[0].Status != model.GoalStatusCompleted {
+		t.Fatalf("expected completed small goal in history, got %+v", st.History)
+	}
+
+	// 90 more units complete the big goal too.
+	c.HandleGiftEvent(giftData("u2", 90))
+	st, err = c.GetGoalsState()
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	if len(st.Actives) != 0 {
+		t.Fatalf("expected no active goals, got %+v", st.Actives)
+	}
+	if len(st.History) != 2 {
+		t.Fatalf("expected 2 goals in history, got %d", len(st.History))
 	}
 }
 
@@ -224,7 +287,8 @@ func TestGoalProgressEmitsOnPlainGifts(t *testing.T) {
 	var updates []GoalUpdate
 	c.SetGoalCallback(func(u GoalUpdate) { updates = append(updates, u) })
 
-	if _, err := c.CreateGoal("Meta", "", 1000, nil); err != nil {
+	g, err := c.CreateGoal("Meta", "", 1000, nil)
+	if err != nil {
 		t.Fatalf("create goal: %v", err)
 	}
 
@@ -252,7 +316,9 @@ func TestGoalProgressEmitsOnPlainGifts(t *testing.T) {
 	}
 
 	// Completed goals must not re-emit on later gifts.
-	c.CompleteGoal()
+	if err := c.CompleteGoal(g.ID); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
 	before := len(updates)
 	c.HandleGiftEvent(giftData("u3", 5))
 	if len(updates) != before {
@@ -263,10 +329,11 @@ func TestGoalProgressEmitsOnPlainGifts(t *testing.T) {
 func TestCancelGoal(t *testing.T) {
 	c := newTestController(t, "live1")
 
-	if _, err := c.CreateGoal("meta", "", 100, nil); err != nil {
+	g, err := c.CreateGoal("meta", "", 100, nil)
+	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := c.CancelGoal(); err != nil {
+	if err := c.CancelGoal(g.ID); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
 	st, err := c.GetGoalsState()
@@ -276,20 +343,24 @@ func TestCancelGoal(t *testing.T) {
 	if st.Active != nil || len(st.History) != 1 || st.History[0].Status != model.GoalStatusCancelled {
 		t.Fatalf("unexpected state after cancel: %+v", st)
 	}
-	if err := c.CancelGoal(); err == nil {
-		t.Fatal("expected error cancelling with no active goal")
+	if err := c.CancelGoal(g.ID); err == nil {
+		t.Fatal("expected error cancelling an already-cancelled goal")
+	}
+	if err := c.CancelGoal(99999); err == nil {
+		t.Fatal("expected error cancelling an unknown goal")
 	}
 }
 
 func TestCompleteGoalManual(t *testing.T) {
 	c := newTestController(t, "live1")
 
-	if _, err := c.CreateGoal("meta", "", 100, []model.GoalMilestone{{AtUnits: 30, Reward: "prêmio"}}); err != nil {
+	g, err := c.CreateGoal("meta", "", 100, []model.GoalMilestone{{AtUnits: 30, Reward: "prêmio"}})
+	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	c.HandleGiftEvent(giftData("u1", 30))
 
-	if err := c.CompleteGoal(); err != nil {
+	if err := c.CompleteGoal(g.ID); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	st, err := c.GetGoalsState()
@@ -302,8 +373,8 @@ func TestCompleteGoalManual(t *testing.T) {
 	if !st.History[0].Milestones[0].Unlocked || st.History[0].Milestones[0].UnlockedAt == nil {
 		t.Fatalf("expected crossed milestone unlocked, got %+v", st.History[0].Milestones[0])
 	}
-	if err := c.CompleteGoal(); err == nil {
-		t.Fatal("expected error completing with no active goal")
+	if err := c.CompleteGoal(g.ID); err == nil {
+		t.Fatal("expected error completing an already-completed goal")
 	}
 }
 
