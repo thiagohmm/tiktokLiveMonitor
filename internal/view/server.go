@@ -140,6 +140,9 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/ranking", s.handleRanking)
 	mux.HandleFunc("/api/report", s.handleReport)
 	mux.HandleFunc("/api/profile", s.handleProfile)
+	mux.HandleFunc("/api/goals", s.handleGoals)
+	mux.HandleFunc("/api/goals/cancel", s.handleGoalCancel)
+	mux.HandleFunc("/api/goals/complete", s.handleGoalComplete)
 	mux.HandleFunc("/api/admin/lives", s.handleAdminLives)
 	mux.HandleFunc("/api/admin/lives/delete", s.handleAdminLivesDelete)
 
@@ -190,6 +193,17 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 			}
 		}
 		s.broadcastSSE(eventType, data)
+	})
+
+	// Goal progress updates (fired by the controller after gift events).
+	s.controller.SetGoalCallback(func(update controller.GoalUpdate) {
+		s.broadcastSSE("goal-update", update)
+		if len(update.UnlockedMilestones) > 0 {
+			s.broadcastSSE("goal-unlocked", update)
+		}
+		if update.Completed {
+			s.broadcastSSE("goal-completed", update)
+		}
 	})
 
 	addr := fmt.Sprintf("%s:%d", host, port)
@@ -714,6 +728,112 @@ func (s *HTTPServer) handleProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, profile)
+}
+
+// handleGoals returns the current live's goals (GET) or creates/updates a goal (POST).
+func (s *HTTPServer) handleGoals(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		state, err := s.controller.GetGoalsState()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, state)
+		return
+	}
+	if r.Method == http.MethodPost {
+		var body struct {
+			ID          int64                 `json:"id"`
+			Title       string                `json:"title"`
+			GiftName    string                `json:"giftName"`
+			TargetUnits int                   `json:"targetUnits"`
+			Milestones  []model.GoalMilestone `json:"milestones"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid body")
+			return
+		}
+		if strings.TrimSpace(body.Title) == "" {
+			writeError(w, http.StatusBadRequest, "title is required")
+			return
+		}
+		if body.TargetUnits < 1 {
+			writeError(w, http.StatusBadRequest, "targetUnits must be >= 1")
+			return
+		}
+
+		if body.ID > 0 {
+			// Update: preserve status/milestones timestamps of the existing goal.
+			state, err := s.controller.GetGoalsState()
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			existing := findGoal(state, body.ID)
+			if existing == nil {
+				writeError(w, http.StatusNotFound, "goal not found")
+				return
+			}
+			existing.Title = body.Title
+			existing.GiftName = body.GiftName
+			existing.TargetUnits = body.TargetUnits
+			if body.Milestones != nil {
+				existing.Milestones = body.Milestones
+			}
+			if err := s.controller.UpdateGoal(*existing); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, *existing)
+			return
+		}
+
+		goal, err := s.controller.CreateGoal(body.Title, body.GiftName, body.TargetUnits, body.Milestones)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, goal)
+		return
+	}
+	writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+}
+
+func (s *HTTPServer) handleGoalCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := s.controller.CancelGoal(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, map[string]bool{"success": true})
+}
+
+func (s *HTTPServer) handleGoalComplete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := s.controller.CompleteGoal(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, map[string]bool{"success": true})
+}
+
+// findGoal locates a goal by ID in the live's goal state.
+func findGoal(state controller.GoalsState, id int64) *model.GiftGoal {
+	if state.Active != nil && state.Active.Goal.ID == id {
+		return &state.Active.Goal
+	}
+	for i := range state.History {
+		if state.History[i].ID == id {
+			return &state.History[i]
+		}
+	}
+	return nil
 }
 
 // --- Helpers ---

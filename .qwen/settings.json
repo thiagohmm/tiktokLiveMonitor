@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Agent(Explore)",
+      "loop_wakeup",
+      "Bash(go *)",
+      "Bash(cd *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(node *)"
+    ]
+  },
+  "$version": 4
+}

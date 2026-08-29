@@ -34,6 +34,10 @@ services:
       - llm-models:/app/models
       - llm-bin:/app/bin
       - feedback-data:/app
+      # Bind mount (lê) após o volume /app para que atualizações de web/ no
+      # repo sejam servidas direto após restart do container, sem ficarem
+      # presas na cópia do volume.
+      - ./web:/app/web:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3001/api/state || exit 1"]

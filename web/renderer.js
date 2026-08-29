@@ -725,6 +725,19 @@ const targetGiftsList = document.getElementById('targetGiftsList');
 const availableGiftSelect = document.getElementById('availableGiftSelect');
 const addTargetGiftBtn = document.getElementById('addTargetGiftBtn');
 const pinnedCommentHistoryBtn = document.getElementById('pinnedCommentHistoryBtn');
+const goalTitleInput = document.getElementById('goalTitleInput');
+const goalGiftSelect = document.getElementById('goalGiftSelect');
+const goalTargetInput = document.getElementById('goalTargetInput');
+const goalSaveBtn = document.getElementById('goalSaveBtn');
+const goalCancelBtn = document.getElementById('goalCancelBtn');
+const goalCompleteBtn = document.getElementById('goalCompleteBtn');
+const goalProgressPercent = document.getElementById('goalProgressPercent');
+const goalUnitsLabel = document.getElementById('goalUnitsLabel');
+const goalProgressBar = document.getElementById('goalProgressBar');
+const goalMilestonesList = document.getElementById('goalMilestonesList');
+const goalHistoryWrap = document.getElementById('goalHistoryWrap');
+const goalHistoryList = document.getElementById('goalHistoryList');
+const goalMilestoneRows = Array.from(document.querySelectorAll('.goal-milestone-row'));
 const historyModalBackdrop = document.getElementById('historyModalBackdrop');
 const historyModalTitle = document.getElementById('historyModalTitle');
 const historyModalBody = document.getElementById('historyModalBody');
@@ -1721,6 +1734,7 @@ function clearTables() {
     }
     flaggedMessageTimers = {};
     clearHistories();
+    resetGoalDisplay();
 }
 
 function handleConnectionStatus(data) {
@@ -2408,8 +2422,9 @@ async function loadInitialState() {
             ]);
         }
 
-        // Carrega ranking mesmo desconectado.
+        // Carrega ranking e metas mesmo desconectado (vazio se não houver live).
         loadRanking();
+        loadGoals();
     } catch (error) {
         setStatus('Servidor indisponível', 'error');
     }
@@ -2426,6 +2441,7 @@ function setupEventStream() {
         if (data.connected && data.username) {
             usernameInput.value = data.username;
             applyConnectedState(data.username);
+            loadGoals();
         } else {
             applyDisconnectedState('Desconectado pelo usuário');
         }
@@ -2506,6 +2522,46 @@ function setupEventStream() {
 
     eventSource.addEventListener('settings-update', event => {
         renderTargetGifts();
+    });
+
+    eventSource.addEventListener('goal-update', event => {
+        try {
+            const data = JSON.parse(event.data);
+            if (!data.progress) return;
+            if (data.progress.goal && data.progress.goal.id) {
+                currentGoalId = data.progress.goal.id;
+            }
+            renderGoalProgress(data.progress);
+            updateGoalButtons();
+        } catch (error) {
+            console.error('[Frontend] Falha ao processar goal-update:', error);
+        }
+    });
+
+    eventSource.addEventListener('goal-unlocked', event => {
+        try {
+            const data = JSON.parse(event.data);
+            if (data.progress) renderGoalProgress(data.progress);
+            const unlocked = data.unlockedMilestones || [];
+            if (unlocked.length > 0) {
+                const percent = data.progress ? Math.round(data.progress.percent) : 0;
+                const reward = unlocked[0].reward ? translateGiftName(unlocked[0].reward) : 'recompensa';
+                showGoalToast(`🎉 ${percent}% — recompensa: ${reward}`);
+            }
+        } catch (error) {
+            console.error('[Frontend] Falha ao processar goal-unlocked:', error);
+        }
+    });
+
+    eventSource.addEventListener('goal-completed', event => {
+        try {
+            const data = JSON.parse(event.data);
+            if (data.progress) renderGoalProgress(data.progress);
+            showGoalToast('🎉 Meta concluída!');
+            loadGoals();
+        } catch (error) {
+            console.error('[Frontend] Falha ao processar goal-completed:', error);
+        }
     });
 
     eventSource.onerror = () => {
@@ -2749,28 +2805,51 @@ async function loadAvailableGifts() {
     }
 }
 
+function setSelectValue(el, value) {
+    const target = value ? String(value) : '';
+    el.querySelectorAll('option[data-dynamic]').forEach(o => o.remove());
+    if (target && !el.querySelector(`option[value="${CSS.escape(target)}"]`)) {
+        const option = document.createElement('option');
+        option.value = target;
+        option.textContent = translateGiftName(target);
+        option.dataset.dynamic = '1';
+        el.appendChild(option);
+    }
+    el.value = target;
+}
+
 function populateAvailableGifts(gifts) {
-    if (!availableGiftSelect || !Array.isArray(gifts) || gifts.length === 0) {
+    if (!Array.isArray(gifts) || gifts.length === 0) {
         return;
     }
-    const current = availableGiftSelect.value;
     const unique = [...new Set(gifts.map(gift => String(gift || '').trim()).filter(Boolean))];
     unique.sort((a, b) => a.localeCompare(b, 'pt'));
-    availableGiftSelect.innerHTML = '<option value="">Selecione um presente...</option>';
-    unique.forEach(gift => {
-        const option = document.createElement('option');
-        // value mantém o nome original (ING) para o backend reconhecer o presente na live;
-        // a exibição é traduzida para PT-BR, mas o nome original é mantido entre parênteses:
-        // a busca por digitação do <select> só procura no texto visível, então assim
-        // encontra o presente pelo nome PT-BR OU inglês (ex.: digitar "soccer" acha
-        // "Bola de Futebol (Soccer Ball)").
-        const label = translateGiftName(gift);
-        option.value = gift;
-        option.textContent = label !== gift ? `${label} (${gift})` : label;
-        availableGiftSelect.appendChild(option);
-    });
-    if (current && unique.includes(current)) {
-        availableGiftSelect.value = current;
+    // O dropdown de presentes alvos, o de metas da live e os de recompensa dos
+    // milestones compartilham as mesmas opções; apenas o placeholder difere.
+    const selects = [
+        { el: availableGiftSelect, placeholder: 'Selecione um presente...' },
+        { el: goalGiftSelect, placeholder: 'Todos os presentes' },
+        ...goalMilestoneRows.map(row => ({ el: row.querySelector('.goal-ms-reward'), placeholder: 'Recompensa' }))
+    ];
+    for (const { el, placeholder } of selects) {
+        if (!el) continue;
+        const current = el.value;
+        el.innerHTML = `<option value="">${placeholder}</option>`;
+        unique.forEach(gift => {
+            const option = document.createElement('option');
+            // value mantém o nome original (ING) para o backend reconhecer o presente na live;
+            // a exibição é traduzida para PT-BR, mas o nome original é mantido entre parênteses:
+            // a busca por digitação do <select> só procura no texto visível, então assim
+            // encontra o presente pelo nome PT-BR OU inglês (ex.: digitar "soccer" acha
+            // "Bola de Futebol (Soccer Ball)").
+            const label = translateGiftName(gift);
+            option.value = gift;
+            option.textContent = label !== gift ? `${label} (${gift})` : label;
+            el.appendChild(option);
+        });
+        if (current) {
+            setSelectValue(el, current);
+        }
     }
 }
 
@@ -2910,6 +2989,250 @@ async function addTargetGift() {
 }
 
 addTargetGiftBtn.addEventListener('click', addTargetGift);
+
+// --- Metas da Live ---
+
+let currentGoalId = 0;
+let goalToastTimer = null;
+
+function showGoalToast(message) {
+    let toast = document.getElementById('goalToast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'goalToast';
+        toast.className = 'goal-toast';
+        document.body.appendChild(toast);
+    }
+    toast.textContent = message;
+    toast.classList.add('show');
+    if (goalToastTimer) clearTimeout(goalToastTimer);
+    goalToastTimer = setTimeout(() => toast.classList.remove('show'), 6000);
+}
+
+function updateGoalButtons() {
+    if (goalSaveBtn) goalSaveBtn.textContent = currentGoalId ? 'Atualizar' : 'Salvar';
+    if (goalCancelBtn) goalCancelBtn.disabled = !currentGoalId;
+    if (goalCompleteBtn) goalCompleteBtn.disabled = !currentGoalId;
+}
+
+function renderGoalProgress(progress) {
+    if (!progress) return;
+    const pct = Math.max(0, Math.min(100, progress.percent || 0));
+    if (goalProgressPercent) goalProgressPercent.textContent = `${Math.round(pct)}%`;
+    const target = (progress.goal && progress.goal.targetUnits) || 0;
+    const giftName = (progress.goal && progress.goal.giftName) || '';
+    if (goalUnitsLabel) {
+        goalUnitsLabel.textContent = giftName
+            ? `${progress.units || 0} / ${target} ${translateGiftName(giftName)}`
+            : `${progress.units || 0} / ${target} unidades`;
+    }
+    if (goalProgressBar) goalProgressBar.style.width = `${pct}%`;
+    renderGoalMilestones(progress.goal);
+}
+
+function renderGoalMilestones(goal) {
+    if (!goalMilestonesList) return;
+    goalMilestonesList.innerHTML = '';
+    (goal && goal.milestones || []).forEach(m => {
+        const row = document.createElement('div');
+        row.className = 'goal-milestone' + (m.unlocked ? ' unlocked' : '');
+        const units = document.createElement('span');
+        units.className = 'goal-ms-units-label';
+        units.textContent = `${m.atUnits} unidades`;
+        const reward = document.createElement('span');
+        reward.className = 'goal-ms-reward-label';
+        reward.textContent = m.reward ? translateGiftName(m.reward) : '—';
+        const badge = document.createElement('span');
+        badge.className = 'goal-ms-badge' + (m.unlocked ? ' on' : '');
+        badge.textContent = m.unlocked ? '🎉 Desbloqueado' : '🔒 Pendente';
+        row.append(units, reward, badge);
+        goalMilestonesList.appendChild(row);
+    });
+}
+
+function fillGoalForm(goal) {
+    currentGoalId = goal ? goal.id : 0;
+    if (goalTitleInput) goalTitleInput.value = goal ? goal.title : '';
+    if (goalGiftSelect) setSelectValue(goalGiftSelect, goal && goal.giftName ? goal.giftName : '');
+    if (goalTargetInput) goalTargetInput.value = goal && goal.targetUnits ? String(goal.targetUnits) : '';
+    const milestones = (goal && goal.milestones) || [];
+    goalMilestoneRows.forEach((row, i) => {
+        const m = milestones[i];
+        const unitsInput = row.querySelector('.goal-ms-units');
+        const rewardInput = row.querySelector('.goal-ms-reward');
+        if (unitsInput) unitsInput.value = m && m.atUnits ? String(m.atUnits) : '';
+        if (rewardInput) setSelectValue(rewardInput, m ? (m.reward || '') : '');
+    });
+    updateGoalButtons();
+}
+
+function resetGoalDisplay() {
+    currentGoalId = 0;
+    if (goalTitleInput) goalTitleInput.value = '';
+    if (goalGiftSelect) goalGiftSelect.value = '';
+    if (goalTargetInput) goalTargetInput.value = '';
+    goalMilestoneRows.forEach(row => {
+        const unitsInput = row.querySelector('.goal-ms-units');
+        const rewardInput = row.querySelector('.goal-ms-reward');
+        if (unitsInput) unitsInput.value = '';
+        if (rewardInput) setSelectValue(rewardInput, '');
+    });
+    if (goalProgressPercent) goalProgressPercent.textContent = '0%';
+    if (goalUnitsLabel) goalUnitsLabel.textContent = '0 / 0 unidades';
+    if (goalProgressBar) goalProgressBar.style.width = '0%';
+    if (goalMilestonesList) goalMilestonesList.innerHTML = '';
+    renderGoalHistory([]);
+    updateGoalButtons();
+}
+
+function collectMilestones() {
+    return goalMilestoneRows.map(row => {
+        const rawUnits = parseInt(row.querySelector('.goal-ms-units').value, 10);
+        const reward = row.querySelector('.goal-ms-reward').value.trim();
+        return {
+            atUnits: Number.isNaN(rawUnits) ? 0 : rawUnits,
+            reward
+        };
+    }).filter(m => m.atUnits > 0 || m.reward !== '');
+}
+
+function renderGoalHistory(history) {
+    if (!goalHistoryList || !goalHistoryWrap) return;
+    goalHistoryList.innerHTML = '';
+    if (!history || history.length === 0) {
+        goalHistoryWrap.hidden = true;
+        return;
+    }
+    goalHistoryWrap.hidden = false;
+    history.forEach(goal => {
+        const item = document.createElement('div');
+        item.className = 'goal-history-item';
+        const title = document.createElement('span');
+        title.className = 'goal-history-title';
+        const giftName = goal.giftName || '';
+        title.textContent = giftName
+            ? `${goal.title} — ${goal.targetUnits} ${translateGiftName(giftName)}`
+            : `${goal.title} — ${goal.targetUnits} unidades`;
+        const tag = document.createElement('span');
+        tag.className = `goal-status-tag ${goal.status}`;
+        tag.textContent = goal.status === 'completed' ? 'Concluída'
+            : goal.status === 'cancelled' ? 'Cancelada'
+            : goal.status;
+        item.append(title, tag);
+        goalHistoryList.appendChild(item);
+    });
+}
+
+async function loadGoals() {
+    try {
+        const response = await fetch('/api/goals');
+        if (!response.ok) {
+            console.error('[Frontend] loadGoals: status', response.status);
+            return;
+        }
+        const state = await response.json();
+        if (state.active) {
+            fillGoalForm(state.active.goal);
+            renderGoalProgress(state.active);
+        } else {
+            if (currentGoalId === 0) {
+                if (goalProgressPercent) goalProgressPercent.textContent = '0%';
+                if (goalUnitsLabel) goalUnitsLabel.textContent = '0 / 0 unidades';
+                if (goalProgressBar) goalProgressBar.style.width = '0%';
+            }
+            if (goalMilestonesList) goalMilestonesList.innerHTML = '';
+            updateGoalButtons();
+        }
+        renderGoalHistory(state.history || []);
+    } catch (error) {
+        console.error('[Frontend] loadGoals: erro:', error);
+    }
+}
+
+async function saveGoal() {
+    const title = goalTitleInput ? goalTitleInput.value.trim() : '';
+    const giftName = goalGiftSelect ? goalGiftSelect.value.trim() : '';
+    const targetUnits = goalTargetInput ? parseInt(goalTargetInput.value, 10) : NaN;
+    if (!title) {
+        showGoalToast('Dê um título à meta.');
+        return;
+    }
+    if (!targetUnits || targetUnits < 1) {
+        showGoalToast('Defina a meta em unidades (mínimo 1).');
+        return;
+    }
+    try {
+        const res = await fetch('/api/goals', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ...(currentGoalId ? { id: currentGoalId } : {}),
+                title,
+                giftName,
+                targetUnits,
+                milestones: collectMilestones()
+            })
+        });
+        if (!res.ok) {
+            let message = `status ${res.status}`;
+            try {
+                const payload = await res.json();
+                if (payload.error) message = payload.error;
+            } catch (e) { /* mantém mensagem padrão */ }
+            showGoalToast(`Erro ao salvar meta: ${message}`);
+            return;
+        }
+        const saved = await res.json();
+        currentGoalId = saved.id;
+        await loadGoals();
+        showGoalToast('Meta salva.');
+    } catch (error) {
+        console.error('[Frontend] saveGoal: erro:', error);
+        showGoalToast('Erro ao salvar meta.');
+    }
+}
+
+async function cancelGoal() {
+    if (!currentGoalId) return;
+    if (!confirm('Cancelar a meta ativa?')) return;
+    try {
+        const res = await fetch('/api/goals/cancel', { method: 'POST' });
+        if (!res.ok) {
+            showGoalToast('Erro ao cancelar a meta.');
+            return;
+        }
+        currentGoalId = 0;
+        resetGoalDisplay();
+        await loadGoals();
+        showGoalToast('Meta cancelada.');
+    } catch (error) {
+        console.error('[Frontend] cancelGoal: erro:', error);
+        showGoalToast('Erro ao cancelar a meta.');
+    }
+}
+
+async function completeGoal() {
+    if (!currentGoalId) return;
+    if (!confirm('Concluir a meta agora?')) return;
+    try {
+        const res = await fetch('/api/goals/complete', { method: 'POST' });
+        if (!res.ok) {
+            showGoalToast('Erro ao concluir a meta.');
+            return;
+        }
+        currentGoalId = 0;
+        await loadGoals();
+        showGoalToast('🎉 Meta concluída!');
+    } catch (error) {
+        console.error('[Frontend] completeGoal: erro:', error);
+        showGoalToast('Erro ao concluir a meta.');
+    }
+}
+
+goalSaveBtn.addEventListener('click', saveGoal);
+goalCancelBtn.addEventListener('click', cancelGoal);
+goalCompleteBtn.addEventListener('click', completeGoal);
+updateGoalButtons();
 
 // --- Administração: lives e horários ---
 
@@ -3069,3 +3392,184 @@ async function bootstrap() {
 }
 
 void bootstrap();
+
+// ============================================================
+// Selects pesquisáveis: transforma todos os <select> da página
+// em combobox (campo de texto + lista filtrável) para o usuário
+// poder digitar e achar o que procura.
+// O <select> original permanece no DOM (escondido), então todo o
+// código existente que lê/escreve select.value continua valendo.
+// ============================================================
+const searchableSelectWidgets = [];
+
+function initSearchableSelects() {
+    document.querySelectorAll('select').forEach(select => {
+        if (select.dataset.ssWrapped) return;
+        select.dataset.ssWrapped = '1';
+
+        // Wrapper + input visível no lugar do select. As classes do select
+        // (setup-select / small) são copiadas para reaproveitar o estilo.
+        const wrap = document.createElement('div');
+        wrap.className = 'ss-wrap';
+        select.parentNode.insertBefore(wrap, select);
+        select.style.display = 'none';
+        wrap.appendChild(select);
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = `${select.className} ss-input`.trim();
+        input.autocomplete = 'off';
+        input.spellcheck = false;
+
+        const menu = document.createElement('div');
+        menu.className = 'ss-menu';
+        menu.hidden = true;
+
+        wrap.appendChild(input);
+        wrap.appendChild(menu);
+
+        const state = { open: false, active: -1 };
+        const widget = {
+            select,
+            input,
+            lastValue: select.value,
+            sync() { if (document.activeElement !== input) syncInput(); }
+        };
+
+        const visibleRows = () => Array.from(menu.querySelectorAll('.ss-option'));
+
+        function currentOption() {
+            for (const o of select.options) {
+                if (o.value === select.value) return o;
+            }
+            return null;
+        }
+
+        // Mantém o texto do input em sincronia com o valor atual do select.
+        function syncInput() {
+            const chosen = currentOption();
+            if (chosen && select.value !== '') {
+                input.value = chosen.textContent.trim();
+            } else {
+                input.value = '';
+                input.placeholder = chosen ? chosen.textContent.trim() : '';
+            }
+        }
+
+        // Reconstrói a lista, filtrando pelo texto digitado (busca tanto no
+        // rótulo quanto no value, ex.: "soccer" acha "Futebol (Soccer)").
+        function rebuildMenu() {
+            menu.innerHTML = '';
+            const query = input.value.trim().toLowerCase();
+            let count = 0;
+            for (const o of select.options) {
+                if (o.disabled) continue;
+                const label = o.textContent.trim();
+                if (query && !label.toLowerCase().includes(query) &&
+                    !o.value.toLowerCase().includes(query)) continue;
+                const row = document.createElement('div');
+                row.className = 'ss-option' + (o.value === select.value ? ' ss-selected' : '');
+                row.textContent = label;
+                row.dataset.value = o.value;
+                row.addEventListener('mousedown', e => {
+                    e.preventDefault(); // evita o blur antes da seleção
+                    choose(o.value);
+                });
+                menu.appendChild(row);
+                count++;
+            }
+            if (count === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'ss-no-results';
+                empty.textContent = 'Nenhum resultado';
+                menu.appendChild(empty);
+            }
+            const rows = visibleRows();
+            let idx = rows.findIndex(r => r.classList.contains('ss-selected'));
+            setActive(query || idx < 0 ? 0 : idx);
+        }
+
+        function setActive(i) {
+            const rows = visibleRows();
+            state.active = rows.length ? Math.min(Math.max(i, 0), rows.length - 1) : -1;
+            rows.forEach((r, idx) => r.classList.toggle('ss-active', idx === state.active));
+            const activeRow = rows[state.active];
+            if (activeRow) activeRow.scrollIntoView({ block: 'nearest' });
+        }
+
+        function openMenu() {
+            state.open = true;
+            menu.hidden = false;
+            // Se o texto é exatamente o rótulo selecionado (abertura por
+            // clique/foco), limpa para mostrar todas as opções de novo.
+            const chosen = currentOption();
+            if (chosen && input.value.trim() === chosen.textContent.trim()) {
+                input.value = '';
+            }
+            rebuildMenu();
+            input.focus();
+        }
+
+        function closeMenu() {
+            state.open = false;
+            menu.hidden = true;
+            syncInput(); // devolve o texto ao valor selecionado
+        }
+
+        function choose(value) {
+            select.value = value;
+            widget.lastValue = value;
+            syncInput();
+            state.open = false;
+            menu.hidden = true;
+        }
+
+        input.addEventListener('focus', openMenu);
+        input.addEventListener('click', () => { if (!state.open) openMenu(); });
+        input.addEventListener('input', () => {
+            if (!state.open) { state.open = true; menu.hidden = false; }
+            rebuildMenu();
+        });
+        input.addEventListener('blur', closeMenu);
+        input.addEventListener('keydown', e => {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (!state.open) openMenu(); else setActive(state.active + 1);
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (!state.open) openMenu(); else setActive(state.active - 1);
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                const rows = visibleRows();
+                const row = rows[state.active] || rows[0];
+                if (row) choose(row.dataset.value);
+            } else if (e.key === 'Escape') {
+                e.stopPropagation();
+                closeMenu();
+            } else if (e.key === 'Tab') {
+                closeMenu();
+            }
+        });
+
+        // As opções mudam por fora (innerHTML reescrito etc.) → reflete na lista.
+        new MutationObserver(() => {
+            if (state.open) rebuildMenu();
+        }).observe(select, { childList: true });
+
+        searchableSelectWidgets.push(widget);
+        syncInput();
+    });
+
+    // O código do programa muda select.value sem disparar evento
+    // (ex.: setSelectValue) → polling leve para manter o campo em sync.
+    setInterval(() => {
+        for (const w of searchableSelectWidgets) {
+            if (w.select.value !== w.lastValue) {
+                w.lastValue = w.select.value;
+                w.sync();
+            }
+        }
+    }, 400);
+}
+
+initSearchableSelects();
