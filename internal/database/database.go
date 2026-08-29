@@ -3,6 +3,7 @@ package database
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -108,6 +109,17 @@ func (db *DB) migrate() error {
 			answered_at DATETIME,
 			response_type TEXT
 		)`,
+		`CREATE TABLE IF NOT EXISTS gift_goals (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			live_name TEXT NOT NULL,
+			title TEXT NOT NULL,
+			gift_name TEXT NOT NULL DEFAULT '',
+			target_units INTEGER NOT NULL,
+			status TEXT NOT NULL,
+			milestones TEXT DEFAULT '[]',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			completed_at DATETIME
+		)`,
 		`CREATE TABLE IF NOT EXISTS pinned_comments (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			live_name TEXT NOT NULL,
@@ -117,6 +129,10 @@ func (db *DB) migrate() error {
 			pin_id TEXT,
 			is_follower INTEGER,
 			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_pinned_comments_pin
 			ON pinned_comments(live_name, pin_id)
@@ -133,6 +149,10 @@ func (db *DB) migrate() error {
 
 	// user_messages created by older versions may lack the live_name column.
 	if err := db.ensureColumn("user_messages", "live_name", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// gift_goals created by older versions may lack the gift_name column.
+	if err := db.ensureColumn("gift_goals", "gift_name", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	return nil
@@ -653,6 +673,34 @@ func (db *DB) ClearGifts() (int64, error) {
 	return result.RowsAffected()
 }
 
+// GetGiftUnits returns the total gift units (SUM repeat_count) and the
+// number of gift events recorded for a live. When no gift names are given
+// (or only empty strings), all gifts count; otherwise only events whose
+// gift_name matches one of the given names count.
+func (db *DB) GetGiftUnits(liveName string, giftNames ...string) (units, count int, err error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	query := "SELECT COALESCE(SUM(repeat_count), 0), COUNT(*) FROM gifts WHERE live_name = ?"
+	args := []interface{}{liveName}
+	seen := make(map[string]bool)
+	for _, name := range giftNames {
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		args = append(args, name)
+	}
+	if len(args) > 1 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(args)-1), ",")
+		query += " AND gift_name IN (" + placeholders + ")"
+	}
+	if err := db.conn.QueryRow(query, args...).Scan(&units, &count); err != nil {
+		return 0, 0, fmt.Errorf("query gift units: %w", err)
+	}
+	return units, count, nil
+}
+
 // GetTodayUserMessages returns all user messages from today.
 func (db *DB) GetTodayUserMessages() ([]model.UserMessage, error) {
 	db.mu.Lock()
@@ -863,6 +911,146 @@ func scanTargetGiftHistory(rows *sql.Rows) (model.TargetGiftHistory, error) {
 		h.ResponseType = &v
 	}
 	return h, nil
+}
+
+// --- GoalRepository ---
+
+// AddGiftGoal stores a new gift goal and returns its id.
+func (db *DB) AddGiftGoal(g model.GiftGoal) (int64, error) {
+	if strings.TrimSpace(g.Title) == "" {
+		return 0, fmt.Errorf("goal title is required")
+	}
+	if g.TargetUnits < 1 {
+		return 0, fmt.Errorf("target units must be >= 1")
+	}
+	if strings.TrimSpace(g.LiveName) == "" {
+		return 0, fmt.Errorf("live name is required")
+	}
+	if g.Status == "" {
+		g.Status = model.GoalStatusActive
+	}
+	if g.Milestones == nil {
+		g.Milestones = []model.GoalMilestone{}
+	}
+	if g.CreatedAt == "" {
+		g.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	milestonesJSON, err := json.Marshal(g.Milestones)
+	if err != nil {
+		return 0, fmt.Errorf("marshal goal milestones: %w", err)
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	result, err := db.conn.Exec(
+		`INSERT INTO gift_goals (live_name, title, gift_name, target_units, status, milestones, created_at, completed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		g.LiveName, g.Title, g.GiftName, g.TargetUnits, g.Status, string(milestonesJSON),
+		g.CreatedAt, nullTime(g.CompletedAt),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("insert gift goal: %w", err)
+	}
+	return result.LastInsertId()
+}
+
+// GetGiftGoals returns all goals for a live, newest first.
+func (db *DB) GetGiftGoals(liveName string) ([]model.GiftGoal, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	rows, err := db.conn.Query(
+		`SELECT id, live_name, title, gift_name, target_units, status, milestones, created_at, completed_at
+		 FROM gift_goals
+		 WHERE live_name = ?
+		 ORDER BY id DESC`,
+		liveName,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query gift goals: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]model.GiftGoal, 0)
+	for rows.Next() {
+		g, err := scanGiftGoal(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+// SaveGiftGoal persists an existing goal's mutable fields (title, target,
+// status, milestones, completed_at).
+func (db *DB) SaveGiftGoal(g model.GiftGoal) error {
+	if g.ID <= 0 {
+		return model.ErrInvalidID
+	}
+	milestonesJSON, err := json.Marshal(g.Milestones)
+	if err != nil {
+		return fmt.Errorf("marshal goal milestones: %w", err)
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	_, err = db.conn.Exec(
+		`UPDATE gift_goals
+		 SET title = ?, gift_name = ?, target_units = ?, status = ?, milestones = ?, completed_at = ?
+		 WHERE id = ?`,
+		g.Title, g.GiftName, g.TargetUnits, g.Status, string(milestonesJSON), nullTime(g.CompletedAt), g.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("save gift goal: %w", err)
+	}
+	return nil
+}
+
+// DeleteGiftGoals removes all goals for a live and returns the rows deleted.
+func (db *DB) DeleteGiftGoals(liveName string) (int64, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	result, err := db.conn.Exec("DELETE FROM gift_goals WHERE live_name = ?", liveName)
+	if err != nil {
+		return 0, fmt.Errorf("delete gift goals: %w", err)
+	}
+	return result.RowsAffected()
+}
+
+func scanGiftGoal(rows *sql.Rows) (model.GiftGoal, error) {
+	var (
+		g           model.GiftGoal
+		milestones  string
+		completedAt sql.NullString
+	)
+	if err := rows.Scan(&g.ID, &g.LiveName, &g.Title, &g.GiftName, &g.TargetUnits, &g.Status, &milestones, &g.CreatedAt, &completedAt); err != nil {
+		return model.GiftGoal{}, fmt.Errorf("scan gift goal: %w", err)
+	}
+	if err := json.Unmarshal([]byte(milestones), &g.Milestones); err != nil {
+		return model.GiftGoal{}, fmt.Errorf("unmarshal goal milestones: %w", err)
+	}
+	if g.Milestones == nil {
+		g.Milestones = []model.GoalMilestone{}
+	}
+	if completedAt.Valid {
+		v := normalizeTime(completedAt.String)
+		g.CompletedAt = &v
+	}
+	g.CreatedAt = normalizeTime(g.CreatedAt)
+	return g, nil
+}
+
+// nullTime converts a pointer timestamp to a nullable argument (nil stays NULL).
+func nullTime(p *string) interface{} {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return v
 }
 
 // --- PinnedCommentRepository ---
@@ -1178,7 +1366,7 @@ func (db *DB) ListLives(limit int) ([]model.Live, error) {
 	results := []model.Live{}
 	for rows.Next() {
 		var (
-			l   model.Live
+			l    model.Live
 			s, e sql.NullString
 		)
 		if err := rows.Scan(&l.Name, &l.Day, &s, &e, &l.Events); err != nil {
@@ -1204,7 +1392,7 @@ func (db *DB) DeleteLive(liveName string) (int64, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tables := []string{"user_messages", "gifts", "likes", "shares", "anomaly_logs", "pinned_comments", "target_gift_history"}
+	tables := []string{"user_messages", "gifts", "likes", "shares", "anomaly_logs", "pinned_comments", "target_gift_history", "gift_goals"}
 	total := int64(0)
 	for _, table := range tables {
 		res, err := db.conn.Exec(fmt.Sprintf("DELETE FROM %s WHERE live_name = ?", table), liveName)
@@ -1470,6 +1658,41 @@ func (db *DB) TotalDistinctUsers() (int, error) {
 		return 0, fmt.Errorf("query distinct users: %w", err)
 	}
 	return count, nil
+}
+
+// --- SettingsRepository ---
+
+// GetSetting returns the stored value for a settings key. An empty string and
+// nil error are returned when the key does not exist yet.
+func (db *DB) GetSetting(key string) (string, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var value string
+	err := db.conn.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			return "", nil
+		}
+		return "", fmt.Errorf("get setting %s: %w", key, err)
+	}
+	return value, nil
+}
+
+// SetSetting upserts a settings key/value pair.
+func (db *DB) SetSetting(key, value string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	_, err := db.conn.Exec(
+		"INSERT INTO settings (key, value) VALUES (?, ?) "+
+			"ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+		key, value,
+	)
+	if err != nil {
+		return fmt.Errorf("set setting %s: %w", key, err)
+	}
+	return nil
 }
 
 // --- Repository interface ---

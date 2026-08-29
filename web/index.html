@@ -800,6 +800,68 @@
             border-color: var(--cyan);
             box-shadow: 0 0 0 3px rgba(37, 244, 238, 0.18);
         }
+        /* Select pesquisável (combobox): o renderer.js transforma cada
+           <select> num input digível + lista filtrável escondendo o select. */
+        .ss-wrap {
+            position: relative;
+            display: inline-block;
+        }
+        .ss-wrap .ss-input {
+            /* border-box: width:100% + o padding global do input[type=text]
+               estourava o .ss-wrap e sobrepuava o campo vizinho. */
+            box-sizing: border-box;
+            width: 100%;
+            min-width: 200px;
+        }
+        .ss-wrap .ss-input.small {
+            min-width: 150px;
+        }
+        .ss-menu {
+            position: absolute;
+            top: calc(100% + 4px);
+            left: 0;
+            min-width: 100%;
+            max-height: 280px;
+            overflow-y: auto;
+            background: var(--card-solid);
+            border: 1px solid var(--border-strong);
+            border-radius: 8px;
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+            z-index: 1000;
+            padding: 4px;
+        }
+        .ss-option {
+            padding: 7px 10px;
+            font-size: 0.85em;
+            color: var(--text);
+            border-radius: 6px;
+            cursor: pointer;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .ss-option.ss-active {
+            background: rgba(37, 244, 238, 0.15);
+        }
+        .ss-option.ss-selected {
+            color: var(--cyan);
+            font-weight: 600;
+        }
+        .ss-no-results {
+            padding: 7px 10px;
+            font-size: 0.85em;
+            color: var(--text-muted);
+        }
+        /* min-widths iguais ou maiores que o min-width do .ss-input
+           (200px normal / 150px small) para o input nunca estourar o wrap. */
+        .goal-form-row .ss-wrap {
+            flex: 1;
+            min-width: 200px;
+        }
+        .goal-milestone-row .ss-wrap {
+            flex: 1;
+            min-width: 150px;
+        }
         select option {
             background: var(--card-solid);
             color: var(--text);
@@ -995,6 +1057,151 @@
             .chips-row { gap: 5px; }
             .target-gift-chip { padding: 4px 10px; }
         }
+
+        /* Metas da Live */
+        .goal-card {
+            padding: 16px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            border-top: none;
+            border-radius: 12px;
+            margin-bottom: 20px;
+        }
+        .goal-form-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+        .goal-form-row input[type="text"] {
+            flex: 1;
+            min-width: 180px;
+        }
+        .goal-form-row select.setup-select {
+            flex: 1;
+            min-width: 180px;
+        }
+        .goal-milestone-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+        .goal-milestone-row input[type="number"] {
+            flex-shrink: 0;
+        }
+        .goal-milestone-row select.setup-select,
+        .goal-milestone-row .ss-wrap .ss-input {
+            flex: 1;
+            min-width: 140px;
+        }
+        .goal-progress {
+            margin-top: 14px;
+        }
+        .goal-progress-info {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85em;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+        #goalProgressPercent {
+            color: var(--cyan);
+            font-weight: 700;
+        }
+        .goal-progress-track {
+            height: 10px;
+            background: rgba(255, 255, 255, 0.06);
+            border-radius: 999px;
+            overflow: hidden;
+        }
+        .goal-progress-bar {
+            height: 100%;
+            width: 0%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, var(--cyan), var(--pink));
+            transition: width 0.4s ease;
+        }
+        .goal-milestone {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            margin-top: 8px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.02);
+            font-size: 0.85em;
+        }
+        .goal-milestone.unlocked {
+            border-color: rgba(34, 197, 94, 0.45);
+            background: rgba(34, 197, 94, 0.08);
+        }
+        .goal-ms-units-label {
+            color: var(--cyan);
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        .goal-ms-reward-label {
+            flex: 1;
+        }
+        .goal-ms-badge {
+            white-space: nowrap;
+            color: var(--text-muted);
+        }
+        .goal-ms-badge.on {
+            color: var(--green);
+            font-weight: 700;
+        }
+        .goal-section-label {
+            margin-top: 12px;
+            font-size: 0.7em;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-muted);
+        }
+        .goal-history-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            margin-top: 6px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.02);
+            font-size: 0.8em;
+            color: var(--text-muted);
+        }
+        .goal-history-title {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .goal-status-tag {
+            white-space: nowrap;
+            font-weight: 700;
+        }
+        .goal-status-tag.completed { color: var(--green); }
+        .goal-status-tag.cancelled { color: var(--red); }
+        .goal-toast {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            padding: 12px 22px;
+            background: var(--card-solid);
+            border: 1px solid var(--cyan);
+            border-radius: 12px;
+            box-shadow: var(--shadow);
+            font-size: 0.95em;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+        }
+        .goal-toast.show {
+            opacity: 1;
+        }
     </style>
 </head>
 <body>
@@ -1172,6 +1379,60 @@
                     <!-- Usuários filtrados aparecerão aqui -->
                 </tbody>
             </table>
+        </div>
+
+        <div class="section-title">
+            <div class="section-title-label">
+                <h3>Metas da Live</h3>
+            </div>
+            <div class="section-title-actions">
+                <button id="goalSaveBtn" class="small-btn" type="button">Salvar</button>
+                <button id="goalCancelBtn" class="small-btn" type="button">Cancelar</button>
+                <button id="goalCompleteBtn" class="small-btn" type="button">Concluir</button>
+            </div>
+        </div>
+        <div class="goal-card">
+            <div class="goal-form-row">
+                <input type="text" id="goalTitleInput" placeholder="Título da meta">
+                <select id="goalGiftSelect" class="setup-select">
+                    <option value="">Todos os presentes</option>
+                </select>
+                <input type="number" id="goalTargetInput" min="1" placeholder="Meta em unidades">
+            </div>
+            <div id="goalMilestonesForm">
+                <div class="goal-milestone-row">
+                    <input type="number" class="goal-ms-units" min="1" placeholder="Unidades">
+                    <select class="goal-ms-reward setup-select small">
+                        <option value="">Recompensa</option>
+                    </select>
+                </div>
+                <div class="goal-milestone-row">
+                    <input type="number" class="goal-ms-units" min="1" placeholder="Unidades">
+                    <select class="goal-ms-reward setup-select small">
+                        <option value="">Recompensa</option>
+                    </select>
+                </div>
+                <div class="goal-milestone-row">
+                    <input type="number" class="goal-ms-units" min="1" placeholder="Unidades">
+                    <select class="goal-ms-reward setup-select small">
+                        <option value="">Recompensa</option>
+                    </select>
+                </div>
+            </div>
+            <div class="goal-progress">
+                <div class="goal-progress-info">
+                    <span id="goalProgressPercent">0%</span>
+                    <span id="goalUnitsLabel">0 / 0 unidades</span>
+                </div>
+                <div class="goal-progress-track">
+                    <div id="goalProgressBar" class="goal-progress-bar"></div>
+                </div>
+            </div>
+            <div id="goalMilestonesList"></div>
+            <div id="goalHistoryWrap" hidden>
+                <div class="goal-section-label">Histórico</div>
+                <div id="goalHistoryList"></div>
+            </div>
         </div>
 
         <div class="section-title">

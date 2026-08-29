@@ -3,6 +3,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
@@ -15,6 +16,9 @@ import (
 	"github.com/thiagohmm/tiktok-live-monitor/internal/ranking"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/report"
 )
+
+// settingsKey is the settings table key under which the app settings are stored.
+const settingsKey = "app"
 
 // MessageCache is an in-memory write-behind buffer for user messages.
 type MessageCache interface {
@@ -33,6 +37,7 @@ type AppController struct {
 	monCancelMu   sync.Mutex
 	flagSeen      map[string]struct{}
 	flagSeenMu    sync.Mutex
+	goals         goalState
 }
 
 // NewAppController creates a new application controller.
@@ -42,11 +47,24 @@ func NewAppController(
 ) *AppController {
 	mon.SetRepo(repo)
 	c := &AppController{
-		monitor:    mon,
-		repo:       repo,
-		reportGen:  report.New(repo),
-		ranker:     ranking.New(ranking.DefaultWeights),
-		flagSeen:   make(map[string]struct{}),
+		monitor:   mon,
+		repo:      repo,
+		reportGen: report.New(repo),
+		ranker:    ranking.New(ranking.DefaultWeights),
+		flagSeen:  make(map[string]struct{}),
+		goals: goalState{
+			lastUnits: make(map[int64]int),
+		},
+	}
+	// Restore persisted settings (target gifts, moderation toggles, etc.) so
+	// they survive app restarts.
+	if raw, err := repo.GetSetting(settingsKey); err == nil && raw != "" {
+		var s monitor.Settings
+		if err := json.Unmarshal([]byte(raw), &s); err == nil {
+			mon.SetSettings(s)
+		} else {
+			log.Printf("[Controller] Failed to parse persisted settings: %v", err)
+		}
 	}
 	return c
 }
@@ -83,9 +101,15 @@ func (c *AppController) GetSettings() monitor.Settings {
 	return c.monitor.GetSettings()
 }
 
-// SetSettings updates the monitor settings.
+// SetSettings updates the monitor settings and persists them so the
+// configuration (including target gifts) survives app restarts.
 func (c *AppController) SetSettings(settings monitor.Settings) {
 	c.monitor.SetSettings(settings)
+	if data, err := json.Marshal(settings); err == nil {
+		if err := c.repo.SetSetting(settingsKey, string(data)); err != nil {
+			log.Printf("[Controller] Failed to persist settings: %v", err)
+		}
+	}
 }
 
 // FetchAvailableGifts fetches the available gifts from TikTok.
@@ -403,6 +427,7 @@ func (c *AppController) HandleGiftEvent(data monitor.EventData) {
 	if _, err := c.repo.AddGift(state.Username, uniqueID, nickname, giftName, repeatCount, giftType); err != nil {
 		log.Printf("[Controller] Error storing gift: %v", err)
 	}
+	c.checkGoalProgress()
 }
 
 // HandleChatMessageEvent processes a chat message event and stores it.

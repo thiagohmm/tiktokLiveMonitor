@@ -48,6 +48,9 @@ type GiftRepository interface {
 	GetRecentGifts(liveName string, limit int) ([]Gift, error)
 	GetGiftsByUser(uniqueID string) ([]Gift, error)
 	GetGiftSummary() (map[string]map[string]int, error)
+	// GetGiftUnits returns total gift units (SUM repeat_count) and event count
+	// for a live. When no gift names are given, all gifts count.
+	GetGiftUnits(liveName string, giftNames ...string) (units, count int, err error)
 	ClearGifts() (int64, error)
 }
 
@@ -57,6 +60,14 @@ type TargetGiftHistoryRepository interface {
 	MarkTargetGiftAnswered(id int64, responseType string, answeredAt time.Time) error
 	GetRecentTargetGiftHistory(liveName string, limit int) ([]TargetGiftHistory, error)
 	GetPendingTargetGiftHistory(liveName string, limit int) ([]TargetGiftHistory, error)
+}
+
+// GoalRepository handles persistence of live gift goals.
+type GoalRepository interface {
+	AddGiftGoal(g GiftGoal) (int64, error)
+	GetGiftGoals(liveName string) ([]GiftGoal, error)
+	SaveGiftGoal(g GiftGoal) error
+	DeleteGiftGoals(liveName string) (int64, error)
 }
 
 // PinnedCommentRepository tracks comments pinned during a live.
@@ -112,6 +123,13 @@ type LiveStat struct {
 	LastSeen      string
 }
 
+// SettingsRepository persists application settings (target gifts, moderation
+// toggles, etc.) as key/value entries so they survive restarts.
+type SettingsRepository interface {
+	GetSetting(key string) (string, error)
+	SetSetting(key, value string) error
+}
+
 // Repository combines all repository interfaces.
 type Repository interface {
 	FeedbackRepository
@@ -121,8 +139,10 @@ type Repository interface {
 	ShareRepository
 	LikeRepository
 	TargetGiftHistoryRepository
+	GoalRepository
 	PinnedCommentRepository
 	SessionRepository
 	RankingRepository
+	SettingsRepository
 	Close() error
 }

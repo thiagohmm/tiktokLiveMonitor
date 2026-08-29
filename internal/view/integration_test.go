@@ -1,6 +1,7 @@
 package view
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -816,4 +818,261 @@ func TestHandleModerationFlag(t *testing.T) {
 			t.Fatalf("expected 200 no-op, got %d", rec.Code)
 		}
 	})
+}
+
+// postJSON invokes a handler directly with a POST request carrying a JSON body.
+func postJSON(t *testing.T, handler func(http.ResponseWriter, *http.Request), path string, body interface{}) *httptest.ResponseRecorder {
+	t.Helper()
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(data))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	return rec
+}
+
+func TestHandleGoals(t *testing.T) {
+	srv, repo, _, mon := setupTestServer(t)
+	mon.SetCurrentLive("live1")
+
+	t.Run("POST create", func(t *testing.T) {
+		body := map[string]interface{}{
+			"title":       "Meta da noite",
+			"targetUnits": 100,
+			"milestones": []map[string]interface{}{
+				{"atUnits": 50, "reward": "música especial"},
+			},
+		}
+		rec := postJSON(t, srv.handleGoals, "/api/goals", body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		var goal model.GiftGoal
+		if err := json.Unmarshal(rec.Body.Bytes(), &goal); err != nil {
+			t.Fatalf("decode JSON: %v", err)
+		}
+		if goal.ID <= 0 || goal.Status != model.GoalStatusActive {
+			t.Fatalf("unexpected goal: %+v", goal)
+		}
+		if len(goal.Milestones) != 1 || goal.Milestones[0].Reward != "música especial" {
+			t.Fatalf("unexpected milestones: %+v", goal.Milestones)
+		}
+	})
+
+	t.Run("GET state with progress", func(t *testing.T) {
+		if _, err := repo.AddGift("live1", "u1", "User One", "Rosa", 60, 0); err != nil {
+			t.Fatalf("seed gift: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodGet, "/api/goals", nil)
+		rec := httptest.NewRecorder()
+		srv.handleGoals(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		var st controller.GoalsState
+		if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+			t.Fatalf("decode JSON: %v", err)
+		}
+		if st.Active == nil {
+			t.Fatal("expected active goal")
+		}
+		if st.Active.Units != 60 || st.Active.Percent != 60 {
+			t.Fatalf("expected 60/60, got %d/%.1f", st.Active.Units, st.Active.Percent)
+		}
+	})
+
+	t.Run("POST update", func(t *testing.T) {
+		st, err := srv.controller.GetGoalsState()
+		if err != nil || st.Active == nil {
+			t.Fatalf("expected active goal: %v", err)
+		}
+		body := map[string]interface{}{
+			"id":          st.Active.Goal.ID,
+			"title":       "Meta editada",
+			"targetUnits": 200,
+		}
+		rec := postJSON(t, srv.handleGoals, "/api/goals", body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		var goal model.GiftGoal
+		if err := json.Unmarshal(rec.Body.Bytes(), &goal); err != nil {
+			t.Fatalf("decode JSON: %v", err)
+		}
+		if goal.Title != "Meta editada" || goal.TargetUnits != 200 {
+			t.Fatalf("unexpected goal: %+v", goal)
+		}
+	})
+
+	t.Run("POST complete", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/goals/complete", nil)
+		rec := httptest.NewRecorder()
+		srv.handleGoalComplete(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		req = httptest.NewRequest(http.MethodGet, "/api/goals", nil)
+		rec = httptest.NewRecorder()
+		srv.handleGoals(rec, req)
+		var st controller.GoalsState
+		if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+			t.Fatalf("decode JSON: %v", err)
+		}
+		if st.Active != nil || len(st.History) != 1 || st.History[0].Status != model.GoalStatusCompleted {
+			t.Fatalf("expected completed goal in history: %+v", st)
+		}
+	})
+
+	t.Run("POST cancel", func(t *testing.T) {
+		body := map[string]interface{}{"title": "nova meta", "targetUnits": 10}
+		if rec := postJSON(t, srv.handleGoals, "/api/goals", body); rec.Code != http.StatusOK {
+			t.Fatalf("create: expected 200, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/goals/cancel", nil)
+		rec := httptest.NewRecorder()
+		srv.handleGoalCancel(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		req = httptest.NewRequest(http.MethodGet, "/api/goals", nil)
+		rec = httptest.NewRecorder()
+		srv.handleGoals(rec, req)
+		var st controller.GoalsState
+		if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+			t.Fatalf("decode JSON: %v", err)
+		}
+		if st.Active != nil {
+			t.Fatalf("expected no active goal, got %+v", st.Active)
+		}
+		if len(st.History) != 2 || st.History[0].Status != model.GoalStatusCancelled {
+			t.Fatalf("expected cancelled goal in history: %+v", st.History)
+		}
+	})
+
+	t.Run("validation errors", func(t *testing.T) {
+		if rec := postJSON(t, srv.handleGoals, "/api/goals", map[string]interface{}{"title": " ", "targetUnits": 10}); rec.Code != http.StatusBadRequest {
+			t.Fatalf("empty title: expected 400, got %d", rec.Code)
+		}
+		if rec := postJSON(t, srv.handleGoals, "/api/goals", map[string]interface{}{"title": "m", "targetUnits": 0}); rec.Code != http.StatusBadRequest {
+			t.Fatalf("zero target: expected 400, got %d", rec.Code)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/goals/cancel", nil)
+		rec := httptest.NewRecorder()
+		srv.handleGoalCancel(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("cancel without active: expected 400, got %d", rec.Code)
+		}
+		req = httptest.NewRequest(http.MethodGet, "/api/goals/cancel", nil)
+		rec = httptest.NewRecorder()
+		srv.handleGoalCancel(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("wrong method: expected 405, got %d", rec.Code)
+		}
+		req = httptest.NewRequest(http.MethodDelete, "/api/goals", nil)
+		rec = httptest.NewRecorder()
+		srv.handleGoals(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("wrong method: expected 405, got %d", rec.Code)
+		}
+	})
+}
+
+func TestGoalSSEBroadcast(t *testing.T) {
+	_ = os.Setenv("PORT", "19855")
+	defer os.Unsetenv("PORT")
+
+	srv, _, _, mon := setupTestServer(t)
+	mon.SetCurrentLive("live1")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.Start(ctx)
+
+	base := "http://127.0.0.1:19855"
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, err := http.Get(base + "/api/readiness")
+		if err == nil {
+			resp.Body.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("server did not start")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	sseReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, base+"/events", nil)
+	if err != nil {
+		t.Fatalf("new SSE request: %v", err)
+	}
+	sseResp, err := http.DefaultClient.Do(sseReq)
+	if err != nil {
+		t.Fatalf("SSE connect: %v", err)
+	}
+	defer sseResp.Body.Close()
+
+	events := make(chan string, 64)
+	go func() {
+		scanner := bufio.NewScanner(sseResp.Body)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "event: ") {
+				events <- strings.TrimPrefix(line, "event: ")
+			}
+		}
+	}()
+
+	waitEvent := func(name string) bool {
+		for {
+			select {
+			case e, ok := <-events:
+				if !ok {
+					return false
+				}
+				if e == name {
+					return true
+				}
+			case <-time.After(5 * time.Second):
+				return false
+		}
+		}
+	}
+
+	if !waitEvent("server-state") {
+		t.Fatal("expected initial server-state SSE event")
+	}
+
+	resp, err := http.Post(base+"/api/goals", "application/json",
+		strings.NewReader(`{"title":"meta","targetUnits":100,"milestones":[{"atUnits":50,"reward":"prêmio"}]}`))
+	if err != nil {
+		t.Fatalf("create goal: %v", err)
+	}
+	resp.Body.Close()
+
+	srv.controller.HandleGiftEvent(monitor.EventData{
+		"uniqueId": "u1", "nickname": "User", "giftName": "Rose",
+		"repeatCount": 150, "repeatEnd": true,
+	})
+
+	seen := map[string]bool{}
+	for !seen["goal-completed"] {
+		select {
+		case e, ok := <-events:
+			if !ok {
+				t.Fatalf("SSE stream closed; saw %v", seen)
+			}
+			seen[e] = true
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out; saw %v", seen)
+		}
+	}
+	if !seen["goal-update"] {
+		t.Fatalf("expected goal-update, saw %v", seen)
+	}
+	if !seen["goal-unlocked"] {
+		t.Fatalf("expected goal-unlocked, saw %v", seen)
+	}
 }

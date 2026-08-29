@@ -969,6 +969,11 @@ func TestDeleteLive(t *testing.T) {
 				"INSERT INTO user_messages (live_name, uniqueId, username, message) VALUES (?, ?, ?, ?)",
 				liveName, "u1", "User", "oi",
 			)
+		case "gift_goals":
+			_, err = db.conn.Exec(
+				"INSERT INTO gift_goals (live_name, title, target_units, status) VALUES (?, ?, ?, ?)",
+				liveName, "meta", 100, "active",
+			)
 		}
 		if err != nil {
 			t.Fatalf("seed %s: %v", table, err)
@@ -977,14 +982,15 @@ func TestDeleteLive(t *testing.T) {
 
 	seed("gifts", "liveA")
 	seed("user_messages", "liveA")
+	seed("gift_goals", "liveA")
 	seed("gifts", "liveB")
 
 	deleted, err := db.DeleteLive("liveA")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if deleted != 2 {
-		t.Fatalf("expected 2 deleted rows, got %d", deleted)
+	if deleted != 3 {
+		t.Fatalf("expected 3 deleted rows, got %d", deleted)
 	}
 
 	lives, err := db.ListLives(10)
@@ -997,5 +1003,161 @@ func TestDeleteLive(t *testing.T) {
 
 	if _, err := db.DeleteLive("  "); err == nil {
 		t.Fatal("expected error for empty live name")
+	}
+}
+
+func TestGiftGoalCRUD(t *testing.T) {
+	db := openTestDB(t)
+
+	id, err := db.AddGiftGoal(model.GiftGoal{
+		LiveName:    "live1",
+		Title:       "Meta da noite",
+		TargetUnits: 500,
+		Status:      model.GoalStatusActive,
+		Milestones: []model.GoalMilestone{
+			{AtUnits: 100, Reward: "música especial"},
+			{AtUnits: 300, Reward: "dedicatória"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("add goal: %v", err)
+	}
+	if id <= 0 {
+		t.Fatalf("expected positive id, got %d", id)
+	}
+
+	goals, err := db.GetGiftGoals("live1")
+	if err != nil {
+		t.Fatalf("get goals: %v", err)
+	}
+	if len(goals) != 1 {
+		t.Fatalf("expected 1 goal, got %d", len(goals))
+	}
+	g := goals[0]
+	if g.Title != "Meta da noite" || g.TargetUnits != 500 || g.Status != model.GoalStatusActive {
+		t.Fatalf("unexpected goal fields: %+v", g)
+	}
+	if len(g.Milestones) != 2 || g.Milestones[0].Reward != "música especial" {
+		t.Fatalf("unexpected milestones: %+v", g.Milestones)
+	}
+	if g.CreatedAt == "" {
+		t.Fatal("expected created_at to be populated")
+	}
+
+	// Other live must not see the goal.
+	other, err := db.GetGiftGoals("live2")
+	if err != nil {
+		t.Fatalf("get other live: %v", err)
+	}
+	if len(other) != 0 {
+		t.Fatalf("expected 0 goals for live2, got %d", len(other))
+	}
+
+	// Save updates status/milestones.
+	g.Status = model.GoalStatusCompleted
+	g.Milestones[0].Unlocked = true
+	at := time.Now().UTC().Format(time.RFC3339)
+	g.Milestones[0].UnlockedAt = &at
+	if err := db.SaveGiftGoal(g); err != nil {
+		t.Fatalf("save goal: %v", err)
+	}
+	goals, err = db.GetGiftGoals("live1")
+	if err != nil {
+		t.Fatalf("get goals after save: %v", err)
+	}
+	if goals[0].Status != model.GoalStatusCompleted {
+		t.Fatalf("expected completed, got %q", goals[0].Status)
+	}
+	if !goals[0].Milestones[0].Unlocked || goals[0].Milestones[0].UnlockedAt == nil {
+		t.Fatalf("expected unlocked milestone, got %+v", goals[0].Milestones[0])
+	}
+	if goals[0].Milestones[1].Unlocked {
+		t.Fatal("second milestone should remain locked")
+	}
+
+	if err := db.SaveGiftGoal(model.GiftGoal{ID: 0}); err == nil {
+		t.Fatal("expected error saving goal without id")
+	}
+
+	deleted, err := db.DeleteGiftGoals("live1")
+	if err != nil {
+		t.Fatalf("delete goals: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected 1 deleted, got %d", deleted)
+	}
+	goals, err = db.GetGiftGoals("live1")
+	if err != nil {
+		t.Fatalf("get goals after delete: %v", err)
+	}
+	if len(goals) != 0 {
+		t.Fatalf("expected 0 goals after delete, got %d", len(goals))
+	}
+}
+
+func TestGiftGoalValidation(t *testing.T) {
+	db := openTestDB(t)
+	cases := []struct {
+		name string
+		g    model.GiftGoal
+	}{
+		{"empty title", model.GiftGoal{LiveName: "live1", Title: " ", TargetUnits: 10}},
+		{"zero target", model.GiftGoal{LiveName: "live1", Title: "meta", TargetUnits: 0}},
+		{"empty live", model.GiftGoal{LiveName: "", Title: "meta", TargetUnits: 10}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := db.AddGiftGoal(tc.g); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestGetGiftUnits(t *testing.T) {
+	db := openTestDB(t)
+
+	units, count, err := db.GetGiftUnits("live1", "")
+	if err != nil {
+		t.Fatalf("empty live: %v", err)
+	}
+	if units != 0 || count != 0 {
+		t.Fatalf("expected 0/0, got %d/%d", units, count)
+	}
+
+	if _, err := db.AddGift("live1", "u1", "User One", "Rosa", 5, 0); err != nil {
+		t.Fatalf("add gift: %v", err)
+	}
+	if _, err := db.AddGift("live1", "u2", "User Two", "Dino", 12, 0); err != nil {
+		t.Fatalf("add gift: %v", err)
+	}
+	if _, err := db.AddGift("live2", "u3", "User Three", "Rosa", 99, 0); err != nil {
+		t.Fatalf("add gift other live: %v", err)
+	}
+
+	units, count, err = db.GetGiftUnits("live1", "")
+	if err != nil {
+		t.Fatalf("get units: %v", err)
+	}
+	if units != 17 || count != 2 {
+		t.Fatalf("expected 17 units / 2 events, got %d / %d", units, count)
+	}
+
+	// Filtering by gift name counts only that gift.
+	units, count, err = db.GetGiftUnits("live1", "Rosa")
+	if err != nil {
+		t.Fatalf("get units (Rosa): %v", err)
+	}
+	if units != 5 || count != 1 {
+		t.Fatalf("expected 5 units / 1 event for Rosa, got %d / %d", units, count)
+	}
+
+	// Unknown gift name returns zero.
+	units, count, err = db.GetGiftUnits("live1", "Rocket")
+	if err != nil {
+		t.Fatalf("get units (Rocket): %v", err)
+	}
+	if units != 0 || count != 0 {
+		t.Fatalf("expected 0/0 for Rocket, got %d / %d", units, count)
 	}
 }

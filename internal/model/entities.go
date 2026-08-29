@@ -53,6 +53,37 @@ type TargetGiftHistory struct {
 	ResponseType *string `json:"responseType,omitempty"`
 }
 
+// Gift goal status values.
+const (
+	GoalStatusActive    = "active"
+	GoalStatusCompleted = "completed"
+	GoalStatusCancelled = "cancelled"
+)
+
+// GoalMilestone is a progress point on a gift goal: when the live passes
+// AtUnits units the Reward text is granted.
+type GoalMilestone struct {
+	AtUnits    int     `json:"atUnits"`
+	Reward     string  `json:"reward"`
+	Unlocked   bool    `json:"unlocked"`
+	UnlockedAt *string `json:"unlockedAt,omitempty"`
+}
+
+// GiftGoal is a live gift goal: a target in gift units (SUM repeat_count)
+// with text reward milestones. When GiftName is empty the goal counts all
+// gifts of the live; otherwise only units of the given gift count.
+type GiftGoal struct {
+	ID          int64           `json:"id"`
+	LiveName    string          `json:"liveName"`
+	Title       string          `json:"title"`
+	GiftName    string          `json:"giftName,omitempty"`
+	TargetUnits int             `json:"targetUnits"`
+	Status      string          `json:"status"`
+	Milestones  []GoalMilestone `json:"milestones"`
+	CompletedAt *string         `json:"completedAt,omitempty"`
+	CreatedAt   string          `json:"createdAt"`
+}
+
 // PinnedComment is a comment pinned during a live stream.
 type PinnedComment struct {
 	ID         int64  `json:"id"`
@@ -67,10 +98,10 @@ type PinnedComment struct {
 
 // Risk level constants used across ranking and profiles.
 const (
-	RiskLevelNone    = "none"
-	RiskLevelLow     = "low"
-	RiskLevelMedium  = "medium"
-	RiskLevelHigh    = "high"
+	RiskLevelNone     = "none"
+	RiskLevelLow      = "low"
+	RiskLevelMedium   = "medium"
+	RiskLevelHigh     = "high"
 	RiskLevelCritical = "critical"
 )
 
@@ -101,18 +132,18 @@ type LiveRanking struct {
 
 // LiveReport is the AI-generated post-live summary.
 type LiveReport struct {
-	LiveName         string                `json:"liveName"`
-	StartedAt        string                `json:"startedAt"`
-	EndedAt          string                `json:"endedAt"`
-	DurationMinutes  int                   `json:"durationMinutes"`
-	MessageCount     int                   `json:"messageCount"`
-	ParticipantCount int                   `json:"participantCount"`
-	GiftCount        int                   `json:"giftCount"`
-	GiftTotal        int                   `json:"giftTotal"`
-	TopSupporters    []UserRank            `json:"topSupporters"`
-	FrequentQuestions []string             `json:"frequentQuestions"`
-	ModerationIssues []AnomalySummary      `json:"moderationIssues"`
-	Summary          string                `json:"summary"`
+	LiveName          string           `json:"liveName"`
+	StartedAt         string           `json:"startedAt"`
+	EndedAt           string           `json:"endedAt"`
+	DurationMinutes   int              `json:"durationMinutes"`
+	MessageCount      int              `json:"messageCount"`
+	ParticipantCount  int              `json:"participantCount"`
+	GiftCount         int              `json:"giftCount"`
+	GiftTotal         int              `json:"giftTotal"`
+	TopSupporters     []UserRank       `json:"topSupporters"`
+	FrequentQuestions []string         `json:"frequentQuestions"`
+	ModerationIssues  []AnomalySummary `json:"moderationIssues"`
+	Summary           string           `json:"summary"`
 }
 
 // AnomalySummary groups anomaly logs by category for the report.
