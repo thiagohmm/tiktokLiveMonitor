@@ -18,7 +18,6 @@ function loadConnectionClass() {
 
 let ConnectionClass = null;
 let connectionClassError = null;
-let likeState = new Map();
 try {
     ConnectionClass = loadConnectionClass();
 } catch (err) {
@@ -72,8 +71,10 @@ const { translateGiftName } = require('./gifts');
 
 function getUser(data) {
     const user = data.user || data.member || data.sender || data.author || data.owner || {};
+    // `user.id` (id numérico) é o último recurso: usuários anônimos não têm
+    // `uniqueId`/username, mas sempre têm o id numérico no stream.
     const uniqueId = data.uniqueId || user.uniqueId || data.displayId || user.displayId ||
-        data.userId || user.userId || null;
+        data.userId || user.userId || user.id || null;
     const nickname = data.nickname || user.nickname || uniqueId || null;
     return {
         uniqueId,
@@ -466,30 +467,25 @@ async function doConnect(username) {
     connection.on('like', (data) => {
         try {
             const user = getUser(data);
-            const uniqueId = user.uniqueId || String(data.userId || '');
-            const nickname = user.nickname || user.uniqueId || String(data.userId || 'Nao identificado');
+            const uniqueId = String(user.uniqueId || '');
+            const nickname = user.nickname || user.uniqueId || 'Nao identificado';
 
-            // WebcastLikeMessage.totalLikeCount é o total acumulado de curtidas deste
-            // usuário (monotônico). O delta em relação à última ocorrência é a
-            // quantidade de curtidas deste evento, evitando contagens duplicadas.
-            // `likeCount` é só o total deste evento, usado como último fallback.
-            const total = Number(data.totalLikeCount ?? data.likeCount);
-            let delta = 1;
-            if (Number.isFinite(total) && total > 0) {
-                const prev = likeState.get(uniqueId) || 0;
-                delta = total - prev;
-                if (delta < 1) delta = 1;
-                likeState.set(uniqueId, total);
-            } else {
-                const inline = Number(data.count ?? 1);
-                delta = inline > 0 ? inline : 1;
-            }
+            // WebcastLikeMessage (tiktok-live-proto v3):
+            // - `count`: quantidade de curtidas deste evento (ex.: rajada de corações);
+            // - `total`: total ACUMULADO de curtidas da SALA (int64 como string,
+            //   monotônico). É a fonte autoritativa da contagem geral.
+            // Os campos legados `likeCount`/`totalLikeCount` não existem no v3.
+            // Obs.: o stream entrega apenas uma amostra dos eventos de like,
+            // então a soma por usuário fica abaixo do `total` da sala; a
+            // calibração é feita no lado Go (como se lê na classe AppController).
+            const count = Number(data.count ?? data.likeCount ?? 1);
+            const total = Number(data.total ?? data.totalLikeCount ?? 0);
 
             send('new-like-event', {
                 uniqueId,
                 nickname,
-                likeCount: Math.max(1, delta | 0),
-                total: Number.isFinite(total) ? total : null,
+                likeCount: Math.max(1, Math.floor(count)),
+                total: Number.isFinite(total) && total > 0 ? total : null,
                 isFollower: user.isFollower,
                 timestamp: Date.now()
             });

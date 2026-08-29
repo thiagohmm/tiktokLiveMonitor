@@ -709,6 +709,7 @@ const userTableBody = document.getElementById('userTableBody');
 const allGiftsTableBody = document.getElementById('allGiftsTableBody');
 const pinnedCommentsTableBody = document.getElementById('pinnedCommentsTableBody');
 const correlationMessagesTableBody = document.getElementById('correlationMessagesTableBody');
+const rankingTableBody = document.getElementById('rankingTableBody');
 const targetExpirationMinutesInput = document.getElementById('targetExpirationMinutes');
 const chartCanvas = document.getElementById('messageChart');
 const aiLedRow = document.getElementById('aiLedRow');
@@ -729,12 +730,8 @@ const goalTitleInput = document.getElementById('goalTitleInput');
 const goalGiftSelect = document.getElementById('goalGiftSelect');
 const goalTargetInput = document.getElementById('goalTargetInput');
 const goalSaveBtn = document.getElementById('goalSaveBtn');
-const goalCancelBtn = document.getElementById('goalCancelBtn');
-const goalCompleteBtn = document.getElementById('goalCompleteBtn');
-const goalProgressPercent = document.getElementById('goalProgressPercent');
-const goalUnitsLabel = document.getElementById('goalUnitsLabel');
-const goalProgressBar = document.getElementById('goalProgressBar');
-const goalMilestonesList = document.getElementById('goalMilestonesList');
+const goalResetBtn = document.getElementById('goalResetBtn');
+const goalActivesList = document.getElementById('goalActivesList');
 const goalHistoryWrap = document.getElementById('goalHistoryWrap');
 const goalHistoryList = document.getElementById('goalHistoryList');
 const goalMilestoneRows = Array.from(document.querySelectorAll('.goal-milestone-row'));
@@ -2528,11 +2525,9 @@ function setupEventStream() {
         try {
             const data = JSON.parse(event.data);
             if (!data.progress) return;
-            if (data.progress.goal && data.progress.goal.id) {
-                currentGoalId = data.progress.goal.id;
-            }
-            renderGoalProgress(data.progress);
-            updateGoalButtons();
+            const card = findGoalCard(data.progress.goal && data.progress.goal.id);
+            if (card) updateGoalCard(card, data.progress);
+            else loadGoals();
         } catch (error) {
             console.error('[Frontend] Falha ao processar goal-update:', error);
         }
@@ -2541,7 +2536,11 @@ function setupEventStream() {
     eventSource.addEventListener('goal-unlocked', event => {
         try {
             const data = JSON.parse(event.data);
-            if (data.progress) renderGoalProgress(data.progress);
+            if (data.progress) {
+                const card = findGoalCard(data.progress.goal && data.progress.goal.id);
+                if (card) updateGoalCard(card, data.progress);
+                else loadGoals();
+            }
             const unlocked = data.unlockedMilestones || [];
             if (unlocked.length > 0) {
                 const percent = data.progress ? Math.round(data.progress.percent) : 0;
@@ -2556,8 +2555,8 @@ function setupEventStream() {
     eventSource.addEventListener('goal-completed', event => {
         try {
             const data = JSON.parse(event.data);
-            if (data.progress) renderGoalProgress(data.progress);
-            showGoalToast('🎉 Meta concluída!');
+            if (!data.progress) return;
+            showGoalToast(`🎉 Meta "${data.progress.goal.title}" concluída!`);
             loadGoals();
         } catch (error) {
             console.error('[Frontend] Falha ao processar goal-completed:', error);
@@ -2675,6 +2674,21 @@ function renderRanking(ranking) {
 
         rankingTableBody.appendChild(tr);
     });
+
+    // Total de curtidas da sala (contador acumulado reportado pelo stream).
+    if (ranking.totalLikes > 0) {
+        const trTotal = document.createElement('tr');
+        trTotal.style.fontWeight = '600';
+        const tdLabel = document.createElement('td');
+        tdLabel.colSpan = 7;
+        tdLabel.style.textAlign = 'right';
+        tdLabel.textContent = 'Total de curtidas da live:';
+        const tdValue = document.createElement('td');
+        tdValue.textContent = String(ranking.totalLikes);
+        trTotal.appendChild(tdLabel);
+        trTotal.appendChild(tdValue);
+        rankingTableBody.appendChild(trTotal);
+    }
 }
 
 // --- Relatório Pós-Live ---
@@ -3011,43 +3025,109 @@ function showGoalToast(message) {
 
 function updateGoalButtons() {
     if (goalSaveBtn) goalSaveBtn.textContent = currentGoalId ? 'Atualizar' : 'Salvar';
-    if (goalCancelBtn) goalCancelBtn.disabled = !currentGoalId;
-    if (goalCompleteBtn) goalCompleteBtn.disabled = !currentGoalId;
+    if (goalResetBtn) goalResetBtn.hidden = !currentGoalId;
 }
 
-function renderGoalProgress(progress) {
-    if (!progress) return;
+function goalUnitsText(goal, units) {
+    const giftName = (goal && goal.giftName) || '';
+    const target = (goal && goal.targetUnits) || 0;
+    return giftName
+        ? `${units} / ${target} ${translateGiftName(giftName)}`
+        : `${units} / ${target} unidades`;
+}
+
+function buildMilestoneRow(m) {
+    const row = document.createElement('div');
+    row.className = 'goal-milestone' + (m.unlocked ? ' unlocked' : '');
+    const units = document.createElement('span');
+    units.className = 'goal-ms-units-label';
+    units.textContent = `${m.atUnits} unidades`;
+    const reward = document.createElement('span');
+    reward.className = 'goal-ms-reward-label';
+    reward.textContent = m.reward ? translateGiftName(m.reward) : '—';
+    const badge = document.createElement('span');
+    badge.className = 'goal-ms-badge' + (m.unlocked ? ' on' : '');
+    badge.textContent = m.unlocked ? '🎉 Desbloqueado' : '🔒 Pendente';
+    row.append(units, reward, badge);
+    return row;
+}
+
+function buildGoalCard(progress) {
+    const goal = progress.goal;
     const pct = Math.max(0, Math.min(100, progress.percent || 0));
-    if (goalProgressPercent) goalProgressPercent.textContent = `${Math.round(pct)}%`;
-    const target = (progress.goal && progress.goal.targetUnits) || 0;
-    const giftName = (progress.goal && progress.goal.giftName) || '';
-    if (goalUnitsLabel) {
-        goalUnitsLabel.textContent = giftName
-            ? `${progress.units || 0} / ${target} ${translateGiftName(giftName)}`
-            : `${progress.units || 0} / ${target} unidades`;
-    }
-    if (goalProgressBar) goalProgressBar.style.width = `${pct}%`;
-    renderGoalMilestones(progress.goal);
+    const card = document.createElement('div');
+    card.className = 'goal-active-card';
+    card.dataset.goalId = String(goal.id);
+
+    const head = document.createElement('div');
+    head.className = 'goal-active-head';
+    const title = document.createElement('span');
+    title.className = 'goal-active-title';
+    title.textContent = goal.giftName
+        ? `${goal.title} — ${translateGiftName(goal.giftName)}`
+        : goal.title;
+    title.title = 'Clique para editar';
+    title.addEventListener('click', () => fillGoalForm(goal));
+    const actions = document.createElement('div');
+    actions.className = 'goal-active-actions';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'small-btn';
+    cancelBtn.type = 'button';
+    cancelBtn.textContent = 'Cancelar';
+    cancelBtn.addEventListener('click', e => { e.stopPropagation(); cancelGoal(goal.id); });
+    const completeBtn = document.createElement('button');
+    completeBtn.className = 'small-btn';
+    completeBtn.type = 'button';
+    completeBtn.textContent = 'Concluir';
+    completeBtn.addEventListener('click', e => { e.stopPropagation(); completeGoal(goal.id); });
+    actions.append(cancelBtn, completeBtn);
+    head.append(title, actions);
+
+    const box = document.createElement('div');
+    box.className = 'goal-progress';
+    const info = document.createElement('div');
+    info.className = 'goal-progress-info';
+    const percent = document.createElement('span');
+    percent.className = 'goal-progress-percent';
+    percent.textContent = `${Math.round(pct)}%`;
+    const unitsLabel = document.createElement('span');
+    unitsLabel.textContent = goalUnitsText(goal, progress.units || 0);
+    info.append(percent, unitsLabel);
+    const track = document.createElement('div');
+    track.className = 'goal-progress-track';
+    const bar = document.createElement('div');
+    bar.className = 'goal-progress-bar';
+    bar.style.width = `${pct}%`;
+    track.appendChild(bar);
+    box.append(info, track);
+
+    card.append(head, box);
+    ((goal.milestones) || []).forEach(m => card.appendChild(buildMilestoneRow(m)));
+    return card;
 }
 
-function renderGoalMilestones(goal) {
-    if (!goalMilestonesList) return;
-    goalMilestonesList.innerHTML = '';
-    (goal && goal.milestones || []).forEach(m => {
-        const row = document.createElement('div');
-        row.className = 'goal-milestone' + (m.unlocked ? ' unlocked' : '');
-        const units = document.createElement('span');
-        units.className = 'goal-ms-units-label';
-        units.textContent = `${m.atUnits} unidades`;
-        const reward = document.createElement('span');
-        reward.className = 'goal-ms-reward-label';
-        reward.textContent = m.reward ? translateGiftName(m.reward) : '—';
-        const badge = document.createElement('span');
-        badge.className = 'goal-ms-badge' + (m.unlocked ? ' on' : '');
-        badge.textContent = m.unlocked ? '🎉 Desbloqueado' : '🔒 Pendente';
-        row.append(units, reward, badge);
-        goalMilestonesList.appendChild(row);
-    });
+function renderActivesList(actives) {
+    if (!goalActivesList) return;
+    goalActivesList.innerHTML = '';
+    (actives || []).forEach(progress => goalActivesList.appendChild(buildGoalCard(progress)));
+}
+
+function updateGoalCard(card, progress) {
+    const goal = progress.goal;
+    const pct = Math.max(0, Math.min(100, progress.percent || 0));
+    const percent = card.querySelector('.goal-progress-percent');
+    if (percent) percent.textContent = `${Math.round(pct)}%`;
+    const unitsLabel = card.querySelector('.goal-progress-info span:last-child');
+    if (unitsLabel) unitsLabel.textContent = goalUnitsText(goal, progress.units || 0);
+    const bar = card.querySelector('.goal-progress-bar');
+    if (bar) bar.style.width = `${pct}%`;
+    card.querySelectorAll('.goal-milestone').forEach(el => el.remove());
+    ((goal.milestones) || []).forEach(m => card.appendChild(buildMilestoneRow(m)));
+}
+
+function findGoalCard(goalId) {
+    if (!goalActivesList || !goalId) return null;
+    return goalActivesList.querySelector(`.goal-active-card[data-goal-id="${goalId}"]`);
 }
 
 function fillGoalForm(goal) {
@@ -3066,7 +3146,7 @@ function fillGoalForm(goal) {
     updateGoalButtons();
 }
 
-function resetGoalDisplay() {
+function resetGoalForm() {
     currentGoalId = 0;
     if (goalTitleInput) goalTitleInput.value = '';
     if (goalGiftSelect) goalGiftSelect.value = '';
@@ -3077,12 +3157,13 @@ function resetGoalDisplay() {
         if (unitsInput) unitsInput.value = '';
         if (rewardInput) setSelectValue(rewardInput, '');
     });
-    if (goalProgressPercent) goalProgressPercent.textContent = '0%';
-    if (goalUnitsLabel) goalUnitsLabel.textContent = '0 / 0 unidades';
-    if (goalProgressBar) goalProgressBar.style.width = '0%';
-    if (goalMilestonesList) goalMilestonesList.innerHTML = '';
-    renderGoalHistory([]);
     updateGoalButtons();
+}
+
+function resetGoalDisplay() {
+    resetGoalForm();
+    renderActivesList([]);
+    renderGoalHistory([]);
 }
 
 function collectMilestones() {
@@ -3131,19 +3212,11 @@ async function loadGoals() {
             return;
         }
         const state = await response.json();
-        if (state.active) {
-            fillGoalForm(state.active.goal);
-            renderGoalProgress(state.active);
-        } else {
-            if (currentGoalId === 0) {
-                if (goalProgressPercent) goalProgressPercent.textContent = '0%';
-                if (goalUnitsLabel) goalUnitsLabel.textContent = '0 / 0 unidades';
-                if (goalProgressBar) goalProgressBar.style.width = '0%';
-            }
-            if (goalMilestonesList) goalMilestonesList.innerHTML = '';
-            updateGoalButtons();
-        }
+        renderActivesList(state.actives || []);
         renderGoalHistory(state.history || []);
+        if (currentGoalId > 0 && !(state.actives || []).some(p => p.goal.id === currentGoalId)) {
+            resetGoalForm(); // a meta em edição foi concluída/cancelada
+        }
     } catch (error) {
         console.error('[Frontend] loadGoals: erro:', error);
     }
@@ -3183,26 +3256,27 @@ async function saveGoal() {
             return;
         }
         const saved = await res.json();
+        const wasEdit = currentGoalId > 0;
         currentGoalId = saved.id;
         await loadGoals();
-        showGoalToast('Meta salva.');
+        if (!wasEdit) resetGoalForm(); // formulário pronto para a próxima meta
+        showGoalToast(wasEdit ? 'Meta atualizada.' : 'Meta criada.');
     } catch (error) {
         console.error('[Frontend] saveGoal: erro:', error);
         showGoalToast('Erro ao salvar meta.');
     }
 }
 
-async function cancelGoal() {
-    if (!currentGoalId) return;
-    if (!confirm('Cancelar a meta ativa?')) return;
+async function cancelGoal(goalId) {
+    if (!goalId) return;
+    if (!confirm('Cancelar a meta?')) return;
     try {
-        const res = await fetch('/api/goals/cancel', { method: 'POST' });
+        const res = await fetch(`/api/goals/cancel?id=${goalId}`, { method: 'POST' });
         if (!res.ok) {
             showGoalToast('Erro ao cancelar a meta.');
             return;
         }
-        currentGoalId = 0;
-        resetGoalDisplay();
+        if (currentGoalId === goalId) resetGoalForm();
         await loadGoals();
         showGoalToast('Meta cancelada.');
     } catch (error) {
@@ -3211,16 +3285,16 @@ async function cancelGoal() {
     }
 }
 
-async function completeGoal() {
-    if (!currentGoalId) return;
+async function completeGoal(goalId) {
+    if (!goalId) return;
     if (!confirm('Concluir a meta agora?')) return;
     try {
-        const res = await fetch('/api/goals/complete', { method: 'POST' });
+        const res = await fetch(`/api/goals/complete?id=${goalId}`, { method: 'POST' });
         if (!res.ok) {
             showGoalToast('Erro ao concluir a meta.');
             return;
         }
-        currentGoalId = 0;
+        if (currentGoalId === goalId) resetGoalForm();
         await loadGoals();
         showGoalToast('🎉 Meta concluída!');
     } catch (error) {
@@ -3230,8 +3304,7 @@ async function completeGoal() {
 }
 
 goalSaveBtn.addEventListener('click', saveGoal);
-goalCancelBtn.addEventListener('click', cancelGoal);
-goalCompleteBtn.addEventListener('click', completeGoal);
+goalResetBtn.addEventListener('click', resetGoalForm);
 updateGoalButtons();
 
 // --- Administração: lives e horários ---

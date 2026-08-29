@@ -128,6 +128,9 @@ type LiveRanking struct {
 	UpdatedAt  string     `json:"updatedAt"`
 	TotalUsers int        `json:"totalUsers"`
 	UserRanks  []UserRank `json:"userRanks"`
+	// TotalLikes is the room-level cumulative like counter reported by the
+	// TikTok stream (authoritative overall like count for the live).
+	TotalLikes int64 `json:"totalLikes,omitempty"`
 }
 
 // LiveReport is the AI-generated post-live summary.

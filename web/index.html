@@ -1095,7 +1095,7 @@
             min-width: 140px;
         }
         .goal-progress {
-            margin-top: 14px;
+            margin-top: 4px;
         }
         .goal-progress-info {
             display: flex;
@@ -1104,7 +1104,7 @@
             color: var(--text-muted);
             margin-bottom: 6px;
         }
-        #goalProgressPercent {
+        .goal-progress-percent {
             color: var(--cyan);
             font-weight: 700;
         }
@@ -1151,6 +1151,32 @@
         .goal-ms-badge.on {
             color: var(--green);
             font-weight: 700;
+        }
+        .goal-active-card {
+            padding: 12px 14px;
+            margin-top: 10px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.02);
+        }
+        .goal-active-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 4px;
+        }
+        .goal-active-title {
+            flex: 1;
+            font-weight: 700;
+            cursor: pointer;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .goal-active-actions {
+            display: flex;
+            gap: 6px;
+            flex-shrink: 0;
         }
         .goal-section-label {
             margin-top: 12px;
@@ -1387,8 +1413,7 @@
             </div>
             <div class="section-title-actions">
                 <button id="goalSaveBtn" class="small-btn" type="button">Salvar</button>
-                <button id="goalCancelBtn" class="small-btn" type="button">Cancelar</button>
-                <button id="goalCompleteBtn" class="small-btn" type="button">Concluir</button>
+                <button id="goalResetBtn" class="small-btn" type="button">Limpar</button>
             </div>
         </div>
         <div class="goal-card">
@@ -1419,16 +1444,7 @@
                     </select>
                 </div>
             </div>
-            <div class="goal-progress">
-                <div class="goal-progress-info">
-                    <span id="goalProgressPercent">0%</span>
-                    <span id="goalUnitsLabel">0 / 0 unidades</span>
-                </div>
-                <div class="goal-progress-track">
-                    <div id="goalProgressBar" class="goal-progress-bar"></div>
-                </div>
-            </div>
-            <div id="goalMilestonesList"></div>
+            <div id="goalActivesList"></div>
             <div id="goalHistoryWrap" hidden>
                 <div class="goal-section-label">Histórico</div>
                 <div id="goalHistoryList"></div>

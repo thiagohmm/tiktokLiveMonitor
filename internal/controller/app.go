@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -328,6 +329,20 @@ func (c *AppController) GetLiveRanking(liveName string) (model.LiveRanking, erro
 	if stats == nil {
 		stats = []model.LiveStat{}
 	}
+	// Calibração da contagem de likes: o stream do TikTok entrega apenas uma
+	// amostra dos eventos de like (a soma por usuário fica abaixo do total da
+	// sala). Proporcionalmente ao total acumulado da sala, reescalamos o
+	// LikeCount de cada usuário para a contagem refletir o valor real.
+	var roomTotal, delivered int64
+	if rt, dl, err := c.repo.LikeTotals(liveName); err == nil {
+		roomTotal, delivered = rt, dl
+	}
+	if roomTotal > delivered && delivered > 0 {
+		factor := float64(roomTotal) / float64(delivered)
+		for i := range stats {
+			stats[i].LikeCount = int(math.Round(float64(stats[i].LikeCount) * factor))
+		}
+	}
 	anomaliesByUser := map[string]int{}
 	if logs, err := c.repo.GetAnomalyLogsByLiveName(liveName); err == nil {
 		for _, l := range logs {
@@ -339,6 +354,7 @@ func (c *AppController) GetLiveRanking(liveName string) (model.LiveRanking, erro
 	scored := c.ranker.Compute(stats, anomaliesByUser)
 	_ = scored
 	out = c.ranker.BuildLiveRanking(liveName, stats, anomaliesByUser)
+	out.TotalLikes = roomTotal
 	return out, nil
 }
 
@@ -505,6 +521,14 @@ func (c *AppController) HandleLikeEvent(data monitor.EventData) {
 	liveName := c.monitor.GetState().Username
 	if err := c.repo.AddLike(liveName, uniqueID, nickname, likeCount); err != nil {
 		log.Printf("[Controller] Error storing like: %v", err)
+	}
+	// `total` é o contador acumulado de curtidas da SALA (autoritativo).
+	// O stream entrega apenas uma amostra dos eventos de like, então esse
+	// total é usado para calibrar a contagem por usuário no ranking.
+	if roomTotal := int64(eventInt(data, "total", 0)); roomTotal > 0 {
+		if err := c.repo.UpsertRoomLikeTotal(liveName, roomTotal); err != nil {
+			log.Printf("[Controller] Error storing room like total: %v", err)
+		}
 	}
 }
 
