@@ -1,7 +1,6 @@
 package monitor
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"regexp"
@@ -17,15 +16,12 @@ type correlationPick struct {
 }
 
 // correlateGiftWithQuestion correlaciona um presente-alvo com as mensagens do
-// doador na janela recente do chat.
+// doador na janela recente do chat, de forma determinística (sem IA):
 //
-// Fluxo:
 //  1. candidata única do doador -> heurística determinística (caminho rápido);
-//  2. múltiplas mensagens do doador (ou menção por apelido) -> a IA do agente
-//     Python verifica as últimas mensagens do usuário e escolhe a pergunta que
-//     melhor se encaixa como referente ao presente dado;
-//  3. IA indisponível ou sem correspondência -> fallback heurístico (baixa
-//     confiança) para a melhor mensagem do doador.
+//  2. múltiplas mensagens do doador (ou menção por apelido) -> heurística
+//     determinística escolhe a melhor mensagem do doador (baixa confiança);
+//  3. sem correspondência -> nenhum evento é emitido.
 func (m *Monitor) correlateGiftWithQuestion(gift GiftPayload) {
 	now := time.Now().UnixMilli()
 	correlationID := correlationIDFor(gift, now)
@@ -34,7 +30,6 @@ func (m *Monitor) correlateGiftWithQuestion(gift GiftPayload) {
 	m.pruneQuestions(now)
 	questions := append([]QuestionEntry(nil), m.questionBuffer...)
 	recent := recentChatCandidatesLocked(m.chatBuffer, now)
-	llmFn := m.LLMCorrelate
 	m.mu.Unlock()
 
 	candidates := dedupeCandidates(questions, recent, now)
@@ -46,35 +41,12 @@ func (m *Monitor) correlateGiftWithQuestion(gift GiftPayload) {
 	heuristic := chooseQuestionHeuristic(gift, questions, recent)
 
 	// Caminho rápido: exatamente uma mensagem do doador na janela —
-	// correlação inequívoca, sem custo de IA.
+	// correlação inequívoca.
 	if heuristic != nil && len(sameUserCandidates(gift, candidates)) == 1 {
 		logCorrelation("HEURISTIC_MATCH", gift, heuristic)
 		m.emitCorrelation(correlationID, gift, heuristic.match, heuristic.method, heuristic.confidence, false)
 		m.scheduleForwardReview(correlationID, gift, heuristic)
 		return
-	}
-
-	// Várias mensagens do doador (ou menção por apelido): a IA (Python)
-	// verifica as últimas mensagens do usuário e escolhe a que melhor se
-	// encaixa como pergunta referente ao presente dado.
-	if llmFn != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-		defer cancel()
-		match, method, confidence := llmFn(ctx, gift, candidates)
-		if match != nil {
-			if method == "" {
-				method = "llm"
-			}
-			if confidence == "" {
-				confidence = "medium"
-			}
-			pick := &correlationPick{match: *match, method: method, confidence: confidence}
-			logCorrelation("LLM_MATCH", gift, pick)
-			m.emitCorrelation(correlationID, gift, pick.match, pick.method, pick.confidence, false)
-			m.scheduleForwardReview(correlationID, gift, pick)
-			return
-		}
-		log.Printf("[Correlation] LLM_NO_MATCH | gift=%s | giftUser=%s", gift.GiftName, displayUser(gift.UniqueID, gift.Nickname))
 	}
 
 	if heuristic != nil {
@@ -327,8 +299,7 @@ func dedupeCandidates(questions, recent []QuestionEntry, now int64) []QuestionEn
 	}
 	appendUnique(questions)
 	appendUnique(recent)
-	// Ordem cronológica (mais antigo -> mais recente): o agente Python
-	// recebe esta lista numerada no prompt da IA.
+	// Ordem cronológica (mais antigo -> mais recente).
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].Timestamp < out[j].Timestamp
 	})

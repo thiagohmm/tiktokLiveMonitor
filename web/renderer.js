@@ -712,15 +712,6 @@ const correlationMessagesTableBody = document.getElementById('correlationMessage
 const rankingTableBody = document.getElementById('rankingTableBody');
 const targetExpirationMinutesInput = document.getElementById('targetExpirationMinutes');
 const chartCanvas = document.getElementById('messageChart');
-const aiLedRow = document.getElementById('aiLedRow');
-const aiLedDot = document.getElementById('aiLedDot');
-const aiLedText = document.getElementById('aiLedText');
-const modelSelectorContainer = document.getElementById('modelSelectorContainer');
-const modelSelect = document.getElementById('modelSelect');
-const setupProgressContainer = document.getElementById('setupProgressContainer');
-const setupStatusText = document.getElementById('setupStatusText');
-const setupPercentage = document.getElementById('setupPercentage');
-const setupProgressBar = document.getElementById('setupProgressBar');
 const targetGiftHistoryBtn = document.getElementById('targetGiftHistoryBtn');
 const targetGiftsList = document.getElementById('targetGiftsList');
 const availableGiftSelect = document.getElementById('availableGiftSelect');
@@ -1418,54 +1409,6 @@ function infractionCategoryLabel(category) {
     return map[key] || key;
 }
 
-function applyInfractionsSectionTitle(aiConfigured) {
-    // Seção de infrações removida da UI.
-}
-
-function showAiLedChecking() {
-    if (!aiLedRow || !aiLedDot || !aiLedText) return;
-    aiLedRow.style.display = 'flex';
-    aiLedDot.className = 'ai-led-dot ai-led-dot-checking';
-    aiLedText.textContent = 'Verificando IA…';
-}
-
-let _aiLedPollTimer = null;
-
-function setAiLedActive(active) {
-    if (!aiLedRow || !aiLedDot || !aiLedText) return;
-    aiLedRow.style.display = 'flex';
-    aiLedDot.className = 'ai-led-dot ' + (active ? 'ai-led-dot-on' : 'ai-led-dot-off');
-    aiLedText.textContent = active ? 'IA ativa' : 'IA inativa';
-    if (active) {
-        _stopAiLedPoll();
-    }
-}
-
-function _stopAiLedPoll() {
-    if (_aiLedPollTimer) {
-        clearInterval(_aiLedPollTimer);
-        _aiLedPollTimer = null;
-    }
-}
-
-function _startAiLedPoll() {
-    _stopAiLedPoll();
-    _aiLedPollTimer = setInterval(() => {
-        fetch('/api/probe-llm')
-            .then((r) => r.ok ? r.json() : { llmActive: false })
-            .then((data) => setAiLedActive(Boolean(data && data.llmActive)))
-            .catch(() => {});
-    }, 5000);
-}
-
-function hideAiLed() {
-    if (!aiLedRow || !aiLedDot || !aiLedText) return;
-    _stopAiLedPoll();
-    aiLedRow.style.display = 'none';
-    aiLedDot.className = 'ai-led-dot ai-led-dot-checking';
-    aiLedText.textContent = 'Verificando IA…';
-}
-
 function createChart(ChartLib) {
     const ctx = chartCanvas.getContext('2d');
     return new ChartLib(ctx, {
@@ -1591,13 +1534,6 @@ document.addEventListener('keydown', event => {
         }
 
         setConnectingState();
-        showAiLedChecking();
-        const probePromise = fetch('/api/probe-llm')
-            .then(async (r) => {
-                if (!r.ok) return { llmActive: false };
-                return r.json();
-            })
-            .catch(() => ({ llmActive: false }));
 
         try {
             const response = await fetch('/api/connect', {
@@ -1615,20 +1551,9 @@ document.addEventListener('keydown', event => {
         } catch (error) {
             applyDisconnectedState(error.message);
         }
-
-        try {
-            const probeData = await probePromise;
-            const active = Boolean(probeData.llmActive);
-            setAiLedActive(active);
-            if (!active) _startAiLedPoll();
-        } catch {
-            setAiLedActive(false);
-            _startAiLedPoll();
-        }
     });
 
     disconnectBtn.addEventListener('click', async () => {
-        hideAiLed();
         statusDiv.innerText = 'Desconectando...';
 
         try {
@@ -2178,25 +2103,6 @@ function addPinnedCommentToList(pinnedComment, options = {}) {
     }
 }
 
-async function sendFalsePositiveFeedback(comment, category) {
-    try {
-        const response = await fetch('/api/feedback', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ comment, category, expected: 'NAO' })
-        });
-        if (!response.ok) {
-            const payload = await response.json().catch(() => ({}));
-            throw new Error(payload.error || `status ${response.status}`);
-        }
-        return true;
-    } catch (err) {
-        console.error('[Frontend] Falha ao enviar feedback de falso positivo:', err);
-        setStatus('Falha ao registrar correção: ' + err.message, 'error');
-        return false;
-    }
-}
-
 function addFlaggedMessageToList(data) {
     if (!correlationMessagesTableBody) {
         return;
@@ -2255,34 +2161,6 @@ function addFlaggedMessageToList(data) {
     const tdReason = document.createElement('td');
     tdReason.setAttribute('data-label', 'Detalhe');
     tdReason.textContent = data.reason != null ? String(data.reason) : '';
-
-    const aiCategories = ['PROSELITISMO', 'SPAM', 'GOLPE', 'ODIO', 'OUTRO'];
-    if (aiCategories.includes(category)) {
-        const fixBtn = document.createElement('button');
-        fixBtn.type = 'button';
-        fixBtn.className = 'small-btn fix-false-positive-btn';
-        fixBtn.textContent = 'Não é ' + infractionCategoryLabel(category);
-        fixBtn.addEventListener('click', async () => {
-            fixBtn.disabled = true;
-            fixBtn.textContent = 'Enviando…';
-            const ok = await sendFalsePositiveFeedback(data.comment != null ? String(data.comment) : '', category);
-            if (!ok) {
-                fixBtn.disabled = false;
-                fixBtn.textContent = 'Não é ' + infractionCategoryLabel(category);
-                return;
-            }
-            fixBtn.textContent = 'Corrigido';
-            setTimeout(() => {
-                if (flaggedMessageTimers[timerKey]) {
-                    clearTimeout(flaggedMessageTimers[timerKey]);
-                    delete flaggedMessageTimers[timerKey];
-                }
-                tr.remove();
-            }, 600);
-        });
-        tdReason.appendChild(document.createElement('br'));
-        tdReason.appendChild(fixBtn);
-    }
 
     tr.appendChild(tdUser);
     tr.appendChild(tdMsg);
@@ -2414,10 +2292,6 @@ async function loadInitialState() {
         const response = await fetch('/api/state');
         const payload = await response.json();
 
-        if (typeof payload.aiConfigured === 'boolean') {
-            applyInfractionsSectionTitle(payload.aiConfigured);
-        }
-
         if (payload.connected && payload.username) {
             console.log('[Frontend] loadInitialState: já conectado a', payload.username, '- carregando presentes...');
             usernameInput.value = payload.username;
@@ -2443,9 +2317,6 @@ function setupEventStream() {
 
     eventSource.addEventListener('server-state', event => {
         const data = JSON.parse(event.data);
-        if (typeof data.aiConfigured === 'boolean') {
-            applyInfractionsSectionTitle(data.aiConfigured);
-        }
         if (data.connected && data.username) {
             usernameInput.value = data.username;
             applyConnectedState(data.username);
@@ -2711,7 +2582,7 @@ async function loadReport() {
     reportWrap.style.display = 'block';
     reportError.style.display = 'none';
     reportSummary.innerHTML = '';
-    reportText.textContent = 'Gerando relatório com a IA, aguarê...';
+    reportText.textContent = 'Gerando relatório, aguarde...';
     try {
         const response = await fetch('/api/report');
         const data = await response.json();
@@ -3455,7 +3326,6 @@ if (adminLivesMoreBtn) {
 
 async function bootstrap() {
     renderTargetGifts();
-    applyInfractionsSectionTitle(false);
 
     try {
         await ensureBrowserChart();

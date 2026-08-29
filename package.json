@@ -3,20 +3,12 @@
   "version": "1.0.0",
   "scripts": {
     "docker:build": "docker compose build",
-    "docker:up": "docker compose up",
-    "postinstall": "node -e \"if (!process.env.SKIP_POSTINSTALL) { require('child_process').execSync('node scripts/setup-llm.js', { stdio: 'inherit' }); }\"",
-    "setup-llm": "node scripts/setup-llm.js",
-    "setup-llm:linux:arm64": "node scripts/setup-llm.js linux arm64",
-    "setup-llm:linux:x64": "node scripts/setup-llm.js linux x64",
-    "setup-llm:win:x64": "node scripts/setup-llm.js win x64"
+    "docker:up": "docker compose up"
   },
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "TikTok Live Monitor (lite, sem IA)",
   "dependencies": {
-    "express": "^4.22.1",
-    "tar": "^7.4.3",
-    "tiktok-live-connector": "^2.1.1-beta1",
-    "unzipper": "^0.12.3"
+    "tiktok-live-connector": "^2.1.1-beta1"
   }
 }

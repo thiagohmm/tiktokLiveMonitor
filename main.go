@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/thiagohmm/tiktok-live-monitor/internal/agent"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
@@ -26,9 +25,6 @@ func main() {
 		baseDir = filepath.Dir(baseDir)
 	}
 	log.Printf("Base directory: %s", baseDir)
-
-	modelsDir := filepath.Join(baseDir, "models")
-	binDir := filepath.Join(baseDir, "bin")
 
 	// Model layer: open database repository
 	repo, err := database.Open(baseDir)
@@ -54,19 +50,6 @@ func main() {
 	ctrl := controller.NewAppController(mon, repo)
 	ctrl.SetMessageCache(msgCache)
 
-	// Service layer: AI agent (Python subprocess) + reverse proxy.
-	agentMgr := agent.NewManager(baseDir)
-	if err := agentMgr.Start(); err != nil {
-		log.Printf("[Agent] Falha ao iniciar agente Python: %v", err)
-	}
-	defer agentMgr.Stop()
-
-	// Correlação presente<->chat: a IA do agente Python escolhe, entre as
-	// últimas mensagens do doador, a pergunta que melhor se encaixa como
-	// referente ao presente-alvo dado. Só é acionada para presentes-alvo
-	// escolhidos pelo streamer; sem agente, o monitor cai para heurística.
-	mon.LLMCorrelate = agent.NewCorrelateFunc(agentMgr.BaseURL())
-
 	// View layer: HTTP server
 	port := 3001
 	if p := os.Getenv("PORT"); p != "" {
@@ -75,13 +58,9 @@ func main() {
 		}
 	}
 	srv := view.New(view.Config{
-		Host:         os.Getenv("HOST"),
-		Port:         port,
-		ModelsDir:    modelsDir,
-		BinDir:       binDir,
-		WebDir:       filepath.Join(baseDir, "web"),
-		AgentProxy:   agentMgr.ProxyHandler(),
-		AgentBaseURL: agentMgr.BaseURL(),
+		Host:      os.Getenv("HOST"),
+		Port:      port,
+		WebDir:    filepath.Join(baseDir, "web"),
 	}, ctrl)
 
 	ctx := context.Background()
