@@ -26,8 +26,13 @@ func main() {
 	}
 	log.Printf("Base directory: %s", baseDir)
 
-	// Model layer: open database repository
-	repo, err := database.Open(baseDir)
+	// Model layer: open database repository. DB_DIR allows persisting the
+	// SQLite file in a dedicated volume without freezing /app.
+	dbDir := os.Getenv("DB_DIR")
+	if dbDir == "" {
+		dbDir = baseDir
+	}
+	repo, err := database.Open(dbDir)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}

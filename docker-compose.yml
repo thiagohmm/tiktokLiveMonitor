@@ -15,9 +15,11 @@ services:
     environment:
       HOST: "0.0.0.0"
       PORT: "3001"
+      DB_DIR: "/data"
     volumes:
-      # Persiste o feedback.db (SQLite do app) entre restarts.
-      - monitor-data:/app
+      # Persiste apenas o feedback.db (SQLite do app) entre restarts; o
+      # restante de /app vem sempre da imagem.
+      - monitor-data:/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3001/api/state || exit 1"]
