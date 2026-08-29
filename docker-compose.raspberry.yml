@@ -25,12 +25,14 @@ services:
     environment:
       HOST: "0.0.0.0"
       PORT: "3001"
+      DB_DIR: "/data"
     volumes:
-      # Persiste o feedback.db (SQLite do app) entre restarts.
-      - monitor-data:/app
-      # Bind mount (lê) após o volume /app para que atualizações de web/ no
-      # repo sejam servidas direto após restart do container, sem ficarem
-      # presas na cópia do volume.
+      # Persiste apenas o feedback.db (SQLite do app). O restante de /app vem
+      # sempre da imagem — assim atualizações de binário/bridge pegam no
+      # primeiro restart, sem volume congelando arquivos antigos.
+      - monitor-data:/data
+      # Bind mount (lê) da UI: alterações em web/ no repo são servidas direto
+      # após restart do container, sem rebuild da imagem.
       - ./web:/app/web:ro
     restart: unless-stopped
     healthcheck:
