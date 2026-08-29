@@ -81,10 +81,9 @@ type GiftPayload struct {
 }
 
 type Settings struct {
-	ModerationEnabled   bool     `json:"moderationEnabled"`
-	AIModerationEnabled bool     `json:"aiModerationEnabled"`
-	LogLevel            string   `json:"logLevel"`
-	TargetGifts         []string `json:"targetGifts"`
+	ModerationEnabled bool     `json:"moderationEnabled"`
+	LogLevel          string   `json:"logLevel"`
+	TargetGifts       []string `json:"targetGifts"`
 }
 
 type State struct {
@@ -138,12 +137,6 @@ type Monitor struct {
 	supCancel         context.CancelFunc
 	supDone           chan struct{}
 	supStopCh         chan struct{}
-
-	// LLMCorrelate (agente Python) escolhe, entre as candidatas, a mensagem que
-	// melhor se encaixa como pergunta referente ao presente-alvo dado. Retorna
-	// (mensagem, método, confiança); nil quando não há correspondência. Só é
-	// acionada para presentes-alvo escolhidos pelo streamer.
-	LLMCorrelate func(ctx context.Context, gift GiftPayload, candidates []QuestionEntry) (*QuestionEntry, string, string)
 }
 
 func New() (*Monitor, error) {
@@ -155,10 +148,9 @@ func New() (*Monitor, error) {
 		giftsCh:       make(chan []string, 1),
 		reconnectKick: make(chan struct{}, 1),
 		settings: Settings{
-			ModerationEnabled:   true,
-			AIModerationEnabled: true,
-			LogLevel:            "info",
-			TargetGifts:         []string{},
+			ModerationEnabled: true,
+			LogLevel:          "info",
+			TargetGifts:       []string{},
 		},
 	}, nil
 }

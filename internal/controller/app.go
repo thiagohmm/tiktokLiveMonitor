@@ -127,9 +127,8 @@ func (c *AppController) FetchAvailableGifts() ([]string, error) {
 
 // --- Moderation Actions ---
 
-// ReportExternalFlag ingests a moderation flag from the Python agent and
-// surfaces it through the existing flagged-message pipeline (UI + anomaly log).
-// This is plumbing only — no AI logic lives here.
+// ReportExternalFlag ingests a moderation flag and surfaces it through the
+// existing flagged-message pipeline (UI + anomaly log). Plumbing only.
 func (c *AppController) ReportExternalFlag(data monitor.EventData) {
 	settings := c.monitor.GetSettings()
 	if !settings.ModerationEnabled {
@@ -358,7 +357,7 @@ func (c *AppController) GetLiveRanking(liveName string) (model.LiveRanking, erro
 	return out, nil
 }
 
-// GenerateReport produces an AI-assisted post-live report.
+// GenerateReport produces the deterministic post-live report.
 func (c *AppController) GenerateReport(ctx context.Context, liveName string) (model.LiveReport, error) {
 	if c.reportGen == nil {
 		return model.LiveReport{}, fmt.Errorf("report generator unavailable")

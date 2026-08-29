@@ -20,7 +20,6 @@ func New(repo model.Repository) *Generator {
 	return &Generator{repo: repo}
 }
 
-// Prompt builds the prompt that asks the LLM to summarise a live.
 // Generate builds a report for the given live name.
 func (g *Generator) Generate(ctx context.Context, liveName string) (model.LiveReport, error) {
 	var report model.LiveReport

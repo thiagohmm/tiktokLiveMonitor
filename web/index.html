@@ -450,39 +450,6 @@
         @keyframes blinker {
             50% { background-color: rgba(220, 38, 38, 0.28); }
         }
-        .ai-led-row {
-            display: none;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 16px;
-            padding: 10px 14px;
-            font-size: 0.9em;
-            font-weight: 600;
-            color: var(--text);
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-        }
-        .ai-led-dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            flex-shrink: 0;
-            transition: background-color 0.2s, box-shadow 0.2s;
-        }
-        .ai-led-dot-checking {
-            background-color: #94a3b8;
-            box-shadow: 0 0 6px rgba(148, 163, 184, 0.9);
-            animation: ai-led-pulse 1s ease-in-out infinite;
-        }
-        .ai-led-dot-on {
-            background-color: var(--green);
-            box-shadow: 0 0 12px rgba(34, 197, 94, 0.75);
-        }
-        .ai-led-dot-off {
-            background-color: var(--red);
-            box-shadow: 0 0 10px rgba(220, 38, 38, 0.6);
-        }
         @keyframes ai-led-pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
@@ -945,12 +912,6 @@
             #status { margin-bottom: 14px; }
             .status-bar { margin-bottom: 14px; padding: 9px 12px; }
 
-            /* Assistente de IA */
-            .ai-card { padding: 14px; margin-bottom: 18px; border-radius: 12px; }
-            .ai-question-row { max-width: none; }
-            .ai-question-row input { min-width: 0; flex: 1 1 150px; }
-            .ai-question-row button { flex: 1 1 auto; white-space: nowrap; }
-
             /* Gráfico e títulos de seção */
             .chart-section { margin-bottom: 18px; padding: 12px; }
             .chart-section canvas { height: 150px !important; }
@@ -1255,120 +1216,6 @@
             </div>
         </header>
         <div id="status" class="status-bar"><span class="status-dot"></span>Desconectado</div>
-        <section class="ai-card">
-            <div class="ai-card-head">
-                <span class="ai-card-title">Assistente de IA</span>
-                <div id="aiLedRow" class="ai-led-row" aria-live="polite">
-                    <span id="aiLedDot" class="ai-led-dot ai-led-dot-checking"></span>
-                    <span id="aiLedText">Verificando IA…</span>
-                </div>
-            </div>
-            <div class="ai-question">
-                <label for="aiQuestion">Pergunte sobre a live ou peça um resumo:</label>
-                <div class="ai-question-row">
-                    <input type="text" id="aiQuestion" placeholder="Ex: ranking da live, perfil de @fulano" autocomplete="off">
-                    <button id="askAiBtn" type="button" class="small-btn">Perguntar</button>
-                    <button id="summarizeBtn" type="button" class="small-btn secondary-btn">Resumir live</button>
-                    <button id="cancelAiBtn" type="button" class="small-btn secondary-btn" style="display: none;">Cancelar</button>
-                </div>
-                <div id="aiAnswerWrap" style="display: none;">
-                    <div id="aiAnswer"></div>
-                    <button id="clearAiBtn" type="button" class="small-btn secondary-btn">Limpar</button>
-                </div>
-            </div>
-        </section>
-
-            <style>
-                .ai-card {
-                    margin-bottom: 24px;
-                    padding: 18px;
-                    background: rgba(255, 255, 255, 0.03);
-                    border: 1px solid var(--border);
-                    border-radius: 14px;
-                }
-                .ai-card-head {
-                    display: flex;
-                    align-items: center;
-                    justify-content: space-between;
-                    gap: 12px;
-                    margin-bottom: 14px;
-                    flex-wrap: wrap;
-                }
-                .ai-card-title {
-                    font-weight: 700;
-                    font-size: 0.95em;
-                    letter-spacing: 0.02em;
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                }
-                .ai-card-title::before {
-                    content: '';
-                    width: 8px;
-                    height: 8px;
-                    border-radius: 50%;
-                    background: var(--cyan);
-                    box-shadow: 0 0 10px var(--cyan);
-                }
-                .ai-question {
-                    margin-bottom: 0;
-                }
-                .ai-question > label {
-                    font-size: 0.8em;
-                    margin-bottom: 6px;
-                    display: block;
-                    color: var(--text-muted);
-                    font-weight: 600;
-                    text-transform: uppercase;
-                    letter-spacing: 0.05em;
-                }
-                .ai-question-row {
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                    max-width: 520px;
-                    flex-wrap: wrap;
-                }
-                .ai-question-row input {
-                    flex: 1;
-                    min-width: 200px;
-                }
-                .ai-answer-box {
-                    margin-top: 12px;
-                    max-width: 520px;
-                }
-                #aiAnswerWrap {
-                    margin-top: 0;
-                }
-                #aiAnswer {
-                    padding: 14px 16px;
-                    background: rgba(37, 244, 238, 0.06);
-                    border: 1px solid var(--border);
-                    border-radius: 12px;
-                    white-space: pre-wrap;
-                    word-break: break-word;
-                    font-size: 0.9em;
-                    line-height: 1.5;
-                    color: var(--text);
-                }
-            </style>
-            
-            <div id="modelSelectorContainer" class="setup-row">
-                <label for="modelSelect" class="setup-label">Modelo:</label>
-                <select id="modelSelect" class="setup-select">
-                    <!-- Options populated via JS -->
-                </select>
-            </div>
-
-            <div id="setupProgressContainer" class="setup-progress">
-                <div class="setup-progress-info">
-                    <span id="setupStatusText">Baixando modelo...</span>
-                    <span id="setupPercentage">0%</span>
-                </div>
-                <div class="setup-progress-track">
-                    <div id="setupProgressBar" class="setup-progress-bar"></div>
-                </div>
-            </div>
 
         <div class="chart-section">
             <div class="section-title">
@@ -1548,15 +1395,15 @@
                     </tr>
                 </thead>
                 <tbody id="rankingTableBody">
-                    <!-- Ranking gerado pela IA aparecerá aqui -->
+                    <!-- Ranking calculado deterministicamente aparecerá aqui -->
                 </tbody>
             </table>
         </div>
 
-        <!-- Relatório Pós-Live gerado por IA -->
+        <!-- Relatório Pós-Live (determinístico) -->
         <div class="section-title">
             <div class="section-title-label">
-                <h3>📊 Relatório Pós-Live (IA)</h3>
+                <h3>📊 Relatório Pós-Live</h3>
             </div>
             <div class="section-title-actions">
                 <button id="generateReportBtn" class="small-btn" type="button">Gerar Relatório</button>
@@ -1636,111 +1483,5 @@
         </div>
 
     <script src="renderer.js?v={{ .BuildVersion }}"></script>
-    <script>
-        let askAiController = null;
-
-        async function runAgentAsk(question) {
-            const answerWrap = document.getElementById('aiAnswerWrap');
-            const answerDiv = document.getElementById('aiAnswer');
-            const clearBtn = document.getElementById('clearAiBtn');
-            const askBtn = document.getElementById('askAiBtn');
-            const summarizeBtn = document.getElementById('summarizeBtn');
-            const cancelBtn = document.getElementById('cancelAiBtn');
-
-            answerWrap.style.display = 'block';
-            clearBtn.style.display = 'none';
-            answerDiv.textContent = 'Pensando...';
-            askBtn.disabled = true;
-            summarizeBtn.disabled = true;
-            cancelBtn.style.display = 'inline-block';
-
-            askAiController = new AbortController();
-
-            try {
-                const resp = await fetch('/agent/ask', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ question }),
-                    signal: askAiController.signal
-                });
-                const data = await resp.json();
-                if (data.answer) {
-                    answerDiv.textContent = data.answer;
-                } else if (data.error) {
-                    answerDiv.textContent = resp.ok ? 'Erro: ' + data.error : 'Agente indisponível.';
-                } else {
-                    answerDiv.textContent = 'Sem resposta.';
-                }
-            } catch (e) {
-                if (e.name === 'AbortError') {
-                    answerDiv.textContent = 'Cancelado pelo usuário.';
-                } else {
-                    answerDiv.textContent = 'Erro ao conectar com o agente (indisponível?).';
-                }
-            } finally {
-                cancelBtn.style.display = 'none';
-                clearBtn.style.display = 'inline-block';
-                askBtn.disabled = false;
-                summarizeBtn.disabled = false;
-                askAiController = null;
-            }
-        }
-
-        document.getElementById('askAiBtn').addEventListener('click', () => {
-            const q = document.getElementById('aiQuestion').value.trim();
-            if (!q) return;
-            runAgentAsk(q);
-        });
-
-        document.getElementById('summarizeBtn').addEventListener('click', async () => {
-            const answerWrap = document.getElementById('aiAnswerWrap');
-            const answerDiv = document.getElementById('aiAnswer');
-            const clearBtn = document.getElementById('clearAiBtn');
-            const askBtn = document.getElementById('askAiBtn');
-            const summarizeBtn = document.getElementById('summarizeBtn');
-
-            answerWrap.style.display = 'block';
-            clearBtn.style.display = 'none';
-            answerDiv.textContent = 'Resumindo...';
-            askBtn.disabled = true;
-            summarizeBtn.disabled = true;
-
-            try {
-                const resp = await fetch('/agent/summarize');
-                const data = await resp.json();
-                if (data.summary) {
-                    answerDiv.textContent = data.summary;
-                } else if (data.error) {
-                    answerDiv.textContent = 'Agente indisponível.';
-                } else {
-                    answerDiv.textContent = 'Sem resposta.';
-                }
-            } catch (e) {
-                answerDiv.textContent = 'Erro ao conectar com o agente (indisponível?).';
-            } finally {
-                clearBtn.style.display = 'inline-block';
-                askBtn.disabled = false;
-                summarizeBtn.disabled = false;
-            }
-        });
-
-        document.getElementById('cancelAiBtn').addEventListener('click', () => {
-            if (askAiController) {
-                askAiController.abort();
-            }
-        });
-
-        document.getElementById('clearAiBtn').addEventListener('click', () => {
-            document.getElementById('aiAnswer').textContent = '';
-            document.getElementById('aiAnswerWrap').style.display = 'none';
-            document.getElementById('clearAiBtn').style.display = 'none';
-        });
-
-        document.getElementById('aiQuestion').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                document.getElementById('askAiBtn').click();
-            }
-        });
-    </script>
 </body>
 </html>

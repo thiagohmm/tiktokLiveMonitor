@@ -41,11 +41,9 @@ func setupTestServer(t *testing.T) (*HTTPServer, model.Repository, string, *moni
 	ctrl := controller.NewAppController(mon, repo)
 
 	srv := New(Config{
-		Host:      "127.0.0.1",
-		Port:      0,
-		ModelsDir: filepath.Join(dir, "models"),
-		BinDir:    filepath.Join(dir, "bin"),
-		WebDir:    filepath.Join(dir, "web"),
+		Host:   "127.0.0.1",
+		Port:   0,
+		WebDir: filepath.Join(dir, "web"),
 	}, ctrl)
 
 	return srv, repo, dir, mon
@@ -216,63 +214,6 @@ func TestHandleClearHistory(t *testing.T) {
 	if deleted != 3 {
 		t.Fatalf("expected 3 deleted, got %v", deleted)
 	}
-}
-
-func TestHandleFeedback(t *testing.T) {
-	srv, _, _, _ := setupTestServer(t)
-
-	var received map[string]interface{}
-	mockAgent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/feedback" {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		_ = json.NewDecoder(r.Body).Decode(&received)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"success":true}`))
-	}))
-	defer mockAgent.Close()
-	srv.cfg.AgentBaseURL = mockAgent.URL
-
-	t.Run("forwards to agent", func(t *testing.T) {
-		body := map[string]string{
-			"comment":  "spam msg",
-			"category": "SPAM",
-			"expected": "SIM_SPAM",
-		}
-		data, _ := json.Marshal(body)
-		req := httptest.NewRequest(http.MethodPost, "/api/feedback", bytes.NewReader(data))
-		rec := httptest.NewRecorder()
-		srv.handleFeedback(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
-		}
-		if received == nil || received["comment"] != "spam msg" {
-			t.Fatalf("expected forwarded comment, got %v", received)
-		}
-	})
-
-	t.Run("wrong method", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/feedback", nil)
-		rec := httptest.NewRecorder()
-		srv.handleFeedback(rec, req)
-		if rec.Code != http.StatusMethodNotAllowed {
-			t.Fatalf("expected 405, got %d", rec.Code)
-		}
-	})
-
-	t.Run("agent unavailable", func(t *testing.T) {
-		srv.cfg.AgentBaseURL = "http://127.0.0.1:1"
-		body := map[string]string{"comment": "x", "category": "SPAM", "expected": "SIM_SPAM"}
-		data, _ := json.Marshal(body)
-		req := httptest.NewRequest(http.MethodPost, "/api/feedback", bytes.NewReader(data))
-		rec := httptest.NewRecorder()
-		srv.handleFeedback(rec, req)
-		if rec.Code != http.StatusBadGateway {
-			t.Fatalf("expected 502, got %d", rec.Code)
-		}
-	})
 }
 
 func TestHandleGifts(t *testing.T) {
@@ -748,7 +689,7 @@ func TestHandleAdminLivesDelete(t *testing.T) {
 	}
 }
 
-func TestHandleModerationFlag(t *testing.T) {
+func TestReportExternalFlagPipeline(t *testing.T) {
 	srv, db, _, mon := setupTestServer(t)
 	mon.SetCurrentLive("live1")
 
@@ -762,20 +703,13 @@ func TestHandleModerationFlag(t *testing.T) {
 	})
 
 	t.Run("emit flag", func(t *testing.T) {
-		body := map[string]string{
+		srv.controller.ReportExternalFlag(monitor.EventData{
 			"comment":  "vai embora seu lixo",
 			"uniqueId": "user1",
 			"nickname": "User One",
 			"category": "ODIO",
 			"reason":   "Odio",
-		}
-		data, _ := json.Marshal(body)
-		req := httptest.NewRequest(http.MethodPost, "/api/moderation/flag", bytes.NewReader(data))
-		rec := httptest.NewRecorder()
-		srv.handleModerationFlag(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
-		}
+		})
 		if gotType != monitor.EventFlaggedMessage {
 			t.Fatalf("expected flagged-message event, got %q", gotType)
 		}
@@ -788,35 +722,16 @@ func TestHandleModerationFlag(t *testing.T) {
 		}
 	})
 
-	t.Run("missing comment", func(t *testing.T) {
-		body := map[string]string{"category": "ODIO"}
-		data, _ := json.Marshal(body)
-		req := httptest.NewRequest(http.MethodPost, "/api/moderation/flag", bytes.NewReader(data))
-		rec := httptest.NewRecorder()
-		srv.handleModerationFlag(rec, req)
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("expected 400, got %d", rec.Code)
-		}
-	})
-
-	t.Run("wrong method", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/moderation/flag", nil)
-		rec := httptest.NewRecorder()
-		srv.handleModerationFlag(rec, req)
-		if rec.Code != http.StatusMethodNotAllowed {
-			t.Fatalf("expected 405, got %d", rec.Code)
-		}
-	})
-
 	t.Run("ignored when moderation disabled", func(t *testing.T) {
 		srv.controller.SetSettings(monitor.Settings{ModerationEnabled: false})
-		body := map[string]string{"comment": "outra msg", "category": "SPAM"}
-		data, _ := json.Marshal(body)
-		req := httptest.NewRequest(http.MethodPost, "/api/moderation/flag", bytes.NewReader(data))
-		rec := httptest.NewRecorder()
-		srv.handleModerationFlag(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 no-op, got %d", rec.Code)
+		srv.controller.ReportExternalFlag(monitor.EventData{
+			"comment":  "outra msg",
+			"uniqueId": "user2",
+			"category": "SPAM",
+		})
+		logs, err := db.GetRecentModerations(10)
+		if err != nil || len(logs) != 1 {
+			t.Fatalf("expected flag ignored, got %d logs err=%v", len(logs), err)
 		}
 	})
 }

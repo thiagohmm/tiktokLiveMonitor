@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -18,7 +17,6 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/thiagohmm/tiktok-live-monitor/internal/config"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
@@ -77,16 +75,9 @@ func (s *HTTPServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 
 // Config holds server configuration.
 type Config struct {
-	Host       string
-	Port       int
-	ModelsDir  string
-	BinDir     string
-	WebDir     string
-	AgentProxy http.Handler
-	// AgentBaseURL is the base URL of the Python agent HTTP API, used by the
-	// transient compatibility layer that forwards /api/ask-ai, /api/probe-llm
-	// and /api/feedback to the agent (docs/plano-unificacao-ia.md, fase 2).
-	AgentBaseURL string
+	Host   string
+	Port   int
+	WebDir string
 }
 
 // New creates a new HTTP server (View).
@@ -127,11 +118,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/connect", s.handleConnect)
 	mux.HandleFunc("/api/disconnect", s.handleDisconnect)
 	mux.HandleFunc("/api/clear-history", s.handleClearHistory)
-	mux.HandleFunc("/api/feedback", s.handleFeedback)
-	mux.HandleFunc("/api/moderation/flag", s.handleModerationFlag)
 	mux.HandleFunc("/api/readiness", s.handleReadiness)
-	mux.HandleFunc("/api/probe-llm", s.handleProbeLLM)
-	mux.HandleFunc("/api/ask-ai", s.handleAskAI)
 	mux.HandleFunc("/api/gifts", s.handleGifts)
 	mux.HandleFunc("/api/available-gifts", s.handleAvailableGifts)
 	mux.HandleFunc("/api/target-gift-history", s.handleTargetGiftHistory)
@@ -146,11 +133,6 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/admin/lives", s.handleAdminLives)
 	mux.HandleFunc("/api/admin/lives/delete", s.handleAdminLivesDelete)
 
-	// Agent proxy: forward /agent/* to the Python agent HTTP API.
-	if s.cfg.AgentProxy != nil {
-		mux.Handle("/agent/", s.cfg.AgentProxy)
-	}
-
 	// Root page: render index.html with a cache-busting build version so the
 	// browser always re-fetches renderer.js after a rebuild. Every other path
 	// is delegated to the static file server.
@@ -160,11 +142,6 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/vendor/chart.js", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, filepath.Join(s.webDir, "vendor", "chart.umd.js"))
 	})
-
-	// Initialize config.
-	if err := config.InitConfig(s.webDir); err != nil {
-		log.Printf("[View] Warn: config init: %v", err)
-	}
 
 	// Setup monitor event handler via controller.
 	s.controller.GetMonitor().OnEvent(func(eventType string, data monitor.EventData) {
@@ -249,9 +226,8 @@ func (s *HTTPServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 	// Send initial state.
 	state := s.controller.GetState()
 	initial := map[string]interface{}{
-		"connected":    state.Connected,
-		"username":     state.Username,
-		"aiConfigured": true,
+		"connected": state.Connected,
+		"username":  state.Username,
 	}
 	s.writeSSE(w, "server-state", initial)
 	flusher.Flush()
@@ -378,110 +354,6 @@ func (s *HTTPServer) handleClearHistory(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, map[string]interface{}{"success": true, "deleted": deleted})
-}
-
-func (s *HTTPServer) handleFeedback(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	// Compat layer (fase 2): forward to the Python agent, which now owns
-	// feedback.db. The agent updates its own allowlist and vector index.
-	status, body, err := s.forwardToAgent(r, "/feedback")
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "agent unavailable")
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	w.Write(body)
-}
-
-// handleModerationFlag ingests a moderation flag reported by the Python agent
-// and surfaces it through the existing flagged-message pipeline. Plumbing only.
-func (s *HTTPServer) handleModerationFlag(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	var body struct {
-		Comment  string `json:"comment"`
-		UniqueID string `json:"uniqueId"`
-		Nickname string `json:"nickname"`
-		Category string `json:"category"`
-		Reason   string `json:"reason"`
-		Source   string `json:"source"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
-		return
-	}
-	if body.Comment == "" || body.Category == "" {
-		writeError(w, http.StatusBadRequest, "comment and category are required")
-		return
-	}
-	s.controller.ReportExternalFlag(monitor.EventData{
-		"comment":   body.Comment,
-		"uniqueId":  body.UniqueID,
-		"nickname":  body.Nickname,
-		"category":  body.Category,
-		"reason":    body.Reason,
-		"source":    body.Source,
-		"timestamp": time.Now().Format(time.RFC3339),
-	})
-	writeJSON(w, map[string]bool{"success": true})
-}
-
-func (s *HTTPServer) handleProbeLLM(w http.ResponseWriter, r *http.Request) {
-	status, body, err := s.forwardToAgent(r, "/probe-llm")
-	if err != nil {
-		// Fallback determinístico: sem agente, IA inativa.
-		writeJSON(w, map[string]interface{}{"llmActive": false})
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	w.Write(body)
-}
-
-func (s *HTTPServer) handleAskAI(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	status, body, err := s.forwardToAgent(r, "/ask-ai")
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "agent unavailable")
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	w.Write(body)
-}
-
-// forwardToAgent relays the request to the Python agent HTTP API, preserving
-// method and body. Returns the response status and raw body.
-func (s *HTTPServer) forwardToAgent(r *http.Request, path string) (int, []byte, error) {
-	if s.cfg.AgentBaseURL == "" {
-		return 0, nil, fmt.Errorf("agent base URL not configured")
-	}
-	target := strings.TrimRight(s.cfg.AgentBaseURL, "/") + path
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, target, r.Body)
-	if err != nil {
-		return 0, nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, nil, err
-	}
-	return resp.StatusCode, body, nil
 }
 
 func (s *HTTPServer) handleReadiness(w http.ResponseWriter, r *http.Request) {
@@ -691,7 +563,7 @@ func (s *HTTPServer) handleAdminLivesDelete(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, map[string]interface{}{"deleted": deleted})
 }
 
-// handleReport generates an AI-assisted post-live report.
+// handleReport generates a deterministic post-live report.
 func (s *HTTPServer) handleReport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")

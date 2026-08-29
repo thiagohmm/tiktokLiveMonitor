@@ -1,14 +1,15 @@
-# Docker Compose dedicado para Raspberry Pi (arm64).
+# Docker Compose dedicado para Raspberry Pi (arm64) — versão lite, sem IA.
 #
 # Uso direto na Pi (recomendado — build nativo, mais rápido que cross-build via QEMU):
-#   docker compose -f docker-compose.raspberry.yml up -d
+#   docker compose -f docker-compose.raspberry.yml up -d --build
 #
 # Em outro host (ex.: Mac/servidor) gerando a imagem para transferir à Pi:
 #   docker compose -f docker-compose.raspberry.yml build
 #   docker save tiktok-live-monitor | ssh pi 'docker load'
 #   (na Pi) docker compose -f docker-compose.raspberry.yml up -d
 #
-# Ajustes finos via .env: LLAMA_SHM_SIZE (256mb p/ Pi 1GB/2GB), SKIP_TESTS.
+# Sem llama-server/GGUF e sem agente Python: nada de porta 8080, shm_size ou
+# download de modelos. O primeiro boot é só a compilação Go+CGO do SQLite.
 
 services:
   tiktok-live-monitor:
@@ -21,19 +22,12 @@ services:
     platform: linux/arm64
     ports:
       - "${PORT:-3001}:3001"
-      - "${LLAMA_PORT:-8080}:8080"
     environment:
       HOST: "0.0.0.0"
       PORT: "3001"
-      LLAMA_SERVER_BIND: "0.0.0.0"
-      # 1 = memória mapeada do modelo (necessário na Pi 4 p/ modelos grandes)
-      LLAMA_USE_MMAP: "1"
-    # Pi 4 1GB/2GB: 256mb | Pi 4 4GB/8GB: 512mb (padrão)
-    shm_size: "${LLAMA_SHM_SIZE:-512mb}"
     volumes:
-      - llm-models:/app/models
-      - llm-bin:/app/bin
-      - feedback-data:/app
+      # Persiste o feedback.db (SQLite do app) entre restarts.
+      - monitor-data:/app
       # Bind mount (lê) após o volume /app para que atualizações de web/ no
       # repo sejam servidas direto após restart do container, sem ficarem
       # presas na cópia do volume.
@@ -43,12 +37,8 @@ services:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3001/api/state || exit 1"]
       interval: 30s
       timeout: 10s
-      # No primeiro boot o container baixa o GGUF e o binário llama-server
-      # (arm64 na Pi). Em conexões lentas isso pode levar 10+ minutos.
-      start_period: 600s
+      start_period: 60s
       retries: 5
 
 volumes:
-  llm-models:
-  llm-bin:
-  feedback-data:
+  monitor-data:
