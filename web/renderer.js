@@ -931,8 +931,14 @@ function createModalList(items, renderItem) {
 
 function renderUserLine(row, nickname, uniqueId, isFollower) {
     const strong = document.createElement('strong');
+    strong.className = 'user-name';
     const userText = nickname || uniqueId || 'Nao identificado';
     strong.textContent = uniqueId ? `${userText} (@${uniqueId})` : userText;
+    if (uniqueId) {
+        strong.classList.add('user-link');
+        strong.title = 'Ver perfil';
+        strong.addEventListener('click', () => openProfile(uniqueId));
+    }
     row.appendChild(strong);
 
     const badge = createFollowerBadge(isFollower);
@@ -1267,9 +1273,14 @@ function renderProfile(profile) {
     const stats = document.createElement('div');
     stats.className = 'report-summary';
     stats.style.marginBottom = '16px';
+    const giftValue = profile.totalGiftUnits != null
+        ? profile.totalGiftUnits
+        : (profile.totalGifts != null ? profile.totalGifts : 0);
     const statItems = [
         { value: profile.totalMessages != null ? profile.totalMessages : 0, label: 'Mensagens' },
-        { value: profile.totalGifts != null ? profile.totalGifts : 0, label: 'Presentes' },
+        { value: giftValue, label: 'Presentes' },
+        { value: profile.totalLikes != null ? profile.totalLikes : 0, label: 'Curtidas' },
+        { value: profile.totalShares != null ? profile.totalShares : 0, label: 'Compartilhamentos' },
         { value: (profile.lastLives || []).length, label: 'Vidas participadas' }
     ];
     statItems.forEach(stat => {
@@ -1322,16 +1333,16 @@ function renderProfile(profile) {
         });
     }
 
-    // Mensagens recentes
+    // Últimas 10 mensagens
     const messages = profile.messages || [];
     if (messages.length) {
         const h3 = document.createElement('h4');
-        h3.textContent = 'Mensagens recentes (' + messages.length + ')';
+        h3.textContent = 'Últimas ' + Math.min(10, messages.length) + ' mensagens';
         h3.style.margin = '12px 0 6px';
         h3.style.fontSize = '0.9em';
         h3.style.color = 'var(--text-muted)';
         profileModalBody.appendChild(h3);
-        messages.slice(0, 20).forEach(msg => {
+        messages.slice(0, 10).forEach(msg => {
             const row = document.createElement('div');
             row.className = 'suggestion-card';
             row.style.borderLeftColor = 'var(--cyan)';

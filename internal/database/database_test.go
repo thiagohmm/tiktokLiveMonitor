@@ -1161,3 +1161,182 @@ func TestGetGiftUnits(t *testing.T) {
 		t.Fatalf("expected 0/0 for Rocket, got %d / %d", units, count)
 	}
 }
+
+func seedMessagesAt(t *testing.T, db *DB, liveName, uid, user string, from time.Time, n int) []int64 {
+	t.Helper()
+	ids := make([]int64, 0, n)
+	for i := 0; i < n; i++ {
+		res, err := db.conn.Exec(
+			"INSERT INTO user_messages (live_name, uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?, ?)",
+			liveName, uid, user, fmt.Sprintf("msg %d", i), from.Add(time.Duration(i)*time.Minute),
+		)
+		if err != nil {
+			t.Fatalf("seed message %d: %v", i, err)
+		}
+		id, _ := res.LastInsertId()
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func TestGetUserMessagesRecent(t *testing.T) {
+	db := openTestDB(t)
+
+	base := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
+	ids := seedMessagesAt(t, db, "live1", "user1", "User One", base, 12)
+
+	// limit 10: newest first.
+	msgs, err := db.GetUserMessagesRecent("user1", 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 10 {
+		t.Fatalf("expected 10 messages, got %d", len(msgs))
+	}
+	wantFirst := ids[11] // most recent
+	if msgs[0].ID != wantFirst {
+		t.Fatalf("expected newest message first (id %d), got %d", wantFirst, msgs[0].ID)
+	}
+	wantLast := ids[2] // 12 - 10
+	if msgs[9].ID != wantLast {
+		t.Fatalf("expected oldest of the window last (id %d), got %d", wantLast, msgs[9].ID)
+	}
+
+	// limit larger than available returns everything.
+	msgs, err = db.GetUserMessagesRecent("user1", 100)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 12 {
+		t.Fatalf("expected 12 messages, got %d", len(msgs))
+	}
+
+	// limit <= 0 returns everything.
+	msgs, err = db.GetUserMessagesRecent("user1", 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 12 {
+		t.Fatalf("expected 12 messages with limit 0, got %d", len(msgs))
+	}
+
+	// Case-insensitive lookup.
+	msgs, err = db.GetUserMessagesRecent("USER1", 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 10 {
+		t.Fatalf("expected 10 messages (case-insensitive), got %d", len(msgs))
+	}
+
+	// Empty uniqueId returns an error.
+	if _, err := db.GetUserMessagesRecent("  ", 10); err == nil {
+		t.Fatal("expected error for empty uniqueId")
+	}
+}
+
+func TestGetUserShareCount(t *testing.T) {
+	db := openTestDB(t)
+
+	for i := 0; i < 3; i++ {
+		if err := db.AddShare("live1", "user1", "User One"); err != nil {
+			t.Fatalf("add share %d: %v", i, err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if err := db.AddShare("live1", "USER1", "User One"); err != nil {
+			t.Fatalf("add share (uppercase) %d: %v", i, err)
+		}
+	}
+	if err := db.AddShare("live1", "user2", "User Two"); err != nil {
+		t.Fatalf("add share user2: %v", err)
+	}
+
+	count, err := db.GetUserShareCount("user1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 5 {
+		t.Fatalf("expected 5 shares, got %d", count)
+	}
+
+	count, err = db.GetUserShareCount("USER1")
+	if err != nil {
+		t.Fatalf("unexpected error (case-insensitive): %v", err)
+	}
+	if count != 5 {
+		t.Fatalf("expected 5 shares (case-insensitive), got %d", count)
+	}
+
+	count, err = db.GetUserShareCount("user2")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 share, got %d", count)
+	}
+
+	count, err = db.GetUserShareCount("nobody")
+	if err != nil {
+		t.Fatalf("unexpected error for unknown user: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 shares for unknown user, got %d", count)
+	}
+
+	if _, err := db.GetUserShareCount(""); err == nil {
+		t.Fatal("expected error for empty uniqueId")
+	}
+}
+
+func TestGetUserLikeTotal(t *testing.T) {
+	db := openTestDB(t)
+
+	if err := db.AddLike("live1", "user1", "User One", 3); err != nil {
+		t.Fatalf("add like: %v", err)
+	}
+	if err := db.AddLike("live2", "USER1", "User One", 5); err != nil {
+		t.Fatalf("add like (uppercase): %v", err)
+	}
+	if err := db.AddLike("live1", "user2", "User Two", 7); err != nil {
+		t.Fatalf("add like user2: %v", err)
+	}
+
+	total, err := db.GetUserLikeTotal("user1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if total != 8 {
+		t.Fatalf("expected 8 likes, got %d", total)
+	}
+
+	// Case-insensitive lookup.
+	total, err = db.GetUserLikeTotal("USER1")
+	if err != nil {
+		t.Fatalf("unexpected error (case-insensitive): %v", err)
+	}
+	if total != 8 {
+		t.Fatalf("expected 8 likes (case-insensitive), got %d", total)
+	}
+
+	total, err = db.GetUserLikeTotal("user2")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if total != 7 {
+		t.Fatalf("expected 7 likes, got %d", total)
+	}
+
+	// Unknown user sums to zero without error.
+	total, err = db.GetUserLikeTotal("nobody")
+	if err != nil {
+		t.Fatalf("unexpected error for unknown user: %v", err)
+	}
+	if total != 0 {
+		t.Fatalf("expected 0 likes for unknown user, got %d", total)
+	}
+
+	if _, err := db.GetUserLikeTotal(""); err == nil {
+		t.Fatal("expected error for empty uniqueId")
+	}
+}
