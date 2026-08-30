@@ -49,11 +49,11 @@ RUN mkdir -p data \
     && npm ci --omit=dev
 
 ENV HOST=0.0.0.0
-ENV PORT=3000
+ENV PORT=3001
 
-EXPOSE 3000
+EXPOSE 3001
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=5 \
-    CMD curl -sf "http://127.0.0.1:${PORT:-3000}/api/state" || exit 1
+    CMD curl -sf "http://127.0.0.1:${PORT:-3001}/api/readiness" || exit 1
 
 ENTRYPOINT ["/app/tiktok-live-monitor"]

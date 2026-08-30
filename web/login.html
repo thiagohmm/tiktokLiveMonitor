@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Entrar — Monitor de Live TikTok</title>
+    <style>
+        :root {
+            --bg: #0b0d12;
+            --card: rgba(24, 28, 38, 0.82);
+            --border: rgba(255, 255, 255, 0.08);
+            --pink: #fe2c55;
+            --pink-soft: #ff5a7e;
+            --cyan: #25f4ee;
+            --text: #f2f3f5;
+            --text-muted: #9aa0aa;
+            --radius: 16px;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+            font-family: 'Inter', system-ui, sans-serif;
+            color: var(--text);
+            background:
+                radial-gradient(900px 500px at 85% -10%, color-mix(in srgb, var(--cyan) 10%, transparent), transparent 60%),
+                radial-gradient(800px 400px at -10% 10%, color-mix(in srgb, var(--pink) 14%, transparent), transparent 55%),
+                var(--bg);
+        }
+        .card {
+            width: min(420px, 100%);
+            padding: 28px;
+            border-radius: var(--radius);
+            background: var(--card);
+            border: 1px solid var(--border);
+            box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+        }
+        h1 {
+            margin: 0 0 8px;
+            font-size: 1.4rem;
+        }
+        p {
+            margin: 0 0 20px;
+            color: var(--text-muted);
+            line-height: 1.5;
+        }
+        label {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+        input {
+            width: 100%;
+            margin-bottom: 14px;
+            padding: 12px 14px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text);
+        }
+        input:focus {
+            outline: none;
+            border-color: var(--cyan);
+            box-shadow: 0 0 0 3px color-mix(in srgb, var(--cyan) 18%, transparent);
+        }
+        input:disabled {
+            opacity: 0.6;
+        }
+        button {
+            width: 100%;
+            padding: 12px 16px;
+            border: 0;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: 700;
+            color: white;
+            background: linear-gradient(135deg, var(--pink), var(--pink-soft));
+        }
+        button:disabled {
+            opacity: 0.6;
+            cursor: wait;
+        }
+        .error {
+            display: none;
+            margin-bottom: 14px;
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: rgba(220, 38, 38, 0.15);
+            color: #fecaca;
+            font-size: 0.9rem;
+        }
+        .error.visible { display: block; }
+        .attempts {
+            margin: -6px 0 14px;
+            font-size: 0.82rem;
+            color: var(--text-muted);
+        }
+        .attempts.hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Monitor de Live TikTok</h1>
+        <p>Entre com o e-mail e a senha fornecidos pelo administrador.</p>
+        <div id="loginError" class="error"></div>
+        <div id="attemptsInfo" class="attempts hidden"></div>
+        <form id="loginForm">
+            <label for="email">E-mail</label>
+            <input id="email" name="email" type="email" autocomplete="username" required>
+            <label for="password">Senha</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required>
+            <button id="loginBtn" type="submit">Entrar</button>
+        </form>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/auth.js"></script>
+    <script>
+        const form = document.getElementById('loginForm');
+        const errorBox = document.getElementById('loginError');
+        const attemptsInfo = document.getElementById('attemptsInfo');
+        const loginBtn = document.getElementById('loginBtn');
+        const emailInput = document.getElementById('email');
+        const passwordInput = document.getElementById('password');
+
+        let lockoutTimer = null;
+
+        function showError(message) {
+            errorBox.textContent = message;
+            errorBox.classList.add('visible');
+        }
+
+        function hideError() {
+            errorBox.classList.remove('visible');
+        }
+
+        function showAttempts(message) {
+            attemptsInfo.textContent = message;
+            attemptsInfo.classList.remove('hidden');
+        }
+
+        function hideAttempts() {
+            attemptsInfo.classList.add('hidden');
+        }
+
+        function setFormLocked(locked) {
+            loginBtn.disabled = locked;
+            passwordInput.disabled = locked;
+        }
+
+        function clearLockoutTimer() {
+            if (lockoutTimer) {
+                clearInterval(lockoutTimer);
+                lockoutTimer = null;
+            }
+        }
+
+        function startLockoutCountdown(seconds) {
+            clearLockoutTimer();
+            let remaining = Math.max(1, Number(seconds) || 0);
+            setFormLocked(true);
+
+            function tick() {
+                const mins = Math.floor(remaining / 60);
+                const secs = remaining % 60;
+                const clock = mins > 0
+                    ? mins + ' min ' + String(secs).padStart(2, '0') + ' s'
+                    : secs + ' s';
+                showError('Muitas tentativas incorretas. Tente novamente em ' + clock + '.');
+                if (remaining <= 0) {
+                    clearLockoutTimer();
+                    hideError();
+                    setFormLocked(false);
+                    refreshLockoutStatus();
+                    return;
+                }
+                remaining -= 1;
+            }
+
+            tick();
+            lockoutTimer = setInterval(tick, 1000);
+        }
+
+        async function refreshLockoutStatus() {
+            const email = emailInput.value.trim();
+            if (!email) {
+                hideAttempts();
+                return;
+            }
+            const status = await window.TLMAuth.getLoginStatus(email);
+            if (!status) return;
+
+            if (status.locked) {
+                startLockoutCountdown(status.retryAfterSec);
+                hideAttempts();
+                return;
+            }
+
+            clearLockoutTimer();
+            setFormLocked(false);
+            if (typeof status.remainingAttempts === 'number' && status.remainingAttempts < status.maxAttempts) {
+                showAttempts('Tentativas restantes: ' + status.remainingAttempts + ' de ' + status.maxAttempts);
+            } else {
+                hideAttempts();
+            }
+        }
+
+        (async function init() {
+            await window.TLMAuth.loadAuthConfig();
+            const response = await fetch('/api/auth/config');
+            const config = await response.json();
+            if (!config.enabled) {
+                window.location.href = '/';
+            }
+        })();
+
+        emailInput.addEventListener('blur', refreshLockoutStatus);
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            hideError();
+            loginBtn.disabled = true;
+            try {
+                await window.TLMAuth.signIn(emailInput.value, passwordInput.value);
+                window.location.href = '/';
+            } catch (error) {
+                if (error.locked && error.retryAfterSec) {
+                    startLockoutCountdown(error.retryAfterSec);
+                } else {
+                    showError(error.message || 'Não foi possível entrar.');
+                    if (typeof error.remainingAttempts === 'number') {
+                        showAttempts('Tentativas restantes: ' + error.remainingAttempts);
+                    }
+                    await refreshLockoutStatus();
+                }
+            } finally {
+                if (!lockoutTimer) {
+                    loginBtn.disabled = false;
+                }
+            }
+        });
+    </script>
+</body>
+</html>

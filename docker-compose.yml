@@ -1,31 +1,48 @@
-# Uso padrão (servidores/PCs — build nativo na arquitetura da máquina).
-# Versão lite, sem IA: sem llama-server/GGUF e sem agente Python.
-# Para Raspberry Pi, use o compose dedicado:
+# Uso rápido:
+#   cp .env.example .env    # edite as chaves Supabase (ou AUTH_ENABLED=0)
+#   ./docker-test.sh        # sobe, testa healthcheck e abre no navegador
+#
+# Manual:
+#   docker compose up --build -d
+#   docker compose logs -f
+#
+# Raspberry Pi:
 #   docker compose -f docker-compose.raspberry.yml up -d
 
 services:
   tiktok-live-monitor:
     build:
       context: .
-      # SKIP_TESTS=1 pula a etapa de `go test` no build (configure no .env).
       args:
-        SKIP_TESTS: ${SKIP_TESTS:-}
+        SKIP_TESTS: ${SKIP_TESTS:-1}
+    env_file:
+      - path: .env
+        required: false
     ports:
       - "${PORT:-3001}:3001"
     environment:
       HOST: "0.0.0.0"
       PORT: "3001"
       DB_DIR: "/data"
+      AUTH_ENABLED: ${AUTH_ENABLED:-1}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-}
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      DATABASE_URL: ${DATABASE_URL:-}
+      AUTH_MAX_LOGIN_ATTEMPTS: ${AUTH_MAX_LOGIN_ATTEMPTS:-5}
+      AUTH_LOCKOUT_MINUTES: ${AUTH_LOCKOUT_MINUTES:-15}
+      AUTH_THEME_PINK: ${AUTH_THEME_PINK:-#fe2c55}
+      AUTH_THEME_CYAN: ${AUTH_THEME_CYAN:-#25f4ee}
+      AUTH_THEME_BG: ${AUTH_THEME_BG:-#0b0d12}
     volumes:
-      # Persiste apenas o feedback.db (SQLite do app) entre restarts; o
-      # restante de /app vem sempre da imagem.
       - monitor-data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3001/api/state || exit 1"]
-      interval: 30s
-      timeout: 10s
-      start_period: 60s
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3001/api/readiness || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 45s
       retries: 5
 
 volumes:

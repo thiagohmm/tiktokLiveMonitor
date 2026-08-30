@@ -16,10 +16,11 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// DB wraps the SQLite connection with thread-safe access and implements model.Repository.
+// DB wraps the database connection with thread-safe access and implements model.Repository.
 type DB struct {
-	conn *sql.DB
-	mu   sync.Mutex
+	conn   *sql.DB
+	mu     sync.Mutex
+	driver driverKind
 }
 
 // Open creates or opens the SQLite database at the given directory.
@@ -35,7 +36,7 @@ func Open(dir string) (*DB, error) {
 
 	conn.SetMaxOpenConns(1) // SQLite serializes writes
 
-	db := &DB{conn: conn}
+	db := &DB{conn: conn, driver: driverSQLite}
 	if err := db.migrate(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
@@ -147,7 +148,7 @@ func (db *DB) migrate() error {
 	}
 
 	for _, s := range stmts {
-		if _, err := db.conn.Exec(s); err != nil {
+		if _, err := db.exec(s); err != nil {
 			return fmt.Errorf("exec migration: %w", err)
 		}
 	}
@@ -165,7 +166,7 @@ func (db *DB) migrate() error {
 
 // ensureColumn adds a column to a table if it does not already exist.
 func (db *DB) ensureColumn(table, column, decl string) error {
-	rows, err := db.conn.Query("PRAGMA table_info(" + table + ")")
+	rows, err := db.query("PRAGMA table_info(" + table + ")")
 	if err != nil {
 		return fmt.Errorf("inspect table %s: %w", table, err)
 	}
@@ -191,7 +192,7 @@ func (db *DB) ensureColumn(table, column, decl string) error {
 		return err
 	}
 
-	if _, err := db.conn.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + decl); err != nil {
+	if _, err := db.exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + decl); err != nil {
 		return fmt.Errorf("add column %s.%s: %w", table, column, err)
 	}
 	return nil
@@ -208,7 +209,7 @@ func (db *DB) GetFalsePositiveComments(limit int) ([]string, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	rows, err := db.conn.Query(
+	rows, err := db.query(
 		"SELECT DISTINCT comment FROM false_positives WHERE expected = 'NAO' ORDER BY timestamp DESC LIMIT ?",
 		limit,
 	)
@@ -242,7 +243,7 @@ func (db *DB) LogAnomaly(liveName, comment string, isAnomaly bool, category, uni
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	_, err := db.conn.Exec(
+	_, err := db.exec(
 		`INSERT INTO anomaly_logs (live_name, day, uniqueId, comment, is_anomaly, category)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		liveName, day, uniqueID, comment, anomalyInt, category,
@@ -261,7 +262,7 @@ func (db *DB) GetRecentModerations(limit int) ([]model.AnomalyLog, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	rows, err := db.conn.Query(
+	rows, err := db.query(
 		`SELECT id, live_name, day, timestamp, uniqueId, comment, is_anomaly, category
 		 FROM anomaly_logs ORDER BY timestamp DESC LIMIT ?`,
 		limit,
@@ -295,7 +296,7 @@ func (db *DB) GetAnomalyLogsByLiveName(liveName string) ([]model.AnomalyLog, err
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	rows, err := db.conn.Query(
+	rows, err := db.query(
 		"SELECT id, live_name, day, timestamp, uniqueId, comment, is_anomaly, category FROM anomaly_logs WHERE live_name = ?",
 		liveName,
 	)
@@ -330,7 +331,7 @@ func (db *DB) GetAnomalyLogsByUser(uniqueID string, limit int) ([]model.AnomalyL
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	rows, err := db.conn.Query(
+	rows, err := db.query(
 		`SELECT id, live_name, day, timestamp, uniqueId, comment, is_anomaly, category
 		 FROM anomaly_logs
 		 WHERE LOWER(uniqueId) = LOWER(?) AND is_anomaly = 1
@@ -361,7 +362,7 @@ func (db *DB) ClearHistory() (int64, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	result, err := db.conn.Exec("DELETE FROM anomaly_logs")
+	result, err := db.exec("DELETE FROM anomaly_logs")
 	if err != nil {
 		return 0, fmt.Errorf("clear history: %w", err)
 	}
@@ -376,7 +377,7 @@ func (db *DB) DeleteModeration(id int64) (int64, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	result, err := db.conn.Exec("DELETE FROM anomaly_logs WHERE id = ?", id)
+	result, err := db.exec("DELETE FROM anomaly_logs WHERE id = ?", id)
 	if err != nil {
 		return 0, fmt.Errorf("delete moderation: %w", err)
 	}
@@ -388,7 +389,7 @@ func (db *DB) CleanupOldAnomalies() (int64, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	result, err := db.conn.Exec("DELETE FROM anomaly_logs WHERE day < date('now')")
+	result, err := db.exec("DELETE FROM anomaly_logs WHERE day < date('now')")
 	if err != nil {
 		return 0, fmt.Errorf("cleanup anomalies: %w", err)
 	}
@@ -413,7 +414,7 @@ func (db *DB) AddUserMessageDedup(liveName, uniqueID, username, message string) 
 
 	// Check if message already exists for this user.
 	var count int
-	err := db.conn.QueryRow(
+	err := db.queryRow(
 		"SELECT COUNT(*) FROM user_messages WHERE LOWER(uniqueId) = ? AND LOWER(message) = ?",
 		uniqueID, message,
 	).Scan(&count)
@@ -422,7 +423,7 @@ func (db *DB) AddUserMessageDedup(liveName, uniqueID, username, message string) 
 	}
 
 	// Insert new message.
-	_, err = db.conn.Exec(
+	_, err = db.exec(
 		"INSERT INTO user_messages (live_name, uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?, ?)",
 		liveName, uniqueID, username, message, time.Now(),
 	)
@@ -431,7 +432,7 @@ func (db *DB) AddUserMessageDedup(liveName, uniqueID, username, message string) 
 	}
 
 	// Keep only the 10 most recent unique messages per user.
-	_, err = db.conn.Exec(`
+	_, err = db.exec(`
 		DELETE FROM user_messages WHERE id NOT IN (
 			SELECT id FROM user_messages WHERE LOWER(uniqueId) = ?
 			ORDER BY timestamp DESC LIMIT 10
@@ -522,7 +523,7 @@ func (db *DB) GetUserMessages(uniqueID string) ([]model.UserMessage, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	rows, err := db.conn.Query(
+	rows, err := db.query(
 		"SELECT id, live_name, uniqueId, username, message, timestamp FROM user_messages WHERE LOWER(uniqueId) = ? ORDER BY timestamp DESC",
 		uniqueID,
 	)
@@ -547,7 +548,7 @@ func (db *DB) GetAllUserMessages() (map[string][]model.UserMessage, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	rows, err := db.conn.Query(
+	rows, err := db.query(
 		"SELECT id, live_name, uniqueId, username, message, timestamp FROM user_messages ORDER BY uniqueId, timestamp DESC",
 	)
 	if err != nil {
@@ -573,14 +574,14 @@ func (db *DB) AddGift(liveName, uniqueID, nickname, giftName string, repeatCount
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	result, err := db.conn.Exec(
+	result, err := db.insertID(
 		"INSERT INTO gifts (live_name, uniqueId, nickname, gift_name, repeat_count, gift_type) VALUES (?, ?, ?, ?, ?, ?)",
 		liveName, uniqueID, nickname, giftName, repeatCount, giftType,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert gift: %w", err)
 	}
-	return result.LastInsertId()
+	return result, nil
 }
 
 // AddShare stores a share of the live made by a participant.
@@ -588,7 +589,7 @@ func (db *DB) AddShare(liveName, uniqueID, nickname string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	if _, err := db.conn.Exec(
+	if _, err := db.exec(
 		"INSERT INTO shares (live_name, uniqueId, nickname) VALUES (?, ?, ?)",
 		liveName, uniqueID, nickname,
 	); err != nil {
@@ -608,7 +609,7 @@ func (db *DB) AddLike(liveName, uniqueID, nickname string, likeCount int) error 
 		likeCount = 1
 	}
 
-	if _, err := db.conn.Exec(
+	if _, err := db.exec(
 		"INSERT INTO likes (live_name, uniqueId, nickname, like_count) VALUES (?, ?, ?, ?)",
 		liveName, uniqueID, nickname, likeCount,
 	); err != nil {
@@ -627,13 +628,7 @@ func (db *DB) UpsertRoomLikeTotal(liveName string, total int64) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	if _, err := db.conn.Exec(
-		`INSERT INTO room_like_totals (live_name, total, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
-		 ON CONFLICT(live_name) DO UPDATE SET
-			total = MAX(total, excluded.total),
-			updated_at = CURRENT_TIMESTAMP`,
-		liveName, total,
-	); err != nil {
+	if err := db.upsertRoomLikeTotal(liveName, total); err != nil {
 		return fmt.Errorf("upsert room like total: %w", err)
 	}
 	return nil
@@ -647,14 +642,14 @@ func (db *DB) LikeTotals(liveName string) (int64, int64, error) {
 	defer db.mu.Unlock()
 
 	var roomTotal int64
-	if err := db.conn.QueryRow(
+	if err := db.queryRow(
 		"SELECT COALESCE(MAX(total), 0) FROM room_like_totals WHERE live_name = ?", liveName,
 	).Scan(&roomTotal); err != nil {
 		return 0, 0, fmt.Errorf("query room like total: %w", err)
 	}
 
 	var delivered int64
-	if err := db.conn.QueryRow(
+	if err := db.queryRow(
 		"SELECT COALESCE(SUM(like_count), 0) FROM likes WHERE live_name = ?", liveName,
 	).Scan(&delivered); err != nil {
 		return 0, 0, fmt.Errorf("query delivered likes: %w", err)
@@ -670,7 +665,7 @@ func (db *DB) GetRecentGifts(liveName string, limit int) ([]model.Gift, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	rows, err := db.conn.Query(
+	rows, err := db.query(
 		"SELECT id, live_name, uniqueId, nickname, gift_name, repeat_count, gift_type, timestamp FROM gifts WHERE live_name = ? ORDER BY timestamp DESC LIMIT ?",
 		liveName, limit,
 	)
@@ -699,7 +694,7 @@ func (db *DB) GetGiftsByUser(uniqueID string) ([]model.Gift, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	rows, err := db.conn.Query(
+	rows, err := db.query(
 		"SELECT id, live_name, uniqueId, nickname, gift_name, repeat_count, gift_type, timestamp FROM gifts WHERE LOWER(uniqueId) = ? ORDER BY timestamp DESC",
 		uniqueID,
 	)
@@ -727,7 +722,7 @@ func (db *DB) GetGiftSummary() (map[string]map[string]int, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	rows, err := db.conn.Query(
+	rows, err := db.query(
 		"SELECT uniqueId, nickname, gift_name, SUM(repeat_count) as total FROM gifts GROUP BY uniqueId, nickname, gift_name ORDER BY total DESC",
 	)
 	if err != nil {
@@ -755,7 +750,7 @@ func (db *DB) ClearGifts() (int64, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	result, err := db.conn.Exec("DELETE FROM gifts")
+	result, err := db.exec("DELETE FROM gifts")
 	if err != nil {
 		return 0, fmt.Errorf("clear gifts: %w", err)
 	}
@@ -784,7 +779,7 @@ func (db *DB) GetGiftUnits(liveName string, giftNames ...string) (units, count i
 		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(args)-1), ",")
 		query += " AND gift_name IN (" + placeholders + ")"
 	}
-	if err := db.conn.QueryRow(query, args...).Scan(&units, &count); err != nil {
+	if err := db.queryRow(query, args...).Scan(&units, &count); err != nil {
 		return 0, 0, fmt.Errorf("query gift units: %w", err)
 	}
 	return units, count, nil
@@ -800,7 +795,7 @@ func (db *DB) GetTodayUserMessages(liveName string) ([]model.UserMessage, error)
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	rows, err := db.conn.Query(
+	rows, err := db.query(
 		`SELECT id, live_name, uniqueId, username, message, timestamp
 		 FROM user_messages
 		 WHERE live_name = ? AND date(timestamp) = date('now')
@@ -828,7 +823,7 @@ func (db *DB) GetTodayAnomalyLogs(liveName string) ([]model.AnomalyLog, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	rows, err := db.conn.Query(
+	rows, err := db.query(
 		`SELECT id, live_name, day, timestamp, uniqueId, comment, is_anomaly, category
 		 FROM anomaly_logs
 		 WHERE day = date('now') AND live_name = ?
@@ -863,7 +858,7 @@ func (db *DB) AddTargetGiftHistory(liveName, uniqueID, nickname, giftName string
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	result, err := db.conn.Exec(
+	id, err := db.insertID(
 		`INSERT INTO target_gift_history
 			(live_name, uniqueId, nickname, gift_name, received_at)
 		 VALUES (?, ?, ?, ?, ?)`,
@@ -872,7 +867,7 @@ func (db *DB) AddTargetGiftHistory(liveName, uniqueID, nickname, giftName string
 	if err != nil {
 		return 0, fmt.Errorf("insert target gift history: %w", err)
 	}
-	return result.LastInsertId()
+	return id, nil
 }
 
 // MarkTargetGiftAnswered sets answered_at/response_type for a pending history entry.
@@ -891,7 +886,7 @@ func (db *DB) MarkTargetGiftAnswered(id int64, responseType string, answeredAt t
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	_, err := db.conn.Exec(
+	_, err := db.exec(
 		`UPDATE target_gift_history
 		 SET answered_at = ?, response_type = ?
 		 WHERE id = ? AND answered_at IS NULL`,
@@ -916,7 +911,7 @@ func (db *DB) GetRecentTargetGiftHistory(liveName string, limit int) ([]model.Ta
 		err  error
 	)
 	if strings.TrimSpace(liveName) == "" {
-		rows, err = db.conn.Query(
+		rows, err = db.query(
 			`SELECT id, live_name, uniqueId, nickname, gift_name, received_at, answered_at, response_type
 			 FROM target_gift_history
 			 ORDER BY received_at DESC
@@ -924,7 +919,7 @@ func (db *DB) GetRecentTargetGiftHistory(liveName string, limit int) ([]model.Ta
 			limit,
 		)
 	} else {
-		rows, err = db.conn.Query(
+		rows, err = db.query(
 			`SELECT id, live_name, uniqueId, nickname, gift_name, received_at, answered_at, response_type
 			 FROM target_gift_history
 			 WHERE live_name = ?
@@ -962,7 +957,7 @@ func (db *DB) GetPendingTargetGiftHistory(liveName string, limit int) ([]model.T
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	rows, err := db.conn.Query(
+	rows, err := db.query(
 		`SELECT id, live_name, uniqueId, nickname, gift_name, received_at, answered_at, response_type
 		 FROM target_gift_history
 		 WHERE live_name = ? AND answered_at IS NULL
@@ -1038,7 +1033,7 @@ func (db *DB) AddGiftGoal(g model.GiftGoal) (int64, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	result, err := db.conn.Exec(
+	id, err := db.insertID(
 		`INSERT INTO gift_goals (live_name, title, gift_name, target_units, status, milestones, created_at, completed_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		g.LiveName, g.Title, g.GiftName, g.TargetUnits, g.Status, string(milestonesJSON),
@@ -1047,7 +1042,7 @@ func (db *DB) AddGiftGoal(g model.GiftGoal) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("insert gift goal: %w", err)
 	}
-	return result.LastInsertId()
+	return id, nil
 }
 
 // GetGiftGoals returns all goals for a live, newest first.
@@ -1055,7 +1050,7 @@ func (db *DB) GetGiftGoals(liveName string) ([]model.GiftGoal, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	rows, err := db.conn.Query(
+	rows, err := db.query(
 		`SELECT id, live_name, title, gift_name, target_units, status, milestones, created_at, completed_at
 		 FROM gift_goals
 		 WHERE live_name = ?
@@ -1092,7 +1087,7 @@ func (db *DB) SaveGiftGoal(g model.GiftGoal) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	_, err = db.conn.Exec(
+	_, err = db.exec(
 		`UPDATE gift_goals
 		 SET title = ?, gift_name = ?, target_units = ?, status = ?, milestones = ?, completed_at = ?
 		 WHERE id = ?`,
@@ -1109,7 +1104,7 @@ func (db *DB) DeleteGiftGoals(liveName string) (int64, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	result, err := db.conn.Exec("DELETE FROM gift_goals WHERE live_name = ?", liveName)
+	result, err := db.exec("DELETE FROM gift_goals WHERE live_name = ?", liveName)
 	if err != nil {
 		return 0, fmt.Errorf("delete gift goals: %w", err)
 	}
@@ -1181,7 +1176,7 @@ func (db *DB) AddPinnedComment(liveName, uniqueID, nickname, comment, pinID stri
 
 	if pinID != "" {
 		var existing int64
-		err := db.conn.QueryRow(
+		err := db.queryRow(
 			`SELECT id FROM pinned_comments WHERE live_name = ? AND pin_id = ?`,
 			liveName, pinID,
 		).Scan(&existing)
@@ -1193,7 +1188,7 @@ func (db *DB) AddPinnedComment(liveName, uniqueID, nickname, comment, pinID stri
 		}
 	}
 
-	result, err := db.conn.Exec(
+	id, err := db.insertID(
 		`INSERT INTO pinned_comments
 			(live_name, uniqueId, nickname, comment, pin_id, is_follower, timestamp)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -1202,7 +1197,7 @@ func (db *DB) AddPinnedComment(liveName, uniqueID, nickname, comment, pinID stri
 	if err != nil {
 		return 0, fmt.Errorf("insert pinned comment: %w", err)
 	}
-	return result.LastInsertId()
+	return id, nil
 }
 
 func nullIfEmpty(s string) any {
@@ -1235,7 +1230,7 @@ func (db *DB) GetRecentPinnedComments(liveName string, limit int) ([]model.Pinne
 		err  error
 	)
 	if strings.TrimSpace(liveName) == "" {
-		rows, err = db.conn.Query(
+		rows, err = db.query(
 			`SELECT id, live_name, uniqueId, nickname, comment, pin_id, is_follower, timestamp
 			 FROM pinned_comments
 			 ORDER BY timestamp DESC
@@ -1243,7 +1238,7 @@ func (db *DB) GetRecentPinnedComments(liveName string, limit int) ([]model.Pinne
 			limit,
 		)
 	} else {
-		rows, err = db.conn.Query(
+		rows, err = db.query(
 			`SELECT id, live_name, uniqueId, nickname, comment, pin_id, is_follower, timestamp
 			 FROM pinned_comments
 			 WHERE live_name = ?
@@ -1305,7 +1300,7 @@ func parseSQLiteTime(s string) (time.Time, error) {
 
 func (db *DB) maxTimestamp(query string, args ...any) (time.Time, bool, error) {
 	var raw sql.NullString
-	err := db.conn.QueryRow(query, args...).Scan(&raw)
+	err := db.queryRow(query, args...).Scan(&raw)
 	if err != nil {
 		return time.Time{}, false, err
 	}
@@ -1392,7 +1387,7 @@ func (db *DB) DeleteSessionData(liveName string) error {
 func (db *DB) ExecSQL(query string, args ...any) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	_, err := db.conn.Exec(query, args...)
+	_, err := db.exec(query, args...)
 	return err
 }
 
@@ -1411,7 +1406,7 @@ func (db *DB) LiveFirstSeen(liveName string) (string, error) {
 		UNION ALL SELECT received_at FROM target_gift_history WHERE live_name = ?
 		UNION ALL SELECT timestamp FROM anomaly_logs WHERE live_name = ?
 	)`
-	err := db.conn.QueryRow(query, liveName, liveName, liveName, liveName).Scan(&ts)
+	err := db.queryRow(query, liveName, liveName, liveName, liveName).Scan(&ts)
 	if err != nil {
 		return "", fmt.Errorf("query live first seen: %w", err)
 	}
@@ -1454,7 +1449,7 @@ func (db *DB) ListLives(limit int) ([]model.Live, error) {
 		ORDER BY day DESC, started_at DESC
 		LIMIT ?`
 
-	rows, err := db.conn.Query(query, limit)
+	rows, err := db.query(query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query lives: %w", err)
 	}
@@ -1492,7 +1487,7 @@ func (db *DB) DeleteLive(liveName string) (int64, error) {
 	tables := []string{"user_messages", "gifts", "likes", "room_like_totals", "shares", "anomaly_logs", "pinned_comments", "target_gift_history", "gift_goals"}
 	total := int64(0)
 	for _, table := range tables {
-		res, err := db.conn.Exec(fmt.Sprintf("DELETE FROM %s WHERE live_name = ?", table), liveName)
+		res, err := db.exec(fmt.Sprintf("DELETE FROM %s WHERE live_name = ?", table), liveName)
 		if err != nil {
 			return total, fmt.Errorf("delete from %s: %w", table, err)
 		}
@@ -1522,7 +1517,7 @@ func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
 	stats := make(map[string]model.LiveStat)
 
 	// Messages (and questions, detected heuristically).
-	msgRows, err := db.conn.Query(`
+	msgRows, err := db.query(`
 		SELECT uniqueId, username, COUNT(*) AS n,
 			SUM(CASE WHEN instr(message, '?') > 0 OR lower(message) LIKE 'pq%'
 			  OR lower(message) LIKE 'por que%' OR lower(message) LIKE 'como%'
@@ -1562,7 +1557,7 @@ func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
 	msgRows.Close()
 
 	// Gifts.
-	giftRows, err := db.conn.Query(`
+	giftRows, err := db.query(`
 		SELECT uniqueId, nickname, COUNT(*) AS n, SUM(repeat_count) AS total,
 			MIN(timestamp) AS first, MAX(timestamp) AS last
 		FROM gifts WHERE live_name = ? GROUP BY uniqueId`, liveName)
@@ -1600,7 +1595,7 @@ func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
 	giftRows.Close()
 
 	// Shares.
-	shareRows, err := db.conn.Query(`
+	shareRows, err := db.query(`
 		SELECT uniqueId, nickname, COUNT(*) AS n,
 			MIN(timestamp) AS first, MAX(timestamp) AS last
 		FROM shares WHERE live_name = ? GROUP BY uniqueId`, liveName)
@@ -1637,7 +1632,7 @@ func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
 	shareRows.Close()
 
 	// Likes (hearts).
-	likeRows, err := db.conn.Query(`
+	likeRows, err := db.query(`
 		SELECT uniqueId, nickname, SUM(like_count) AS n,
 			MIN(timestamp) AS first, MAX(timestamp) AS last
 		FROM likes WHERE live_name = ? GROUP BY uniqueId`, liveName)
@@ -1695,7 +1690,7 @@ func (db *DB) RecentLivesForUser(uniqueID string, limit int) ([]model.UserLiveSu
 	out := make([]model.UserLiveSummary, 0)
 
 	// Group by live_name across messages, gifts and target gifts.
-	rows, err := db.conn.Query(`
+	rows, err := db.query(`
 		SELECT live_name,
 			SUM(CASE WHEN tbl='msg' THEN 1 ELSE 0 END) AS messages,
 			SUM(CASE WHEN tbl='gift' THEN 1 ELSE 0 END) AS gifts,
@@ -1748,7 +1743,7 @@ func (db *DB) TotalDistinctUsers() (int, error) {
 	defer db.mu.Unlock()
 
 	var count int
-	err := db.conn.QueryRow(
+	err := db.queryRow(
 		"SELECT COUNT(DISTINCT uniqueId) FROM user_messages",
 	).Scan(&count)
 	if err != nil {
@@ -1766,7 +1761,7 @@ func (db *DB) GetSetting(key string) (string, error) {
 	defer db.mu.Unlock()
 
 	var value string
-	err := db.conn.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value)
+	err := db.queryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value)
 	if err != nil {
 		if err != sql.ErrNoRows {
 			return "", nil
@@ -1781,7 +1776,7 @@ func (db *DB) SetSetting(key, value string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	_, err := db.conn.Exec(
+	_, err := db.exec(
 		"INSERT INTO settings (key, value) VALUES (?, ?) "+
 			"ON CONFLICT(key) DO UPDATE SET value = excluded.value",
 		key, value,
@@ -1813,7 +1808,7 @@ func (db *DB) GetUserMessagesRecent(uniqueID string, limit int) ([]model.UserMes
 		args = append(args, limit)
 	}
 
-	rows, err := db.conn.Query(query, args...)
+	rows, err := db.query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query recent user messages: %w", err)
 	}
@@ -1840,7 +1835,7 @@ func (db *DB) GetUserShareCount(uniqueID string) (int, error) {
 	defer db.mu.Unlock()
 
 	var count int
-	err := db.conn.QueryRow(
+	err := db.queryRow(
 		"SELECT COUNT(*) FROM shares WHERE LOWER(uniqueId) = ?",
 		uniqueID,
 	).Scan(&count)
@@ -1860,7 +1855,7 @@ func (db *DB) GetUserLikeTotal(uniqueID string) (int64, error) {
 	defer db.mu.Unlock()
 
 	var total int64
-	err := db.conn.QueryRow(
+	err := db.queryRow(
 		"SELECT COALESCE(SUM(like_count), 0) FROM likes WHERE LOWER(uniqueId) = ?",
 		uniqueID,
 	).Scan(&total)

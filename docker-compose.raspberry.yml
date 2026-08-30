@@ -20,12 +20,26 @@ services:
         SKIP_TESTS: ${SKIP_TESTS:-1}
     # Garante a arquitetura certa mesmo buildando fora da Pi (buildx/QEMU).
     platform: linux/arm64
+    env_file:
+      - path: .env
+        required: false
     ports:
       - "${PORT:-3001}:3001"
     environment:
       HOST: "0.0.0.0"
       PORT: "3001"
       DB_DIR: "/data"
+      AUTH_ENABLED: ${AUTH_ENABLED:-1}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-}
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      DATABASE_URL: ${DATABASE_URL:-}
+      AUTH_MAX_LOGIN_ATTEMPTS: ${AUTH_MAX_LOGIN_ATTEMPTS:-5}
+      AUTH_LOCKOUT_MINUTES: ${AUTH_LOCKOUT_MINUTES:-15}
+      AUTH_THEME_PINK: ${AUTH_THEME_PINK:-#fe2c55}
+      AUTH_THEME_CYAN: ${AUTH_THEME_CYAN:-#25f4ee}
+      AUTH_THEME_BG: ${AUTH_THEME_BG:-#0b0d12}
     volumes:
       # Persiste apenas o feedback.db (SQLite do app). O restante de /app vem
       # sempre da imagem — assim atualizações de binário/bridge pegam no
@@ -36,7 +50,7 @@ services:
       - ./web:/app/web:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3001/api/state || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3001/api/readiness || exit 1"]
       interval: 30s
       timeout: 10s
       start_period: 60s

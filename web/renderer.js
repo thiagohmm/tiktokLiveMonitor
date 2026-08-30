@@ -744,6 +744,15 @@ const allGiftsSection = document.getElementById('allGiftsSection');
 const allGiftsTableContainer = document.getElementById('allGiftsTableContainer');
 
 // --- New feature elements ---
+const adminUsersSection = document.getElementById('adminUsersSection');
+const adminUsersTableBody = document.getElementById('adminUsersTableBody');
+const adminUsersRefreshBtn = document.getElementById('adminUsersRefreshBtn');
+const createSubscriberBtn = document.getElementById('createSubscriberBtn');
+const adminLivesSection = document.getElementById('adminLivesSection');
+const authUserBar = document.getElementById('authUserBar');
+const authUserEmail = document.getElementById('authUserEmail');
+const logoutBtn = document.getElementById('logoutBtn');
+
 const adminLivesTableBody = document.getElementById('adminLivesTableBody');
 const adminLivesRefreshBtn = document.getElementById('adminLivesRefreshBtn');
 const adminLivesMoreBtn = document.getElementById('adminLivesMoreBtn');
@@ -2313,7 +2322,7 @@ async function loadInitialState() {
 }
 
 function setupEventStream() {
-    const eventSource = new EventSource('/events');
+    const eventSource = new EventSource(window.TLMAuth ? window.TLMAuth.eventsURL() : '/events');
 
     eventSource.addEventListener('server-state', event => {
         const data = JSON.parse(event.data);
@@ -3189,6 +3198,145 @@ goalSaveBtn.addEventListener('click', saveGoal);
 goalResetBtn.addEventListener('click', resetGoalForm);
 updateGoalButtons();
 
+// --- Administração: assinantes ---
+
+function formatSubscriberExpiry(value) {
+    if (!value) return '—';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '—';
+    return date.toLocaleString('pt-BR');
+}
+
+function renderAdminUsers(users) {
+    if (!adminUsersTableBody) return;
+    adminUsersTableBody.innerHTML = '';
+    const rows = (users || []).filter(user => user.role !== 'admin');
+    if (!rows.length) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td colspan="6">Nenhum assinante cadastrado.</td>';
+        adminUsersTableBody.appendChild(tr);
+        return;
+    }
+
+    rows.forEach(user => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td data-label="E-mail">${escapeHtml(user.email || '—')}</td>
+            <td data-label="Nome">${escapeHtml(user.displayName || '—')}</td>
+            <td data-label="Status">${user.active ? 'Ativo' : 'Desativado'}</td>
+            <td data-label="Validade">${formatSubscriberExpiry(user.subscriptionExpiresAt)}</td>
+            <td data-label="Observações">${escapeHtml(user.notes || '—')}</td>
+            <td data-label="Ações">
+                <button class="small-btn secondary-btn" type="button" data-action="toggle">${user.active ? 'Desativar' : 'Ativar'}</button>
+                <button class="small-btn delete-btn" type="button" data-action="delete">Remover</button>
+            </td>
+        `;
+        tr.querySelector('[data-action="toggle"]').addEventListener('click', () => toggleAdminUser(user));
+        tr.querySelector('[data-action="delete"]').addEventListener('click', () => deleteAdminUser(user));
+        adminUsersTableBody.appendChild(tr);
+    });
+}
+
+async function loadAdminUsers() {
+    if (!adminUsersTableBody) return;
+    try {
+        const response = await fetch('/api/admin/users');
+        if (!response.ok) throw new Error(`status ${response.status}`);
+        const payload = await response.json();
+        renderAdminUsers(payload.users || []);
+    } catch (error) {
+        console.error('[Frontend] Falha ao carregar assinantes:', error);
+        adminUsersTableBody.innerHTML = '';
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td colspan="6">Não foi possível carregar os assinantes.</td>';
+        adminUsersTableBody.appendChild(tr);
+    }
+}
+
+async function createAdminUser() {
+    const email = document.getElementById('newSubscriberEmail')?.value || '';
+    const password = document.getElementById('newSubscriberPassword')?.value || '';
+    const displayName = document.getElementById('newSubscriberName')?.value || '';
+    const notes = document.getElementById('newSubscriberNotes')?.value || '';
+    const expiresRaw = document.getElementById('newSubscriberExpires')?.value || '';
+    const body = { email, password, displayName, notes };
+    if (expiresRaw) {
+        body.subscriptionExpiresAt = new Date(expiresRaw).toISOString();
+    }
+    try {
+        const response = await fetch('/api/admin/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload.error || `status ${response.status}`);
+        }
+        document.getElementById('newSubscriberEmail').value = '';
+        document.getElementById('newSubscriberPassword').value = '';
+        document.getElementById('newSubscriberName').value = '';
+        document.getElementById('newSubscriberNotes').value = '';
+        document.getElementById('newSubscriberExpires').value = '';
+        loadAdminUsers();
+    } catch (error) {
+        alert(error.message || 'Não foi possível criar o assinante.');
+    }
+}
+
+async function toggleAdminUser(user) {
+    try {
+        const response = await fetch('/api/admin/users/update', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: user.id, active: !user.active }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload.error || `status ${response.status}`);
+        }
+        loadAdminUsers();
+    } catch (error) {
+        alert(error.message || 'Não foi possível atualizar o assinante.');
+    }
+}
+
+async function deleteAdminUser(user) {
+    if (!confirm(`Remover o assinante ${user.email}?`)) return;
+    try {
+        const response = await fetch('/api/admin/users/delete?id=' + encodeURIComponent(user.id), {
+            method: 'POST',
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload.error || `status ${response.status}`);
+        }
+        loadAdminUsers();
+    } catch (error) {
+        alert(error.message || 'Não foi possível remover o assinante.');
+    }
+}
+
+function setupAuthUI(user) {
+    if (window.TLMAuth && window.TLMAuth.getAccessToken()) {
+        if (authUserBar) authUserBar.style.display = 'flex';
+        if (authUserEmail) authUserEmail.textContent = user?.email || 'Usuário';
+    }
+    const isAdmin = window.TLMAuth && window.TLMAuth.isAdmin();
+    if (adminUsersSection) adminUsersSection.style.display = isAdmin ? 'block' : 'none';
+    if (adminLivesSection) adminLivesSection.style.display = isAdmin ? 'block' : 'none';
+}
+
+if (adminUsersRefreshBtn) {
+    adminUsersRefreshBtn.addEventListener('click', loadAdminUsers);
+}
+if (createSubscriberBtn) {
+    createSubscriberBtn.addEventListener('click', createAdminUser);
+}
+if (logoutBtn) {
+    logoutBtn.addEventListener('click', () => window.TLMAuth.signOut());
+}
+
 // --- Administração: lives e horários ---
 
 function formatAdminTime(value) {
@@ -3325,6 +3473,10 @@ if (adminLivesMoreBtn) {
 }
 
 async function bootstrap() {
+    const user = await window.TLMAuth.requireSession();
+    window.fetch = (input, init) => window.TLMAuth.authFetch(input, init);
+    setupAuthUI(user);
+
     renderTargetGifts();
 
     try {
@@ -3342,7 +3494,10 @@ async function bootstrap() {
 
     await loadInitialState();
     setupEventStream();
-    loadAdminLives();
+    if (window.TLMAuth.isAdmin()) {
+        loadAdminLives();
+        loadAdminUsers();
+    }
 }
 
 void bootstrap();
