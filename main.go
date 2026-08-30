@@ -32,7 +32,7 @@ func main() {
 	if dbDir == "" {
 		dbDir = baseDir
 	}
-	repo, err := database.Open(dbDir)
+	repo, err := database.OpenFromEnv(dbDir)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}

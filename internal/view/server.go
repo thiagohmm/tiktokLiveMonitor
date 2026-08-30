@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/auth"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 )
@@ -35,6 +36,10 @@ type HTTPServer struct {
 	sseMu      sync.Mutex
 	webDir     string
 	cfg        Config
+	auth       auth.Config
+	admin      *auth.AdminClient
+	lockout    *auth.LoginLockout
+	theme      auth.ThemeColors
 }
 
 // handleRoot serves the main UI (index.html) with a build-version query string
@@ -82,11 +87,16 @@ type Config struct {
 
 // New creates a new HTTP server (View).
 func New(cfg Config, ctrl *controller.AppController) *HTTPServer {
+	authCfg := auth.LoadConfigFromEnv()
 	return &HTTPServer{
 		controller: ctrl,
 		sseClients: make(map[http.ResponseWriter]bool),
 		webDir:     cfg.WebDir,
 		cfg:        cfg,
+		auth:       authCfg,
+		admin:      auth.NewAdminClient(authCfg),
+		lockout:    auth.NewLoginLockout(auth.LoadLockoutConfigFromEnv()),
+		theme:      auth.LoadThemeFromEnv(),
 	}
 }
 
@@ -134,11 +144,20 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/goals/complete", s.handleGoalComplete)
 	mux.HandleFunc("/api/admin/lives", s.handleAdminLives)
 	mux.HandleFunc("/api/admin/lives/delete", s.handleAdminLivesDelete)
+	mux.HandleFunc("/api/auth/config", s.handleAuthConfig)
+	mux.HandleFunc("/api/auth/login", s.handleAuthLogin)
+	mux.HandleFunc("/api/auth/logout", s.handleAuthLogout)
+	mux.HandleFunc("/api/auth/me", s.handleAuthMe)
+	mux.HandleFunc("/api/admin/users", s.handleAdminUsers)
+	mux.HandleFunc("/api/admin/users/update", s.handleAdminUsersUpdate)
+	mux.HandleFunc("/api/admin/users/delete", s.handleAdminUsersDelete)
 
 	// Root page: render index.html with a cache-busting build version so the
 	// browser always re-fetches renderer.js after a rebuild. Every other path
 	// is delegated to the static file server.
 	mux.HandleFunc("/", s.handleRoot)
+
+	handler := s.auth.Middleware(mux)
 
 	// Chart.js vendor.
 	mux.HandleFunc("/vendor/chart.js", func(w http.ResponseWriter, r *http.Request) {
@@ -188,7 +207,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	addr := fmt.Sprintf("%s:%d", host, port)
 	s.httpServer = &http.Server{
 		Addr:    addr,
-		Handler: mux,
+		Handler: handler,
 	}
 
 	// Graceful shutdown.
@@ -528,6 +547,9 @@ func (s *HTTPServer) handleRanking(w http.ResponseWriter, r *http.Request) {
 
 // handleAdminLives returns derived lives and schedules stored in the database.
 func (s *HTTPServer) handleAdminLives(w http.ResponseWriter, r *http.Request) {
+	if _, ok := auth.RequireAdmin(w, r, s.auth); !ok {
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -548,6 +570,9 @@ func (s *HTTPServer) handleAdminLives(w http.ResponseWriter, r *http.Request) {
 
 // handleAdminLivesDelete removes all stored data for a live.
 func (s *HTTPServer) handleAdminLivesDelete(w http.ResponseWriter, r *http.Request) {
+	if _, ok := auth.RequireAdmin(w, r, s.auth); !ok {
+		return
+	}
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return

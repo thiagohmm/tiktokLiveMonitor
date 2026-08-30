@@ -295,6 +295,27 @@
         .section-title-label h3 {
             margin: 0;
         }
+        .auth-user-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-left: auto;
+        }
+        .auth-user-email {
+            font-size: 0.85em;
+            color: var(--text-muted);
+        }
+        .admin-users-form {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+        .admin-users-form input {
+            width: 100%;
+            min-width: 0;
+            margin-bottom: 0;
+        }
         .chart-section {
             margin-bottom: 26px;
             padding: 16px;
@@ -1213,6 +1234,10 @@
                 <button id="connectBtn" type="button">Conectar</button>
                 <button id="disconnectBtn" class="secondary-btn" style="display: none;" type="button">Desconectar</button>
                 <button id="listenBtn" class="secondary-btn" type="button">Escuta</button>
+                <div id="authUserBar" class="auth-user-bar" style="display: none;">
+                    <span id="authUserEmail" class="auth-user-email"></span>
+                    <button id="logoutBtn" class="small-btn secondary-btn" type="button">Sair</button>
+                </div>
             </div>
         </header>
         <div id="status" class="status-bar"><span class="status-dot"></span>Desconectado</div>
@@ -1415,7 +1440,43 @@
             <div id="reportError" class="report-error" style="display: none;"></div>
         </div>
 
+        <!-- Administração: assinantes -->
+        <div id="adminUsersSection" style="display: none;">
+            <div class="section-title">
+                <div class="section-title-label">
+                    <h3>👤 Administração — Assinantes</h3>
+                </div>
+                <div class="section-title-actions">
+                    <button id="adminUsersRefreshBtn" class="small-btn" type="button">Atualizar</button>
+                </div>
+            </div>
+            <div class="admin-users-form">
+                <input type="email" id="newSubscriberEmail" placeholder="E-mail do assinante">
+                <input type="password" id="newSubscriberPassword" placeholder="Senha (mín. 8 caracteres)">
+                <input type="text" id="newSubscriberName" placeholder="Nome (opcional)">
+                <input type="datetime-local" id="newSubscriberExpires" title="Validade da assinatura">
+                <input type="text" id="newSubscriberNotes" placeholder="Observações (opcional)">
+                <button id="createSubscriberBtn" class="small-btn" type="button">Criar assinante</button>
+            </div>
+            <div class="table-container">
+                <table class="tbl-lives">
+                    <thead>
+                        <tr>
+                            <th>E-mail</th>
+                            <th>Nome</th>
+                            <th>Status</th>
+                            <th>Validade</th>
+                            <th>Observações</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody id="adminUsersTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+
         <!-- Administração: lives e horários -->
+        <div id="adminLivesSection">
         <div class="section-title">
             <div class="section-title-label">
                 <h3>🛠️ Administração — Lives e Horários</h3>
@@ -1440,6 +1501,7 @@
                 </thead>
                 <tbody id="adminLivesTableBody"></tbody>
             </table>
+        </div>
         </div>
 
     </div>
@@ -1482,6 +1544,8 @@
             </div>
         </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/auth.js"></script>
     <script src="renderer.js?v={{ .BuildVersion }}"></script>
 </body>
 </html>
