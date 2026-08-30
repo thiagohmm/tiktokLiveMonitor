@@ -82,7 +82,6 @@ func topSupporters(stats []model.LiveStat) []model.UserRank {
 			GiftCount:     s.GiftCount,
 			MessageCount:  s.MessageCount,
 			QuestionCount: s.QuestionCount,
-			AnomalyCount:  s.QuestionCount,
 			FirstSeen:     s.FirstSeen,
 			LastSeen:      s.LastSeen,
 		})

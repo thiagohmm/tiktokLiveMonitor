@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"math/rand/v2"
 	"os"
 	"os/exec"
@@ -16,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
@@ -105,12 +107,20 @@ const (
 	repeatsRequired           = 3
 )
 
-// Ajustáveis (var) para permitir testes com backoff acelerado.
+// Ajustáveis para permitir testes com backoff acelerado. Usam atomics porque
+// goroutines de produção (supervisor, timers) os leem em paralelo com os
+// testes os gravando.
 var (
-	reconnectBaseDelay = time.Second
-	reconnectMaxDelay  = 30 * time.Second
-	reconnectJitterPct = 0.2
+	reconnectBaseDelay atomic.Int64    // nanos
+	reconnectMaxDelay  atomic.Int64    // nanos
+	reconnectJitterPct atomic.Uint64   // bits de float64
 )
+
+func init() {
+	reconnectBaseDelay.Store(time.Second.Nanoseconds())
+	reconnectMaxDelay.Store((30 * time.Second).Nanoseconds())
+	reconnectJitterPct.Store(math.Float64bits(0.2))
+}
 
 type Monitor struct {
 	mu              sync.Mutex
@@ -351,11 +361,11 @@ func backoffDelay(attempt int) time.Duration {
 	if shift > 30 {
 		shift = 30
 	}
-	d := time.Duration(1<<uint(shift)) * reconnectBaseDelay
-	if d > reconnectMaxDelay {
-		d = reconnectMaxDelay
+	d := time.Duration(1<<uint(shift)) * time.Duration(reconnectBaseDelay.Load())
+	if d > time.Duration(reconnectMaxDelay.Load()) {
+		d = time.Duration(reconnectMaxDelay.Load())
 	}
-	jitter := time.Duration(rand.Float64() * reconnectJitterPct * float64(d))
+	jitter := time.Duration(rand.Float64() * math.Float64frombits(reconnectJitterPct.Load()) * float64(d))
 	return d + jitter
 }
 
@@ -728,11 +738,16 @@ var (
 	// o presente se perde (perfil mostra 0 presentes e o presente-alvo não é
 	// registrado). Se nenhum evento do mesmo streak chegar nesse prazo, o
 	// monitor liquida o streak com a última contagem conhecida.
-	giftStreakSettleTimeout = 20 * time.Second
+	giftStreakSettleTimeout = atomic.Int64{}
 	// giftStreakKeepAfterSettle: janela para suprimir eventos finais atrasados
 	// que cheguem depois da liquidação por timeout.
-	giftStreakKeepAfterSettle = 90 * time.Second
+	giftStreakKeepAfterSettle = atomic.Int64{}
 )
+
+func init() {
+	giftStreakSettleTimeout.Store((20 * time.Second).Nanoseconds())
+	giftStreakKeepAfterSettle.Store((90 * time.Second).Nanoseconds())
+}
 
 type giftStreak struct {
 	data           EventData
@@ -796,7 +811,7 @@ func (m *Monitor) handleGiftReceived(data EventData) {
 	if st.timer != nil {
 		st.timer.Stop()
 	}
-	st.timer = time.AfterFunc(giftStreakSettleTimeout, func() { m.settleGiftStreak(key) })
+	st.timer = time.AfterFunc(time.Duration(giftStreakSettleTimeout.Load()), func() { m.settleGiftStreak(key) })
 	m.mu.Unlock()
 }
 
@@ -821,7 +836,7 @@ func (m *Monitor) settleGiftStreak(key string) {
 	m.emit(EventAnyGift, data)
 	m.handleTargetGift(data)
 
-	time.AfterFunc(giftStreakKeepAfterSettle, func() {
+	time.AfterFunc(time.Duration(giftStreakKeepAfterSettle.Load()), func() {
 		m.mu.Lock()
 		if cur := m.giftStreaks[key]; cur == st {
 			delete(m.giftStreaks, key)
@@ -863,7 +878,10 @@ func (m *Monitor) StartMonitoring(ctx context.Context, username string) error {
 	m.reconnectAttempts = 0
 	m.mu.Unlock()
 
-	if m.cmd == nil {
+	m.mu.Lock()
+	needBridge := m.cmd == nil
+	m.mu.Unlock()
+	if needBridge {
 		if err := m.startBridge(); err != nil {
 			return fmt.Errorf("start bridge: %w", err)
 		}
@@ -1009,7 +1027,10 @@ func (m *Monitor) StopMonitoring() {
 	m.mu.Unlock()
 	m.stopSupervisor()
 
-	if m.stdin != nil {
+	m.mu.Lock()
+	stdin := m.stdin
+	m.mu.Unlock()
+	if stdin != nil {
 		m.sendBridge(map[string]interface{}{
 			"action": "disconnect",
 		})
