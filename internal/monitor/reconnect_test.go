@@ -2,21 +2,21 @@ package monitor
 
 import (
 	"context"
-	"math/rand"
+	"math"
 	"testing"
 	"time"
 )
 
 // TestBackoffDelayTable valida o crescimento exponencial com teto.
 func TestBackoffDelayTable(t *testing.T) {
-	oldJitter := reconnectJitterPct
-	reconnectBaseDelay = 100 * time.Millisecond
-	reconnectMaxDelay = 500 * time.Millisecond
-	reconnectJitterPct = 0 // deterministic: sem jitter
+	oldBase, oldMax, oldJitter := reconnectBaseDelay.Load(), reconnectMaxDelay.Load(), reconnectJitterPct.Load()
+	reconnectBaseDelay.Store((100 * time.Millisecond).Nanoseconds())
+	reconnectMaxDelay.Store((500 * time.Millisecond).Nanoseconds())
+	reconnectJitterPct.Store(0) // deterministic: sem jitter
 	defer func() {
-		reconnectBaseDelay = time.Second
-		reconnectMaxDelay = 30 * time.Second
-		reconnectJitterPct = oldJitter
+		reconnectBaseDelay.Store(oldBase)
+		reconnectMaxDelay.Store(oldMax)
+		reconnectJitterPct.Store(oldJitter)
 	}()
 
 	base := func(ms int) time.Duration { return time.Duration(ms) * time.Millisecond }
@@ -46,11 +46,14 @@ func TestBackoffDelayTable(t *testing.T) {
 // TestBackoffDelayJitter garante que o jitter produz mais de um valor
 // distinto (com semente aleatória real) para o delay no teto.
 func TestBackoffDelayJitter(t *testing.T) {
-	oldBase, oldMax, oldJitter := reconnectBaseDelay, reconnectMaxDelay, reconnectJitterPct
-	rand.New(rand.NewSource(time.Now().UnixNano()))
-	reconnectBaseDelay, reconnectMaxDelay, reconnectJitterPct = time.Second, 30*time.Second, 0.2
+	oldBase, oldMax, oldJitter := reconnectBaseDelay.Load(), reconnectMaxDelay.Load(), reconnectJitterPct.Load()
+	reconnectBaseDelay.Store(time.Second.Nanoseconds())
+	reconnectMaxDelay.Store((30 * time.Second).Nanoseconds())
+	reconnectJitterPct.Store(math.Float64bits(0.2))
 	defer func() {
-		reconnectBaseDelay, reconnectMaxDelay, reconnectJitterPct = oldBase, oldMax, oldJitter
+		reconnectBaseDelay.Store(oldBase)
+		reconnectMaxDelay.Store(oldMax)
+		reconnectJitterPct.Store(oldJitter)
 	}()
 
 	seen := map[time.Duration]bool{}
@@ -66,9 +69,10 @@ func TestBackoffDelayJitter(t *testing.T) {
 // que o supervisor emite reconexão com retries e, ao "sair da live", para de
 // tentar (backoff de teste acelerado via flags de pacote em outro test).
 func TestSupervisorReconnectsAfterBridgeDeath(t *testing.T) {
-	oldBase, oldMax := reconnectBaseDelay, reconnectMaxDelay
-	reconnectBaseDelay, reconnectMaxDelay = 20*time.Millisecond, 40*time.Millisecond
-	defer func() { reconnectBaseDelay, reconnectMaxDelay = oldBase, oldMax }()
+	oldBase, oldMax := reconnectBaseDelay.Load(), reconnectMaxDelay.Load()
+	reconnectBaseDelay.Store((20 * time.Millisecond).Nanoseconds())
+	reconnectMaxDelay.Store((40 * time.Millisecond).Nanoseconds())
+	defer func() { reconnectBaseDelay.Store(oldBase); reconnectMaxDelay.Store(oldMax) }()
 
 	m, _ := New()
 
@@ -138,9 +142,10 @@ func TestSupervisorReconnectsAfterBridgeDeath(t *testing.T) {
 // TestSupervisorStopsOnContextCancel garante que cancelar o contexto do
 // controller interrompe o supervisor imediatamente, mesmo no meio do backoff.
 func TestSupervisorStopsOnContextCancel(t *testing.T) {
-	oldBase, oldMax := reconnectBaseDelay, reconnectMaxDelay
-	reconnectBaseDelay, reconnectMaxDelay = 20*time.Millisecond, 40*time.Millisecond
-	defer func() { reconnectBaseDelay, reconnectMaxDelay = oldBase, oldMax }()
+	oldBase, oldMax := reconnectBaseDelay.Load(), reconnectMaxDelay.Load()
+	reconnectBaseDelay.Store((20 * time.Millisecond).Nanoseconds())
+	reconnectMaxDelay.Store((40 * time.Millisecond).Nanoseconds())
+	defer func() { reconnectBaseDelay.Store(oldBase); reconnectMaxDelay.Store(oldMax) }()
 
 	m, _ := New()
 	m.mu.Lock()

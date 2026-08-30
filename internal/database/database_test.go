@@ -517,12 +517,17 @@ func TestGetLastSessionActivityUsesLatestAcrossTables(t *testing.T) {
 		t.Fatalf("insert anomaly: %v", err)
 	}
 	_, err = db.conn.Exec(
-		`INSERT INTO user_messages (uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?)`,
-		"user1", "User", "hello", "2026-08-17 12:30:00",
+		`INSERT INTO user_messages (live_name, uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?, ?)`,
+		"live1", "user1", "User", "hello", "2026-08-17 12:30:00",
 	)
 	if err != nil {
 		t.Fatalf("insert message: %v", err)
 	}
+	// Mensagem mais recente de OUTRA live: não deve contar para live1.
+	_, err = db.conn.Exec(
+		`INSERT INTO user_messages (live_name, uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?, ?)`,
+		"other", "user2", "Other", "oi", "2026-08-17 14:00:00",
+	)
 	_, err = db.conn.Exec(
 		`INSERT INTO gifts (live_name, uniqueId, nickname, gift_name, timestamp) VALUES (?, ?, ?, ?, ?)`,
 		"other", "user2", "Other", "Tiger", "2026-08-17 23:00:00",
@@ -562,6 +567,9 @@ func TestDeleteSessionData(t *testing.T) {
 	if err := db.AddUserMessageDedup("live1", "user1", "User One", "hello"); err != nil {
 		t.Fatalf("add message: %v", err)
 	}
+	if err := db.AddUserMessageDedup("live2", "user2", "User Two", "oi"); err != nil {
+		t.Fatalf("add message live2: %v", err)
+	}
 	if _, err := db.conn.Exec(
 		"INSERT INTO false_positives (comment, category, expected) VALUES (?, ?, ?)",
 		"example", "SPAM", "SIM_SPAM",
@@ -597,8 +605,11 @@ func TestDeleteSessionData(t *testing.T) {
 	if n := countTable(t, db, "SELECT COUNT(*) FROM anomaly_logs WHERE live_name = ?", "live2"); n != 1 {
 		t.Fatalf("expected 1 anomaly for live2, got %d", n)
 	}
-	if n := countTable(t, db, "SELECT COUNT(*) FROM user_messages"); n != 0 {
-		t.Fatalf("expected 0 user messages, got %d", n)
+	if n := countTable(t, db, "SELECT COUNT(*) FROM user_messages WHERE live_name = ?", "live1"); n != 0 {
+		t.Fatalf("expected 0 user messages for live1, got %d", n)
+	}
+	if n := countTable(t, db, "SELECT COUNT(*) FROM user_messages WHERE live_name = ?", "live2"); n != 1 {
+		t.Fatalf("expected 1 user message for live2, got %d", n)
 	}
 	if n := countTable(t, db, "SELECT COUNT(*) FROM false_positives"); n != 1 {
 		t.Fatalf("expected feedback to remain, got %d", n)

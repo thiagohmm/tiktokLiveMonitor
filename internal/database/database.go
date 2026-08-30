@@ -1320,7 +1320,8 @@ func (db *DB) maxTimestamp(query string, args ...any) (time.Time, bool, error) {
 }
 
 // GetLastSessionActivity returns the latest timestamp among gifts and
-// anomaly logs for liveName, plus all user_messages (which have no live_name).
+// anomaly logs for liveName, plus user_messages/pinned/target gifts of the
+// same live.
 func (db *DB) GetLastSessionActivity(liveName string) (time.Time, bool, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -1331,7 +1332,7 @@ func (db *DB) GetLastSessionActivity(liveName string) (time.Time, bool, error) {
 	}{
 		{"SELECT MAX(timestamp) FROM gifts WHERE live_name = ?", []any{liveName}},
 		{"SELECT MAX(timestamp) FROM anomaly_logs WHERE live_name = ?", []any{liveName}},
-		{"SELECT MAX(timestamp) FROM user_messages", nil},
+		{"SELECT MAX(timestamp) FROM user_messages WHERE live_name = ?", []any{liveName}},
 		{"SELECT MAX(timestamp) FROM pinned_comments WHERE live_name = ?", []any{liveName}},
 		{"SELECT MAX(received_at) FROM target_gift_history WHERE live_name = ?", []any{liveName}},
 	}
@@ -1354,7 +1355,8 @@ func (db *DB) GetLastSessionActivity(liveName string) (time.Time, bool, error) {
 	return latest, found, nil
 }
 
-// DeleteSessionData removes gifts and anomaly logs for liveName and all user_messages.
+// DeleteSessionData removes gifts, anomaly logs, user_messages, pinned
+// comments and target gift history for liveName (only rows of that live).
 func (db *DB) DeleteSessionData(liveName string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -1371,7 +1373,7 @@ func (db *DB) DeleteSessionData(liveName string) error {
 	if _, err := tx.Exec("DELETE FROM anomaly_logs WHERE live_name = ?", liveName); err != nil {
 		return fmt.Errorf("delete session anomalies: %w", err)
 	}
-	if _, err := tx.Exec("DELETE FROM user_messages"); err != nil {
+	if _, err := tx.Exec("DELETE FROM user_messages WHERE live_name = ?", liveName); err != nil {
 		return fmt.Errorf("delete session messages: %w", err)
 	}
 	if _, err := tx.Exec("DELETE FROM pinned_comments WHERE live_name = ?", liveName); err != nil {

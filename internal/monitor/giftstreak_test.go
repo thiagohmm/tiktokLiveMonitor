@@ -31,11 +31,12 @@ func (c *giftCollector) counts() (int, int) {
 
 func withFastStreakTimeout(t *testing.T) {
 	t.Helper()
-	oldSettle, oldKeep := giftStreakSettleTimeout, giftStreakKeepAfterSettle
-	giftStreakSettleTimeout = 60 * time.Millisecond
-	giftStreakKeepAfterSettle = time.Hour
+	oldSettle, oldKeep := giftStreakSettleTimeout.Load(), giftStreakKeepAfterSettle.Load()
+	giftStreakSettleTimeout.Store((60 * time.Millisecond).Nanoseconds())
+	giftStreakKeepAfterSettle.Store(time.Hour.Nanoseconds())
 	t.Cleanup(func() {
-		giftStreakSettleTimeout, giftStreakKeepAfterSettle = oldSettle, oldKeep
+		giftStreakSettleTimeout.Store(oldSettle)
+		giftStreakKeepAfterSettle.Store(oldKeep)
 	})
 }
 

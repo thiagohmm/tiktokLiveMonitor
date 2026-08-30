@@ -115,6 +115,8 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/state", s.handleState)
 	mux.HandleFunc("/api/settings", s.handleSettings)
 	mux.HandleFunc("/api/history", s.handleHistory)
+	// Subárvore: DELETE /api/history/{id} (patterns sem barra só fazem match exato).
+	mux.HandleFunc("/api/history/", s.handleHistory)
 	mux.HandleFunc("/api/connect", s.handleConnect)
 	mux.HandleFunc("/api/disconnect", s.handleDisconnect)
 	mux.HandleFunc("/api/clear-history", s.handleClearHistory)
@@ -717,8 +719,10 @@ func goalIDParam(r *http.Request) (int64, error) {
 
 // findGoal locates a goal by ID in the live's goal state.
 func findGoal(state controller.GoalsState, id int64) *model.GiftGoal {
-	if state.Active != nil && state.Active.Goal.ID == id {
-		return &state.Active.Goal
+	for i := range state.Actives {
+		if state.Actives[i].Goal.ID == id {
+			return &state.Actives[i].Goal
+		}
 	}
 	for i := range state.History {
 		if state.History[i].ID == id {

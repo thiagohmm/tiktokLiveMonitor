@@ -344,8 +344,6 @@ func (c *AppController) GetLiveRanking(liveName string) (model.LiveRanking, erro
 			}
 		}
 	}
-	scored := c.ranker.Compute(stats, anomaliesByUser)
-	_ = scored
 	out = c.ranker.BuildLiveRanking(liveName, stats, anomaliesByUser)
 	out.TotalLikes = roomTotal
 	return out, nil
