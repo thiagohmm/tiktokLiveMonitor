@@ -314,8 +314,10 @@ func (c *AppController) GetRecentPinnedComments(limit int) ([]model.PinnedCommen
 
 // --- Ranking, Report & Profile Actions ---
 
-// GetLiveRanking returns the engagement ranking for the given live.
-func (c *AppController) GetLiveRanking(liveName string) (model.LiveRanking, error) {
+// GetLiveRanking returns the ranking for the given live. mode selects the
+// criterion: "tiktok" reproduces the TikTok in-room ranking (pure gift value)
+// while any other value keeps the default weighted engagement score.
+func (c *AppController) GetLiveRanking(liveName, mode string) (model.LiveRanking, error) {
 	out := model.LiveRanking{LiveName: liveName, UpdatedAt: time.Now().Format(time.RFC3339)}
 	if strings.TrimSpace(liveName) == "" {
 		return out, nil
@@ -335,6 +337,13 @@ func (c *AppController) GetLiveRanking(liveName string) (model.LiveRanking, erro
 	var roomTotal int64
 	if rt, _, err := c.repo.LikeTotals(liveName); err == nil {
 		roomTotal = rt
+	}
+	out.TotalLikes = roomTotal
+	if strings.EqualFold(mode, model.ModeTikTok) {
+		// TikTok in-room ranking: gift (diamond) value only, no anomaly penalty.
+		out = c.ranker.BuildTikTokRanking(liveName, stats)
+		out.TotalLikes = roomTotal
+		return out, nil
 	}
 	anomaliesByUser := map[string]int{}
 	if logs, err := c.repo.GetAnomalyLogsByLiveName(liveName); err == nil {

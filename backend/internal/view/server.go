@@ -513,7 +513,7 @@ func (s *HTTPServer) handleRanking(w http.ResponseWriter, r *http.Request) {
 		state := s.controller.GetState()
 		liveName = state.Username
 	}
-	ranking, err := s.controller.GetLiveRanking(liveName)
+	ranking, err := s.controller.GetLiveRanking(liveName, query.Get("mode"))
 	if err != nil {
 		writeInternalError(w, r, err)
 		return

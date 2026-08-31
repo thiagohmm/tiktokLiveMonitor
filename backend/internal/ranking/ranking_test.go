@@ -71,4 +71,61 @@ func TestBuildLiveRanking(t *testing.T) {
 	if lr.UserRanks[0].Score < 0 {
 		t.Fatalf("score should never be negative, got %f", lr.UserRanks[0].Score)
 	}
+	if lr.Mode != model.ModeEngagement {
+		t.Fatalf("mode = %s, want %s", lr.Mode, model.ModeEngagement)
+	}
+}
+
+func TestComputeTikTokRanksByDiamonds(t *testing.T) {
+	r := New(DefaultWeights)
+	stats := []model.LiveStat{
+		{UniqueID: "chatty", Nickname: "Chatty", MessageCount: 500, LikeCount: 900},
+		{UniqueID: "rich", Nickname: "Rich", GiftCount: 2, GiftTotal: 500},
+		{UniqueID: "steady", Nickname: "Steady", GiftCount: 10, GiftTotal: 300},
+		{UniqueID: "tieB", Nickname: "TieB", GiftCount: 1, GiftTotal: 300},
+		{UniqueID: "tieA", Nickname: "TieA", GiftCount: 5, GiftTotal: 300},
+	}
+	res := r.ComputeTikTok(stats)
+	got := []string{}
+	for _, x := range res {
+		got = append(got, x.UserRank.UniqueID)
+	}
+	want := []string{"rich", "steady", "tieA", "tieB", "chatty"} // gift count breaks diamond ties
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("order = %v, want %v", got, want)
+		}
+	}
+	// Top 3 tiers: crown, headband, medal.
+	if res[0].UserRank.Tier != model.TierCrown {
+		t.Fatalf("#1 tier = %s, want crown", res[0].UserRank.Tier)
+	}
+	if res[1].UserRank.Tier != model.TierHeadband {
+		t.Fatalf("#2 tier = %s, want headband", res[1].UserRank.Tier)
+	}
+	if res[2].UserRank.Tier != model.TierMedal {
+		t.Fatalf("#3 tier = %s, want medal", res[2].UserRank.Tier)
+	}
+	if res[3].UserRank.Tier != "" {
+		t.Fatalf("#4 tier = %s, want empty", res[3].UserRank.Tier)
+	}
+	// Score mirrors diamond value.
+	if res[0].Score != 500 || res[0].UserRank.Diamonds != 500 {
+		t.Fatalf("#1 score/diamonds = %f/%d, want 500/500", res[0].Score, res[0].UserRank.Diamonds)
+	}
+}
+
+func TestBuildTikTokRanking(t *testing.T) {
+	r := New(DefaultWeights)
+	stats := []model.LiveStat{{UniqueID: "u1", Nickname: "User1", GiftCount: 3, GiftTotal: 42}}
+	lr := r.BuildTikTokRanking("streamer1", stats)
+	if lr.Mode != model.ModeTikTok {
+		t.Fatalf("mode = %s, want %s", lr.Mode, model.ModeTikTok)
+	}
+	if lr.TotalUsers != 1 || len(lr.UserRanks) != 1 {
+		t.Fatalf("unexpected ranking length: total=%d ranks=%d", lr.TotalUsers, len(lr.UserRanks))
+	}
+	if lr.UserRanks[0].Tier != model.TierCrown {
+		t.Fatalf("solo gifter tier = %s, want crown", lr.UserRanks[0].Tier)
+	}
 }

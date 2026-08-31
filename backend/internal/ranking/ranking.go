@@ -95,6 +95,7 @@ func (r *Ranker) Compute(stats []model.LiveStat, anomaliesByUser map[string]int)
 				Nickname:      s.Nickname,
 				Score:         score,
 				GiftScore:     giftScore,
+				Diamonds:      s.GiftTotal,
 				MessageCount:  s.MessageCount,
 				QuestionCount: s.QuestionCount,
 				GiftCount:     s.GiftCount,
@@ -132,6 +133,76 @@ func (r *Ranker) BuildLiveRanking(liveName string, stats []model.LiveStat, anoma
 		UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
 		TotalUsers: len(ranks),
 		UserRanks:  ranks,
+		Mode:       model.ModeEngagement,
+	}
+}
+
+// ComputeTikTok reproduces the TikTok in-room live ranking: viewers are
+// ranked purely by the total value (diamonds) of the gifts they sent during
+// the live, in real time — messages, likes and shares do not move the board.
+// Ties break on gift count, then nickname. The top 3 receive the visual
+// tiers TikTok uses on stream: crown (#1), headband (#2), medal (#3).
+func (r *Ranker) ComputeTikTok(stats []model.LiveStat) []ScoreResult {
+	results := make([]ScoreResult, 0, len(stats))
+	for _, s := range stats {
+		diamonds := float64(s.GiftTotal)
+		results = append(results, ScoreResult{
+			UserRank: model.UserRank{
+				UniqueID:      s.UniqueID,
+				Nickname:      s.Nickname,
+				Score:         diamonds,
+				GiftScore:     diamonds,
+				Diamonds:      s.GiftTotal,
+				MessageCount:  s.MessageCount,
+				QuestionCount: s.QuestionCount,
+				GiftCount:     s.GiftCount,
+				ShareCount:    s.ShareCount,
+				LikeCount:     s.LikeCount,
+				FirstSeen:     formatTS(s.FirstSeen),
+				LastSeen:      formatTS(s.LastSeen),
+			},
+			GiftScore: diamonds,
+			Score:     diamonds,
+		})
+	}
+
+	sort.SliceStable(results, func(i, j int) bool {
+		if results[i].UserRank.Diamonds != results[j].UserRank.Diamonds {
+			return results[i].UserRank.Diamonds > results[j].UserRank.Diamonds
+		}
+		if results[i].UserRank.GiftCount != results[j].UserRank.GiftCount {
+			return results[i].UserRank.GiftCount > results[j].UserRank.GiftCount
+		}
+		return results[i].UserRank.Nickname < results[j].UserRank.Nickname
+	})
+
+	for i := range results {
+		switch i {
+		case 0:
+			results[i].UserRank.Tier = model.TierCrown
+		case 1:
+			results[i].UserRank.Tier = model.TierHeadband
+		case 2:
+			results[i].UserRank.Tier = model.TierMedal
+		}
+	}
+	return results
+}
+
+// BuildTikTokRanking assembles a LiveRanking in TikTok mode: users ranked by
+// gift value (diamonds) with the top-3 visual tiers.
+func (r *Ranker) BuildTikTokRanking(liveName string, stats []model.LiveStat) model.LiveRanking {
+	ranked := r.ComputeTikTok(stats)
+	ranks := make([]model.UserRank, 0, len(ranked))
+	for _, res := range ranked {
+		ranks = append(ranks, res.UserRank)
+	}
+	return model.LiveRanking{
+		LiveName:   liveName,
+		UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
+		TotalUsers: len(ranks),
+		UserRanks:  ranks,
+		Mode:       model.ModeTikTok,
 	}
 }
 

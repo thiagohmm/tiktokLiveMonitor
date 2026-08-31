@@ -222,7 +222,8 @@
         .tbl-ranking th:nth-child(5) { width: 110px; }
         .tbl-ranking th:nth-child(6) { width: 90px; }
         .tbl-ranking th:nth-child(7) { width: 90px; }
-        .tbl-ranking th:nth-child(8) { width: 80px; }
+        .tbl-ranking th:nth-child(8) { width: 90px; }
+        .tbl-ranking th:nth-child(9) { width: 80px; }
         .tbl-lives th:nth-child(1) { width: 1fr; }
         .tbl-lives th:nth-child(2) { width: 90px; }
         .tbl-lives th:nth-child(3) { width: 100px; }
@@ -427,6 +428,26 @@
             font-weight: 800;
             color: var(--cyan);
         }
+        .ranking-mode-btns {
+            display: flex;
+            gap: 4px;
+        }
+        .mode-btn {
+            padding: 6px 10px;
+            font-size: 0.78em;
+            background: rgba(255, 255, 255, 0.06);
+            box-shadow: none;
+            color: var(--text-muted);
+        }
+        .mode-btn.active {
+            background: linear-gradient(135deg, var(--cyan), #7c4dff);
+            color: #fff;
+            font-weight: 700;
+        }
+        .rank-tier { font-size: 1.05em; line-height: 1; }
+        .tbl-ranking tr.rank-top-1 td { background: rgba(255, 215, 0, 0.10); }
+        .tbl-ranking tr.rank-top-2 td { background: rgba(200, 200, 210, 0.08); }
+        .tbl-ranking tr.rank-top-3 td { background: rgba(205, 127, 50, 0.10); }
         }
         .action-group {
             display: flex;
@@ -1406,6 +1427,10 @@
                 <h3>🏆 Ranking de Engajamento</h3>
             </div>
             <div class="section-title-actions">
+                <div class="ranking-mode-btns" id="rankingModeBtns">
+                    <button id="rankingModeEngagementBtn" class="small-btn mode-btn active" type="button" title="Score ponderado da live: presentes, compartilhamentos, curtidas e perguntas">Engajamento</button>
+                    <button id="rankingModeTikTokBtn" class="small-btn mode-btn" type="button" title="Estilo TikTok: ranqueia os usuários pelo valor (💎) dos presentes enviados na live — o top 3 leva a coroa, a faixa e a medalha">TikTok 🎁</button>
+                </div>
                 <button id="refreshRankingBtn" class="small-btn" type="button">Atualizar</button>
             </div>
         </div>
@@ -1415,8 +1440,9 @@
                     <tr>
                         <th>#</th>
                         <th>Usuário</th>
-                        <th>Score</th>
+                        <th id="rankingScoreTh">Score</th>
                         <th>Presentes</th>
+                        <th title="Valor total dos presentes (unidades/diamantes) — critério do ranking in-room do TikTok">💎</th>
                         <th>Compartilhamentos</th>
                         <th>Mensagens</th>
                         <th>Perguntas</th>

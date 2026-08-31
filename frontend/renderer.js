@@ -759,6 +759,19 @@ const adminLivesRefreshBtn = document.getElementById('adminLivesRefreshBtn');
 const adminLivesMoreBtn = document.getElementById('adminLivesMoreBtn');
 let adminLivesLimit = 100;
 const refreshRankingBtn = document.getElementById('refreshRankingBtn');
+const rankingModeEngagementBtn = document.getElementById('rankingModeEngagementBtn');
+const rankingModeTikTokBtn = document.getElementById('rankingModeTikTokBtn');
+const rankingScoreTh = document.getElementById('rankingScoreTh');
+
+// Modo do Ranking de Engajamento: "engagement" (score ponderado) ou
+// "tiktok" (ranking in-room do TikTok: valor 💎 dos presentes). Persiste a preferência.
+let rankingMode = (function () {
+    try {
+        return localStorage.getItem('tiktoklive.rankingMode') === 'tiktok' ? 'tiktok' : 'engagement';
+    } catch (e) {
+        return 'engagement';
+    }
+})();
 const generateReportBtn = document.getElementById('generateReportBtn');
 const reportWrap = document.getElementById('reportWrap');
 const reportSummary = document.getElementById('reportSummary');
@@ -1508,6 +1521,31 @@ listenBtn.addEventListener('click', () => openHistoryModal('listen'));
 
 if (refreshRankingBtn) {
     refreshRankingBtn.addEventListener('click', () => loadRanking());
+}
+
+function applyRankingMode(mode, reload = true) {
+    rankingMode = mode === 'tiktok' ? 'tiktok' : 'engagement';
+    try {
+        localStorage.setItem('tiktoklive.rankingMode', rankingMode);
+    } catch (e) { /* ignora: preferência só em memória */ }
+    if (rankingModeEngagementBtn) {
+        rankingModeEngagementBtn.classList.toggle('active', rankingMode !== 'tiktok');
+    }
+    if (rankingModeTikTokBtn) {
+        rankingModeTikTokBtn.classList.toggle('active', rankingMode === 'tiktok');
+    }
+    if (reload) loadRanking();
+}
+
+// Sincroniza o botão ativo com o modo persistido (o carregamento inicial
+// do ranking já acontece em loadInitialState/event stream).
+applyRankingMode(rankingMode, false);
+
+if (rankingModeEngagementBtn) {
+    rankingModeEngagementBtn.addEventListener('click', () => applyRankingMode('engagement'));
+}
+if (rankingModeTikTokBtn) {
+    rankingModeTikTokBtn.addEventListener('click', () => applyRankingMode('tiktok'));
 }
 if (generateReportBtn) {
     generateReportBtn.addEventListener('click', () => loadReport());
@@ -2488,7 +2526,7 @@ function riskLabel(level) {
 async function loadRanking() {
     if (!rankingTableBody) return;
     try {
-        const response = await fetch('/api/ranking');
+        const response = await fetch('/api/ranking?mode=' + encodeURIComponent(rankingMode));
         const data = await response.json();
         renderRanking(data);
     } catch (error) {
@@ -2496,17 +2534,31 @@ async function loadRanking() {
     }
 }
 
+// Tiers visuais do top 3 no modo TikTok — espelham os badges do ranking
+// in-room da live no TikTok (presentes LIVE Ranking Crown/Headband/Medal).
+const TIKTOK_TIER_ICONS = {
+    crown:    { icon: '👑', cls: 'rank-top-1', label: 'Coroa do Ranking (1º lugar)' },
+    headband: { icon: '🎀', cls: 'rank-top-2', label: 'Faixa do Ranking (2º lugar)' },
+    medal:    { icon: '🏅', cls: 'rank-top-3', label: 'Medalha do Ranking (3º lugar)' }
+};
+
 function renderRanking(ranking) {
     if (!rankingTableBody) return;
     rankingTableBody.innerHTML = '';
+    const isTikTok = (ranking.mode || rankingMode) === 'tiktok';
+    if (rankingScoreTh) {
+        rankingScoreTh.textContent = isTikTok ? 'Valor 💎' : 'Score';
+    }
     const rows = ranking.userRanks || ranking.userRanks || [];
     if (!rows.length) {
         const tr = document.createElement('tr');
         const td = document.createElement('td');
-        td.colSpan = 8;
+        td.colSpan = 9;
         td.style.textAlign = 'center';
         td.style.color = 'var(--text-muted)';
-        td.textContent = 'Sem dados de engajamento ainda.';
+        td.textContent = isTikTok
+            ? 'Nenhum presente recebido ainda — o ranking TikTok ordena pelo valor (💎) dos presentes.'
+            : 'Sem dados de engajamento ainda.';
         tr.appendChild(td);
         rankingTableBody.appendChild(tr);
         return;
@@ -2516,10 +2568,22 @@ function renderRanking(ranking) {
         tr.className = 'user-row';
         tr.dataset.uniqueId = user.uniqueId || '';
 
+        // Pódio do modo TikTok: destaca as 3 primeiras posições.
+        const tier = isTikTok ? TIKTOK_TIER_ICONS[user.tier] : null;
+        if (tier) tr.classList.add(tier.cls);
+
         const tdRank = document.createElement('td');
         tdRank.setAttribute('data-label', '#');
         tdRank.className = 'ranking-rank';
-        tdRank.textContent = String(index + 1);
+        if (tier) {
+            const span = document.createElement('span');
+            span.className = 'rank-tier';
+            span.title = tier.label;
+            span.textContent = tier.icon + ' ' + (index + 1);
+            tdRank.appendChild(span);
+        } else {
+            tdRank.textContent = String(index + 1);
+        }
         tr.appendChild(tdRank);
 
         const tdUser = document.createElement('td');
@@ -2537,14 +2601,21 @@ function renderRanking(ranking) {
         tr.appendChild(tdUser);
 
         const tdScore = document.createElement('td');
-        tdScore.setAttribute('data-label', 'Score');
-        tdScore.textContent = (user.score != null ? user.score.toFixed(1) : '0');
+        tdScore.setAttribute('data-label', isTikTok ? 'Valor 💎' : 'Score');
+        tdScore.textContent = isTikTok
+            ? String(user.diamonds || 0)
+            : (user.score != null ? user.score.toFixed(1) : '0');
         tr.appendChild(tdScore);
 
         const tdGifts = document.createElement('td');
         tdGifts.setAttribute('data-label', 'Presentes');
         tdGifts.textContent = String(user.giftCount || 0);
         tr.appendChild(tdGifts);
+
+        const tdDiamonds = document.createElement('td');
+        tdDiamonds.setAttribute('data-label', '💎');
+        tdDiamonds.textContent = String(user.diamonds || 0);
+        tr.appendChild(tdDiamonds);
 
         const tdShares = document.createElement('td');
         tdShares.setAttribute('data-label', 'Compart.');
@@ -2574,7 +2645,7 @@ function renderRanking(ranking) {
         const trTotal = document.createElement('tr');
         trTotal.style.fontWeight = '600';
         const tdLabel = document.createElement('td');
-        tdLabel.colSpan = 7;
+        tdLabel.colSpan = 8;
         tdLabel.style.textAlign = 'right';
         tdLabel.textContent = 'Total de curtidas da live:';
         const tdValue = document.createElement('td');

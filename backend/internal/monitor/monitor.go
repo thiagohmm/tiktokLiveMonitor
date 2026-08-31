@@ -624,19 +624,19 @@ func (m *Monitor) handleChatMessage(data EventData) []pendingEmit {
 	user := extractFromData(data)
 	now := time.Now().UnixMilli()
 
-	commentLower := strings.ToLower(comment)
 	senderKey := normalizeID(user.UniqueID)
 
+	// Comparação byte a byte (cópia e cola exata): mesma caixa e mesmos espaços.
 	repeats := 0
 	for _, msg := range m.chatBuffer {
 		if normalizeID(msg.UniqueID) == senderKey &&
-			strings.ToLower(strings.TrimSpace(msg.Comment)) == commentLower &&
+			strings.TrimSpace(msg.Comment) == comment &&
 			(now-msg.Timestamp) < repeatWindowMs {
 			repeats++
 		}
 	}
 
-	seqKey := fmt.Sprintf(`["%s","%s"]`, senderKey, commentLower)
+	seqKey := fmt.Sprintf(`["%s","%s"]`, senderKey, comment)
 	if repeats >= repeatsRequired-1 {
 		if !m.repeatAlerted[seqKey] {
 			m.repeatAlerted[seqKey] = true

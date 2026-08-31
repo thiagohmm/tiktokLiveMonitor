@@ -105,12 +105,33 @@ const (
 	RiskLevelCritical = "critical"
 )
 
+// TikTok-style visual tiers for the in-room gifter ranking (mirrors the
+// LIVE Ranking gifts/badges TikTok shows on stream: crown for #1, headband
+// for #2, medal for #3).
+const (
+	TierCrown    = "crown"    // 1st place
+	TierHeadband = "headband" // 2nd place
+	TierMedal    = "medal"    // 3rd place
+)
+
+// Ranking modes.
+const (
+	ModeEngagement = "engagement" // default weighted engagement score
+	ModeTikTok     = "tiktok"     // TikTok in-room ranking: pure gift (diamond) value
+)
+
 // UserRank is a single participant's engagement ranking for a live.
 type UserRank struct {
 	UniqueID      string  `json:"uniqueId"`
 	Nickname      string  `json:"nickname"`
 	Score         float64 `json:"score"`
 	GiftScore     float64 `json:"giftScore"`
+	// Diamonds is the total value of gifts sent by the user (sum of gift
+	// units), the metric TikTok's in-room live ranking is based on.
+	Diamonds int `json:"diamonds"`
+	// Tier holds the TikTok visual tier for the gifter ranking top 3
+	// (crown / headband / medal); empty outside that podium.
+	Tier string `json:"tier,omitempty"`
 	MessageCount  int     `json:"messageCount"`
 	QuestionCount int     `json:"questionCount"`
 	GiftCount     int     `json:"giftCount"`
@@ -128,6 +149,8 @@ type LiveRanking struct {
 	UpdatedAt  string     `json:"updatedAt"`
 	TotalUsers int        `json:"totalUsers"`
 	UserRanks  []UserRank `json:"userRanks"`
+	// Mode is the ranking criterion in use ("engagement" or "tiktok").
+	Mode string `json:"mode,omitempty"`
 	// TotalLikes is the room-level cumulative like counter reported by the
 	// TikTok stream (authoritative overall like count for the live).
 	TotalLikes int64 `json:"totalLikes,omitempty"`
