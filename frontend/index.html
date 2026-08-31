@@ -386,6 +386,9 @@
             color: var(--text-muted);
             text-transform: uppercase;
             letter-spacing: 0.04em;
+            overflow-wrap: break-word;
+            word-break: break-word;
+            hyphens: auto;
         }
         .report-text {
             white-space: pre-wrap;
@@ -1464,8 +1467,9 @@
             </div>
         </div>
 
+    <script src="/config.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="/auth.js"></script>
-    <script src="renderer.js?v={{ .BuildVersion }}"></script>
+    <script src="/renderer.js"></script>
 </body>
 </html>

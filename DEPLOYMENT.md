@@ -1,15 +1,48 @@
-# Implantação SaaS
+# Implantação
+
+## Estrutura
+
+- `backend/` — API Go (SSE em `/events` + REST em `/api/*`). Porta `3001`.
+- `frontend/` — UI estática (HTML/JS puro). Servida por nginx (Docker),
+  Vercel ou dev server local. O `frontend/config.js` define a base da API.
+
+```
+frontend (nginx :80) ──/api/*, /events──▶ backend Go (:3001) ──▶ PostgreSQL
+```
 
 ## Teste com Docker Compose
 
 1. Copie `.env.example` para `.env`.
 2. Troque `POSTGRES_PASSWORD` e use a mesma senha em `DATABASE_URL`.
 3. Para um smoke test sem login, use `AUTH_ENABLED=0`.
-4. Execute `docker compose up --build -d`.
-5. Verifique `http://IP_DO_SERVIDOR:3001/api/readiness`.
+4. Execute `docker compose up --build -d` (ou `./docker-test.sh`).
+5. Abra `http://localhost:${FRONTEND_PORT:-8080}` no navegador.
 
-O Compose inicia a aplicação e um PostgreSQL persistente. O backend cria as
-tabelas operacionais automaticamente.
+O compose sobe a aplicação (backend + frontend) e um PostgreSQL persistente.
+O backend cria as tabelas operacionais automaticamente. O nginx do frontend
+faz proxy de `/api/*` e `/events` para o backend, mantendo tudo na mesma
+origem (sem CORS).
+
+## Desenvolvimento local (sem Docker)
+
+Terminal 1 — backend:
+
+```sh
+cd backend
+export DATABASE_URL=... SUPABASE_JWT_SECRET=... # ou AUTH_ENABLED=0
+go run .
+```
+
+Terminal 2 — frontend (aponta para o backend em outra origem):
+
+```sh
+cd frontend
+TLM_API_BASE=http://localhost:3001 npm run dev
+# http://localhost:3000
+```
+
+Outra origem exige CORS liberado no backend:
+`CORS_ALLOWED_ORIGINS=http://localhost:3000`.
 
 ## Ativar login e aprovação de clientes
 
@@ -21,25 +54,25 @@ tabelas operacionais automaticamente.
 5. Preencha no `.env`:
    `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_JWT_SECRET` e
    `SUPABASE_SERVICE_ROLE_KEY`.
-6. Defina `AUTH_ENABLED=1` e recrie apenas a aplicação:
-   `docker compose up -d --force-recreate tiktok-live-monitor`.
+6. Recrie apenas o backend: `docker compose up -d --force-recreate backend`.
 
 Novos clientes cadastrados pela tela administrativa ficam em **Aguardando
 aprovação**. Depois da confirmação do pagamento, o administrador usa
 **Aprovar**. Suspensão e validade da assinatura também são controladas nessa
-tela, disponível separadamente em `/admin.html`. O servidor só entrega essa
-página para uma sessão ativa com papel `admin`; assinantes recebem acesso
-negado.
+tela, disponível separadamente em `/admin.html`. O backend só atende os
+endpoints `/api/admin/*` para uma sessão ativa com papel `admin`; o frontend
+também restringe o acesso à página.
 
 Nunca envie `SUPABASE_SERVICE_ROLE_KEY` ao navegador, à Vercel como variável
 pública ou ao repositório. Ela é usada somente pelo backend Go.
 
 ## Vercel
 
-Este backend mantém conexão longa com o TikTok e SSE, portanto deve continuar
-em um servidor/container persistente. A Vercel hospeda os arquivos web e usa
-as regras de `vercel.json` como proxy para a URL pública HTTPS do backend.
-Substitua `https://SEU_BACKEND` antes do deploy.
+O backend mantém conexão longa com o TikTok e SSE, portanto deve continuar em
+um servidor/container persistente. A Vercel hospeda os arquivos de
+`frontend/` e usa as regras de `frontend/vercel.json` como proxy para a URL
+pública HTTPS do backend. Substitua `https://SEU_BACKEND` antes do deploy e
+defina `CORS_ALLOWED_ORIGINS` com a URL da Vercel no `.env` do backend.
 
-Na Vercel/Supabase, use a URL do pooler PostgreSQL em `DATABASE_URL`. Não use o
-hostname `postgres`/`db`, que existe somente na rede do Docker Compose.
+Na Vercel/Supabase, use a URL do pooler PostgreSQL em `DATABASE_URL`. Não use
+o hostname `postgres`/`db`, que existe somente na rede do Docker Compose.

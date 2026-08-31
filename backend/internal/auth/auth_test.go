@@ -86,16 +86,24 @@ func TestTokenFromRequestAcceptsHTTPOnlyCookie(t *testing.T) {
 	}
 }
 
-func TestAdminPageRequiresAdminRole(t *testing.T) {
+// TestAdminAPIRequiresAdminRole garante que os endpoints /api/admin/* só
+// atendem admins (a página admin.html é servida pelo frontend, que aplica a
+// mesma restrição no cliente).
+func TestAdminAPIRequiresAdminRole(t *testing.T) {
 	cfg := testAuthConfig()
-	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := RequireAdmin(w, r, cfg); !ok {
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 
-	t.Run("sem sessão redireciona ao login", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/admin.html", nil)
+	t.Run("sem sessão recebe unauthenticated", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/admin/lives", nil)
 		rec := httptest.NewRecorder()
 		cfg.Middleware(next).ServeHTTP(rec, req)
-		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login.html?next=%2Fadmin.html" {
-			t.Fatalf("status/location = %d %q", rec.Code, rec.Header().Get("Location"))
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", rec.Code)
 		}
 	})
 
@@ -105,7 +113,7 @@ func TestAdminPageRequiresAdminRole(t *testing.T) {
 			"exp":          time.Now().Add(time.Hour).Unix(),
 			"app_metadata": map[string]any{"role": "subscriber", "active": true},
 		})
-		req := httptest.NewRequest(http.MethodGet, "/admin.html", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/admin/lives", nil)
 		req.AddCookie(&http.Cookie{Name: AccessTokenCookie, Value: token})
 		rec := httptest.NewRecorder()
 		cfg.Middleware(next).ServeHTTP(rec, req)
@@ -120,7 +128,7 @@ func TestAdminPageRequiresAdminRole(t *testing.T) {
 			"exp":          time.Now().Add(time.Hour).Unix(),
 			"app_metadata": map[string]any{"role": "admin", "active": true},
 		})
-		req := httptest.NewRequest(http.MethodGet, "/admin.html", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/admin/lives", nil)
 		req.AddCookie(&http.Cookie{Name: AccessTokenCookie, Value: token})
 		rec := httptest.NewRecorder()
 		cfg.Middleware(next).ServeHTTP(rec, req)

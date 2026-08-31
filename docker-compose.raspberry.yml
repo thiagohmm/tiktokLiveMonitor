@@ -8,13 +8,16 @@
 #   docker save tiktok-live-monitor | ssh pi 'docker load'
 #   (na Pi) docker compose -f docker-compose.raspberry.yml up -d
 #
-# Sem llama-server/GGUF e sem agente Python: nada de porta 8080, shm_size ou
-# download de modelos. O primeiro boot é só a compilação Go+CGO do SQLite.
+# Sem llama-server/GGUF e sem agente Python: nada de shm_size ou download de
+# modelos. O primeiro boot é só a compilação Go (puro, sem CGO).
+#
+# Este compose sobe apenas a API Go (frontend em /frontend: nginx/Vercel/dev
+# server local apontando para http://PI_IP:3001).
 
 services:
   tiktok-live-monitor:
     build:
-      context: .
+      context: ./backend
       args:
         # Na Pi a compilação é lenta: pula os testes por padrão.
         SKIP_TESTS: ${SKIP_TESTS:-1}
@@ -35,19 +38,12 @@ services:
       SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
       DATABASE_URL: ${DATABASE_URL:-}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       AUTH_MAX_LOGIN_ATTEMPTS: ${AUTH_MAX_LOGIN_ATTEMPTS:-5}
       AUTH_LOCKOUT_MINUTES: ${AUTH_LOCKOUT_MINUTES:-15}
       AUTH_THEME_PINK: ${AUTH_THEME_PINK:-#fe2c55}
       AUTH_THEME_CYAN: ${AUTH_THEME_CYAN:-#25f4ee}
       AUTH_THEME_BG: ${AUTH_THEME_BG:-#0b0d12}
-    volumes:
-      # Persiste apenas o feedback.db (SQLite do app). O restante de /app vem
-      # sempre da imagem — assim atualizações de binário/bridge pegam no
-      # primeiro restart, sem volume congelando arquivos antigos.
-      - monitor-data:/data
-      # Bind mount (lê) da UI: alterações em web/ no repo são servidas direto
-      # após restart do container, sem rebuild da imagem.
-      - ./web:/app/web:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3001/api/readiness || exit 1"]
@@ -55,6 +51,3 @@ services:
       timeout: 10s
       start_period: 60s
       retries: 5
-
-volumes:
-  monitor-data:

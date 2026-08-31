@@ -1,0 +1,10 @@
+{
+  "name": "tiktok-live-monitor-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "UI do TikTok Live Monitor (estática, consumida via /api e /events do backend)",
+  "scripts": {
+    "dev": "node server.js",
+    "build": "node build.mjs"
+  }
+}

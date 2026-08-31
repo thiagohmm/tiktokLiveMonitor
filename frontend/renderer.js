@@ -693,7 +693,7 @@ function ensureBrowserChart() {
     }
     return new Promise((resolve, reject) => {
         const script = document.createElement('script');
-        script.src = `${window.location.origin}/vendor/chart.js`;
+        script.src = `${window.location.origin}/vendor/chart.umd.js`;
         script.onload = () => resolve();
         script.onerror = () => reject(new Error('Não foi possível carregar Chart.js.'));
         document.head.appendChild(script);

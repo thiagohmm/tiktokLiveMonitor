@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -45,14 +44,11 @@ func setupTestServer(t *testing.T) (*HTTPServer, model.Repository, string, *moni
 		t.Skipf("skip test (TikTok API unavailable): %v", err)
 	}
 
-	os.MkdirAll(filepath.Join(dir, "web"), 0755)
-
 	ctrl := controller.NewAppController(mon, repo)
 
 	srv := New(Config{
-		Host:   "127.0.0.1",
-		Port:   0,
-		WebDir: filepath.Join(dir, "web"),
+		Host: "127.0.0.1",
+		Port: 0,
 	}, ctrl)
 
 	return srv, repo, dir, mon
@@ -977,7 +973,7 @@ func TestGoalSSEBroadcast(t *testing.T) {
 				}
 			case <-time.After(5 * time.Second):
 				return false
-		}
+			}
 		}
 	}
 

@@ -6,17 +6,39 @@ import (
 	"strings"
 )
 
-// rebindQuery converts '?' placeholders into PostgreSQL '$n' parameters.
+// rebindQuery converts '?' placeholders into PostgreSQL '$n' parameters,
+// ignoring '?' characters that appear inside single-quoted string literals.
 func rebindQuery(query string) string {
 	var b strings.Builder
 	n := 1
-	for _, r := range query {
-		if r == '?' {
-			b.WriteString(fmt.Sprintf("$%d", n))
-			n++
+	inString := false
+	for i := 0; i < len(query); i++ {
+		r := rune(query[i])
+		if inString {
+			if r == '\'' {
+				// A doubled '' is an escaped quote, not the end of the literal.
+				if i+1 < len(query) && query[i+1] == '\'' {
+					b.WriteString("''")
+					i++
+				} else {
+					b.WriteRune('\'')
+					inString = false
+				}
+				continue
+			}
+			b.WriteRune(r)
 			continue
 		}
-		b.WriteRune(r)
+		switch r {
+		case '\'':
+			inString = true
+			b.WriteRune(r)
+		case '?':
+			b.WriteString(fmt.Sprintf("$%d", n))
+			n++
+		default:
+			b.WriteRune(r)
+		}
 	}
 	return b.String()
 }

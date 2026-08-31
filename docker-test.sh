@@ -4,8 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-PORT="${PORT:-3001}"
-BASE_URL="http://localhost:${PORT}"
+# A UI (nginx) é a porta pública; o backend fica interno na rede do compose.
+FRONTEND_PORT="${FRONTEND_PORT:-8080}"
+BASE_URL="http://localhost:${FRONTEND_PORT}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Docker não encontrado. Instale Docker Desktop ou docker-ce."
@@ -27,7 +28,7 @@ set -a
 source .env 2>/dev/null || true
 set +a
 
-echo "==> Build e subida (porta ${PORT})..."
+echo "==> Build e subida (frontend na porta ${FRONTEND_PORT})..."
 docker compose up --build -d
 
 echo "==> Aguardando healthcheck..."
@@ -52,7 +53,7 @@ auth_enabled="${auth_enabled// /}"
 
 echo ""
 echo "────────────────────────────────────────"
-echo "  App:   ${BASE_URL}"
+echo "  App:   ${BASE_URL} (nginx -> backend Go)"
 if [[ "$auth_enabled" == "false" ]]; then
   echo "  Auth:  desativada (AUTH_ENABLED=0)"
 else

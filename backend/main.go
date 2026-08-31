@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"os"
-	"path/filepath"
 	"strconv"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
@@ -16,15 +15,6 @@ import (
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.SetPrefix("[tiktok-live-monitor] ")
-
-	baseDir, err := os.Getwd()
-	if err != nil {
-		log.Fatalf("Failed to get working directory: %v", err)
-	}
-	if filepath.Base(baseDir) == "cmd" || filepath.Base(baseDir) == "tiktok-live-monitor" {
-		baseDir = filepath.Dir(baseDir)
-	}
-	log.Printf("Base directory: %s", baseDir)
 
 	// Model layer: open the PostgreSQL (Supabase) repository.
 	repo, err := database.OpenFromEnv()
@@ -50,7 +40,8 @@ func main() {
 	ctrl := controller.NewAppController(mon, repo)
 	ctrl.SetMessageCache(msgCache)
 
-	// View layer: HTTP server
+	// View layer: HTTP API server (SSE + REST). O frontend é servido
+	// separadamente (frontend/) e faz proxy/rewrite para esta API.
 	port := 3001
 	if p := os.Getenv("PORT"); p != "" {
 		if n, err := strconv.Atoi(p); err == nil && n > 0 {
@@ -58,14 +49,13 @@ func main() {
 		}
 	}
 	srv := view.New(view.Config{
-		Host:      os.Getenv("HOST"),
-		Port:      port,
-		WebDir:    filepath.Join(baseDir, "web"),
+		Host: os.Getenv("HOST"),
+		Port: port,
 	}, ctrl)
 
 	ctx := context.Background()
-	log.Println("Starting TikTok Live Monitor (Go backend)...")
-	log.Printf("Open http://localhost:%d in your browser", port)
+	log.Println("Starting TikTok Live Monitor (Go API)...")
+	log.Printf("API disponível em http://localhost:%d/api/readiness", port)
 	if err := srv.Start(ctx); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}

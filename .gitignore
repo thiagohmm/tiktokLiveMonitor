@@ -8,6 +8,7 @@ node_modules/
 
 # Build artifacts
 dist/
+frontend/dist/
 dist-win-fresh/
 executables/
 release/
@@ -44,5 +45,6 @@ yarn-error.log*
 
 # Go build
 /tiktok-live-monitor
+/backend/tiktok-live-monitor
+/backend/tiktokmonitor
 /main
-/tiktokmonitor

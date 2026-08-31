@@ -8,6 +8,11 @@
 #
 # Raspberry Pi:
 #   docker compose -f docker-compose.raspberry.yml up -d
+#
+# Serviços:
+#   postgres  — banco local
+#   backend   — API Go (SSE + REST) em :3001 (interna)
+#   frontend  — nginx com a UI em :${FRONTEND_PORT:-8080}, faz proxy p/ backend
 
 services:
   postgres:
@@ -25,16 +30,14 @@ services:
       timeout: 5s
       retries: 20
 
-  tiktok-live-monitor:
+  backend:
     build:
-      context: .
+      context: ./backend
       args:
         SKIP_TESTS: ${SKIP_TESTS:-1}
     env_file:
       - path: .env
         required: false
-    ports:
-      - "${PORT:-3001}:3001"
     environment:
       HOST: "0.0.0.0"
       PORT: "3001"
@@ -44,12 +47,16 @@ services:
       SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
       DATABASE_URL: ${DATABASE_URL:-postgres://tlm:tlm-local-dev-only@postgres:5432/tiktok_live_monitor?sslmode=disable}
+      # CORS para o dev server do frontend (porta 3000).
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       AUTH_MAX_LOGIN_ATTEMPTS: ${AUTH_MAX_LOGIN_ATTEMPTS:-5}
       AUTH_LOCKOUT_MINUTES: ${AUTH_LOCKOUT_MINUTES:-15}
       AUTH_THEME_PINK: ${AUTH_THEME_PINK:-#fe2c55}
       AUTH_THEME_CYAN: ${AUTH_THEME_CYAN:-#25f4ee}
       AUTH_THEME_BG: ${AUTH_THEME_BG:-#0b0d12}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+    ports:
+      - "${TLM_BACKEND_PORT:-3001}:3001"
     depends_on:
       postgres:
         condition: service_healthy
@@ -60,6 +67,23 @@ services:
       timeout: 5s
       start_period: 45s
       retries: 5
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        BACKEND_URL: "http://backend:3001"
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
 
 volumes:
   postgres-data:

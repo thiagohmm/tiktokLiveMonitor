@@ -70,15 +70,11 @@ func LoadConfigFromEnv() Config {
 }
 
 // PublicPath reports whether a request path can be accessed without a token.
-// Static web assets stay public; API routes and SSE require authentication.
+// O backend é uma API pura: apenas a configuração pública de login e o
+// readiness são acessíveis sem token; todo o resto (/api/* e /events) exige
+// autenticação. Os arquivos da UI não são mais servidos pelo backend.
 func PublicPath(path string) bool {
-	if path == "/admin.html" {
-		return false
-	}
-	if path == "/login.html" || path == "/auth.js" || path == "/api/auth/config" || path == "/api/auth/login" || path == "/api/readiness" {
-		return true
-	}
-	if strings.HasPrefix(path, "/vendor/") {
+	if path == "/api/auth/config" || path == "/api/auth/login" || path == "/api/readiness" {
 		return true
 	}
 	if path == "/events" || strings.HasPrefix(path, "/api/") {
@@ -173,14 +169,12 @@ func (c Config) ValidateToken(tokenString string) (*User, error) {
 	return &User{ID: sub, Email: email, Role: role, Active: active}, nil
 }
 
-// Middleware protects HTTP handlers when auth is enabled.
+// Middleware protects HTTP handlers when auth is enabled. A página /admin.html
+// não é mais servida pelo backend (a UI vive em /frontend); a restrição de
+// papel admin é aplicada nos endpoints /api/admin/* via RequireAdmin.
 func (c Config) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !c.Enabled {
-			if r.URL.Path == "/admin.html" {
-				writeAuthError(w, http.StatusServiceUnavailable, "administração indisponível: autenticação não configurada")
-				return
-			}
 			ctx := context.WithValue(r.Context(), userContextKey, &User{Role: "admin", Active: true})
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
@@ -192,19 +186,11 @@ func (c Config) Middleware(next http.Handler) http.Handler {
 
 		user, err := c.ValidateToken(TokenFromRequest(r))
 		if err != nil {
-			if r.URL.Path == "/admin.html" {
-				http.Redirect(w, r, "/login.html?next=%2Fadmin.html", http.StatusSeeOther)
-				return
-			}
 			writeAuthError(w, http.StatusUnauthorized, "não autorizado")
 			return
 		}
 		if !user.Active {
 			writeAuthError(w, http.StatusForbidden, "conta desativada")
-			return
-		}
-		if r.URL.Path == "/admin.html" && user.Role != "admin" {
-			writeAuthError(w, http.StatusForbidden, "acesso exclusivo para administradores")
 			return
 		}
 

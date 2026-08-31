@@ -1351,8 +1351,8 @@ func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
 
 	// Messages (and questions, detected heuristically).
 	msgRows, err := db.query(`
-		SELECT uniqueId, username, COUNT(*) AS n,
-			SUM(CASE WHEN instr(message, '?') > 0 OR lower(message) LIKE 'pq%'
+		SELECT uniqueId, COALESCE((array_agg(username ORDER BY timestamp DESC))[1], '') AS username, COUNT(*) AS n,
+			SUM(CASE WHEN strpos(message, '?') > 0 OR lower(message) LIKE 'pq%'
 			  OR lower(message) LIKE 'por que%' OR lower(message) LIKE 'como%'
 			  OR lower(message) LIKE 'quando%' OR lower(message) LIKE 'qual%'
 			  OR lower(message) LIKE 'quem%' OR lower(message) LIKE 'onde%'
@@ -1391,7 +1391,7 @@ func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
 
 	// Gifts.
 	giftRows, err := db.query(`
-		SELECT uniqueId, nickname, COUNT(*) AS n, SUM(repeat_count) AS total,
+		SELECT uniqueId, COALESCE((array_agg(nickname ORDER BY timestamp DESC))[1], '') AS nickname, COUNT(*) AS n, SUM(repeat_count) AS total,
 			MIN(timestamp) AS first, MAX(timestamp) AS last
 		FROM gifts WHERE live_name = ? GROUP BY uniqueId`, liveName)
 	if err != nil {
@@ -1429,7 +1429,7 @@ func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
 
 	// Shares.
 	shareRows, err := db.query(`
-		SELECT uniqueId, nickname, COUNT(*) AS n,
+		SELECT uniqueId, COALESCE((array_agg(nickname ORDER BY timestamp DESC))[1], '') AS nickname, COUNT(*) AS n,
 			MIN(timestamp) AS first, MAX(timestamp) AS last
 		FROM shares WHERE live_name = ? GROUP BY uniqueId`, liveName)
 	if err != nil {
@@ -1466,7 +1466,7 @@ func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
 
 	// Likes (hearts).
 	likeRows, err := db.query(`
-		SELECT uniqueId, nickname, SUM(like_count) AS n,
+		SELECT uniqueId, COALESCE((array_agg(nickname ORDER BY timestamp DESC))[1], '') AS nickname, SUM(like_count) AS n,
 			MIN(timestamp) AS first, MAX(timestamp) AS last
 		FROM likes WHERE live_name = ? GROUP BY uniqueId`, liveName)
 	if err != nil {

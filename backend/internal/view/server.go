@@ -1,4 +1,8 @@
 // Package view provides the HTTP server (View layer) with SSE and REST API for the TikTok Live Monitor.
+//
+// O backend é uma API pura (SSE + REST): a UI estática vive em /frontend e é
+// servida separadamente (nginx, Vercel ou dev server local), que faz proxy
+// para /api/* e /events.
 package view
 
 import (
@@ -9,96 +13,52 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
-	"text/template"
 	"time"
 
-	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/auth"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 )
 
-// BuildVersion identifies the compiled build. It is injected at link time via
-// -ldflags "-X github.com/thiagohmm/tiktok-live-monitor/internal/view.BuildVersion=..."
-// and used to bust browser caches for static assets (e.g. renderer.js).
-var BuildVersion = "dev"
-
 // HTTPServer is the presentation layer (View) that handles HTTP requests.
 type HTTPServer struct {
-	httpServer *http.Server
-	controller *controller.AppController
-	sseClients map[http.ResponseWriter]bool
-	sseMu      sync.Mutex
-	webDir     string
-	cfg        Config
-	auth       auth.Config
-	admin      *auth.AdminClient
-	lockout    *auth.LoginLockout
-	proxyTrust auth.ProxyTrust
-	theme      auth.ThemeColors
-}
-
-// handleRoot serves the main UI (index.html) with a build-version query string
-// injected into the renderer.js <script> tag to bust browser caches. Any other
-// path is delegated to the static file server.
-func (s *HTTPServer) handleRoot(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.FileServer(http.Dir(s.webDir)).ServeHTTP(w, r)
-		return
-	}
-
-	indexHTML, err := os.ReadFile(filepath.Join(s.webDir, "index.html"))
-	if err != nil {
-		http.Error(w, "Página inicial não encontrada.", http.StatusInternalServerError)
-		return
-	}
-
-	tmpl, err := template.New("index.html").Option("missingkey=error").Parse(string(indexHTML))
-	if err != nil {
-		http.Error(w, "Falha ao renderizar a página.", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-
-	// Cache-busting derivado do tempo de modificação do renderer.js: sempre que o
-	// arquivo mudar no disco, o navegador recarrega o script (resolve cache de
-	// navegador quando a BuildVersion de compilação permanece inalterada).
-	buildVersion := BuildVersion
-	if info, err := os.Stat(filepath.Join(s.webDir, "renderer.js")); err == nil {
-		buildVersion = fmt.Sprintf("dev-%d", info.ModTime().Unix())
-	}
-
-	if err := tmpl.Execute(w, map[string]string{"BuildVersion": buildVersion}); err != nil {
-		log.Printf("[View] Error rendering index.html: %v", err)
-	}
+	httpServer  *http.Server
+	controller  *controller.AppController
+	sseClients  map[http.ResponseWriter]bool
+	sseMu       sync.Mutex
+	cfg         Config
+	auth        auth.Config
+	admin       *auth.AdminClient
+	lockout     *auth.LoginLockout
+	proxyTrust  auth.ProxyTrust
+	theme       auth.ThemeColors
+	corsOrigins []string
 }
 
 // Config holds server configuration.
 type Config struct {
-	Host   string
-	Port   int
-	WebDir string
+	Host string
+	Port int
 }
 
 // New creates a new HTTP server (View).
 func New(cfg Config, ctrl *controller.AppController) *HTTPServer {
 	authCfg := auth.LoadConfigFromEnv()
 	return &HTTPServer{
-		controller: ctrl,
-		sseClients: make(map[http.ResponseWriter]bool),
-		webDir:     cfg.WebDir,
-		cfg:        cfg,
-		auth:       authCfg,
-		admin:      auth.NewAdminClient(authCfg),
-		lockout:    auth.NewLoginLockout(auth.LoadLockoutConfigFromEnv()),
-		proxyTrust: auth.LoadProxyTrustFromEnv(),
-		theme:      auth.LoadThemeFromEnv(),
+		controller:  ctrl,
+		sseClients:  make(map[http.ResponseWriter]bool),
+		cfg:         cfg,
+		auth:        authCfg,
+		admin:       auth.NewAdminClient(authCfg),
+		lockout:     auth.NewLoginLockout(auth.LoadLockoutConfigFromEnv()),
+		proxyTrust:  auth.LoadProxyTrustFromEnv(),
+		theme:       auth.LoadThemeFromEnv(),
+		corsOrigins: LoadCORSOriginsFromEnv(),
 	}
 }
 
@@ -154,17 +114,18 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/admin/users/update", s.handleAdminUsersUpdate)
 	mux.HandleFunc("/api/admin/users/delete", s.handleAdminUsersDelete)
 
-	// Root page: render index.html with a cache-busting build version so the
-	// browser always re-fetches renderer.js after a rebuild. Every other path
-	// is delegated to the static file server.
-	mux.HandleFunc("/", s.handleRoot)
+	// Rota raiz: apenas um aviso de que este é o backend (a UI vive em /frontend).
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		fmt.Fprint(w, "tiktok-live-monitor backend OK — frontend em /frontend (nginx/Vercel/dev server).\n")
+	})
 
 	handler := s.auth.Middleware(mux)
-
-	// Chart.js vendor.
-	mux.HandleFunc("/vendor/chart.js", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, filepath.Join(s.webDir, "vendor", "chart.umd.js"))
-	})
+	handler = s.cors(handler)
 
 	// Setup monitor event handler via controller.
 	s.controller.GetMonitor().OnEvent(func(eventType string, data monitor.EventData) {
@@ -208,13 +169,13 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 
 	addr := fmt.Sprintf("%s:%d", host, port)
 	s.httpServer = &http.Server{
-		Addr: addr,
+		Addr:    addr,
 		Handler: handler,
 		// Hardening against Slowloris and stuck connections. The SSE handler
 		// clears the write/read deadlines per connection via ResponseController.
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:     30 * time.Second,
+		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 
@@ -234,7 +195,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 		s.httpServer.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("[View] Running at http://%s:%d", host, port)
+	log.Printf("[View] API running at http://%s:%d", host, port)
 	return s.httpServer.ListenAndServe()
 }
 
