@@ -3,10 +3,12 @@ package auth
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -41,6 +43,16 @@ type CreateSubscriberRequest struct {
 	DisplayName           string `json:"displayName"`
 	Notes                 string `json:"notes"`
 	SubscriptionExpiresAt string `json:"subscriptionExpiresAt"`
+}
+
+// SignUpRequest is the public self-service registration payload.
+// Role and active are never accepted from the client: every signup is a
+// pending subscriber until an admin confirms payment.
+type SignUpRequest struct {
+	Email       string `json:"email"`
+	Password    string `json:"password"`
+	DisplayName string `json:"displayName"`
+	Notes       string `json:"notes"`
 }
 
 type UpdateSubscriberRequest struct {
@@ -146,7 +158,46 @@ func (a *AdminClient) ListSubscribers() ([]SubscriberProfile, error) {
 			UpdatedAt:             row.UpdatedAt,
 		})
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Active != out[j].Active {
+			return !out[i].Active && out[j].Active
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
 	return out, nil
+}
+
+// SignUpPending creates a subscriber that cannot log in until an admin
+// approves the account after payment. Extra JSON fields such as role/active
+// are ignored because they are not part of SignUpRequest.
+func (a *AdminClient) SignUpPending(req SignUpRequest) (*SubscriberProfile, error) {
+	profile, err := a.CreateSubscriber(CreateSubscriberRequest{
+		Email:       req.Email,
+		Password:    req.Password,
+		DisplayName: req.DisplayName,
+		Notes:       req.Notes,
+	})
+	if err != nil {
+		if isDuplicateUserError(err) {
+			return nil, ErrDuplicateSignup
+		}
+		return nil, err
+	}
+	return profile, nil
+}
+
+// ErrDuplicateSignup is returned when the e-mail is already registered.
+var ErrDuplicateSignup = errors.New("este e-mail já está cadastrado")
+
+func isDuplicateUserError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "already been registered") ||
+		strings.Contains(msg, "already exists") ||
+		strings.Contains(msg, "user_repeated_signup") ||
+		strings.Contains(msg, "duplicate")
 }
 
 // CreateSubscriber creates a Supabase Auth user and matching profile row.

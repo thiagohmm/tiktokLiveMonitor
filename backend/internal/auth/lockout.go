@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// SignupLockoutIdentity is the lockout key used to rate-limit public
+// account creation per client IP (independent from login attempts).
+const SignupLockoutIdentity = "*signup*"
+
 // LockoutConfig controls brute-force protection on the login endpoint.
 type LockoutConfig struct {
 	MaxAttempts int
@@ -37,7 +41,7 @@ func LoadLockoutConfigFromEnv() LockoutConfig {
 }
 
 type lockoutEntry struct {
-	failures   int
+	failures    int
 	lockedUntil time.Time
 	lastSeen    time.Time
 }
@@ -77,11 +81,11 @@ func (l *LoginLockout) Config() LockoutConfig {
 }
 
 type LockoutStatus struct {
-	Locked          bool      `json:"locked"`
-	Remaining       int       `json:"remainingAttempts"`
-	RetryAfterSec   int       `json:"retryAfterSec,omitempty"`
-	LockedUntil     time.Time `json:"lockedUntil,omitempty"`
-	MaxAttempts     int       `json:"maxAttempts"`
+	Locked        bool      `json:"locked"`
+	Remaining     int       `json:"remainingAttempts"`
+	RetryAfterSec int       `json:"retryAfterSec,omitempty"`
+	LockedUntil   time.Time `json:"lockedUntil,omitempty"`
+	MaxAttempts   int       `json:"maxAttempts"`
 }
 
 func lockoutKey(email, ip string) string {

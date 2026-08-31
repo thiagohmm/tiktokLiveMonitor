@@ -190,6 +190,27 @@
         };
     }
 
+    async function signUp(payload) {
+        const response = await nativeFetch('/api/auth/signup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                email: String((payload && payload.email) || '').trim(),
+                password: String((payload && payload.password) || ''),
+                displayName: String((payload && payload.displayName) || '').trim(),
+                notes: String((payload && payload.notes) || '').trim(),
+            }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const err = new Error(data.error || 'Não foi possível concluir o cadastro.');
+            err.locked = !!data.locked;
+            err.retryAfterSec = data.retryAfterSec || 0;
+            throw err;
+        }
+        return data;
+    }
+
     async function signIn(email, password) {
         const response = await nativeFetch('/api/auth/login', {
             method: 'POST',
@@ -293,5 +314,6 @@
         requireSession,
         signIn,
         signOut,
+        signUp,
     };
 })();

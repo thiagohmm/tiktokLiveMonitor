@@ -4,6 +4,7 @@
     const message = byId('pageMessage');
     const usersBody = byId('usersBody');
     const livesBody = byId('livesBody');
+    const pendingBanner = byId('pendingBanner');
 
     function showMessage(text, kind = 'error') {
         message.textContent = text;
@@ -51,9 +52,22 @@
         return button;
     }
 
-    function renderUsers(users) {
+    function renderUsers(users, pendingCount) {
         usersBody.replaceChildren();
         const subscribers = (users || []).filter(user => user.role !== 'admin');
+        const pending = typeof pendingCount === 'number'
+            ? pendingCount
+            : subscribers.filter(user => !user.active).length;
+        if (pendingBanner) {
+            if (pending > 0) {
+                pendingBanner.textContent = pending === 1
+                    ? '1 cadastro aguardando confirmação de pagamento.'
+                    : pending + ' cadastros aguardando confirmação de pagamento.';
+                pendingBanner.classList.add('visible');
+            } else {
+                pendingBanner.classList.remove('visible');
+            }
+        }
         if (!subscribers.length) {
             const row = document.createElement('tr');
             const td = cell(row, 'Nenhum assinante cadastrado.');
@@ -63,18 +77,23 @@
         }
         subscribers.forEach(user => {
             const row = document.createElement('tr');
+            if (!user.active) row.className = 'pending-row';
             cell(row, user.email);
             cell(row, user.displayName);
             const statusCell = document.createElement('td');
             const badge = document.createElement('span');
             badge.className = `badge ${user.active ? 'approved' : 'pending'}`;
-            badge.textContent = user.active ? 'Aprovado' : 'Aguardando aprovação';
+            badge.textContent = user.active ? 'Aprovado' : 'Aguardando pagamento';
             statusCell.appendChild(badge);
             row.appendChild(statusCell);
             cell(row, formatDate(user.subscriptionExpiresAt));
             cell(row, user.notes);
             const actions = document.createElement('td');
-            actions.appendChild(actionButton(user.active ? 'Suspender' : 'Aprovar', 'secondary', () => toggleUser(user)));
+            actions.appendChild(actionButton(
+                user.active ? 'Suspender' : 'Aprovar pagamento',
+                user.active ? 'secondary' : 'approve',
+                () => toggleUser(user)
+            ));
             actions.appendChild(actionButton('Remover', 'danger', () => deleteUser(user)));
             row.appendChild(actions);
             usersBody.appendChild(row);
@@ -83,7 +102,8 @@
 
     async function loadUsers() {
         try {
-            renderUsers((await api('/api/admin/users')).users || []);
+            const payload = await api('/api/admin/users');
+            renderUsers(payload.users || [], payload.pendingCount);
         } catch (error) {
             showMessage(error.message);
         }
@@ -114,11 +134,22 @@
 
     async function toggleUser(user) {
         try {
+            const body = { id: user.id, active: !user.active };
+            if (!user.active && !user.subscriptionExpiresAt) {
+                const expires = new Date();
+                expires.setDate(expires.getDate() + 30);
+                body.subscriptionExpiresAt = expires.toISOString();
+            }
             await api('/api/admin/users/update', {
                 method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: user.id, active: !user.active }),
+                body: JSON.stringify(body),
             });
-            showMessage(user.active ? 'Assinante suspenso.' : 'Pagamento aprovado e acesso liberado.', 'success');
+            showMessage(user.active
+                ? 'Assinante suspenso.'
+                : (user.subscriptionExpiresAt
+                    ? 'Pagamento aprovado e acesso liberado.'
+                    : 'Pagamento aprovado. Acesso liberado por 30 dias.'),
+                'success');
             await loadUsers();
         } catch (error) {
             showMessage(error.message);

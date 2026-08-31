@@ -74,7 +74,7 @@ func LoadConfigFromEnv() Config {
 // readiness são acessíveis sem token; todo o resto (/api/* e /events) exige
 // autenticação. Os arquivos da UI não são mais servidos pelo backend.
 func PublicPath(path string) bool {
-	if path == "/api/auth/config" || path == "/api/auth/login" || path == "/api/readiness" {
+	if path == "/api/auth/config" || path == "/api/auth/login" || path == "/api/auth/signup" || path == "/api/readiness" {
 		return true
 	}
 	if path == "/events" || strings.HasPrefix(path, "/api/") {

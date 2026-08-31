@@ -31,7 +31,7 @@
                 var(--bg);
         }
         .card {
-            width: min(420px, 100%);
+            width: min(440px, 100%);
             padding: 28px;
             border-radius: var(--radius);
             background: var(--card);
@@ -47,13 +47,35 @@
             color: var(--text-muted);
             line-height: 1.5;
         }
+        .tabs {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+            margin-bottom: 18px;
+            padding: 4px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.04);
+        }
+        .tab {
+            padding: 10px 12px;
+            border: 0;
+            border-radius: 9px;
+            background: transparent;
+            color: var(--text-muted);
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .tab.active {
+            color: white;
+            background: linear-gradient(135deg, var(--pink), var(--pink-soft));
+        }
         label {
             display: block;
             margin-bottom: 6px;
             font-size: 0.85rem;
             color: var(--text-muted);
         }
-        input {
+        input, textarea {
             width: 100%;
             margin-bottom: 14px;
             padding: 12px 14px;
@@ -61,16 +83,16 @@
             border: 1px solid var(--border);
             background: rgba(255, 255, 255, 0.05);
             color: var(--text);
+            font: inherit;
         }
-        input:focus {
+        textarea { min-height: 72px; resize: vertical; }
+        input:focus, textarea:focus {
             outline: none;
             border-color: var(--cyan);
             box-shadow: 0 0 0 3px color-mix(in srgb, var(--cyan) 18%, transparent);
         }
-        input:disabled {
-            opacity: 0.6;
-        }
-        button {
+        input:disabled, textarea:disabled { opacity: 0.6; }
+        button[type="submit"], .primary {
             width: 100%;
             padding: 12px 16px;
             border: 0;
@@ -80,34 +102,40 @@
             color: white;
             background: linear-gradient(135deg, var(--pink), var(--pink-soft));
         }
-        button:disabled {
-            opacity: 0.6;
-            cursor: wait;
-        }
-        .error {
+        button:disabled { opacity: 0.6; cursor: wait; }
+        .error, .success {
             display: none;
             margin-bottom: 14px;
             padding: 10px 12px;
             border-radius: 10px;
-            background: rgba(220, 38, 38, 0.15);
-            color: #fecaca;
             font-size: 0.9rem;
+            line-height: 1.45;
         }
-        .error.visible { display: block; }
+        .error { background: rgba(220, 38, 38, 0.15); color: #fecaca; }
+        .success { background: rgba(22, 163, 74, 0.16); color: #bbf7d0; }
+        .error.visible, .success.visible { display: block; }
         .attempts {
             margin: -6px 0 14px;
             font-size: 0.82rem;
             color: var(--text-muted);
         }
         .attempts.hidden { display: none; }
+        .hidden { display: none !important; }
+        .hint { font-size: 0.8rem; color: var(--text-muted); margin: -8px 0 14px; }
     </style>
 </head>
 <body>
     <div class="card">
         <h1>Monitor de Live TikTok</h1>
-        <p>Entre com o e-mail e a senha fornecidos pelo administrador.</p>
+        <div class="tabs">
+            <button class="tab active" type="button" data-tab="login">Entrar</button>
+            <button class="tab" type="button" data-tab="signup">Criar conta</button>
+        </div>
+        <p id="panelHint">Entre com o e-mail e a senha da sua assinatura.</p>
         <div id="loginError" class="error"></div>
+        <div id="loginSuccess" class="success"></div>
         <div id="attemptsInfo" class="attempts hidden"></div>
+
         <form id="loginForm">
             <label for="email">E-mail</label>
             <input id="email" name="email" type="email" autocomplete="username" required>
@@ -115,28 +143,57 @@
             <input id="password" name="password" type="password" autocomplete="current-password" required>
             <button id="loginBtn" type="submit">Entrar</button>
         </form>
+
+        <form id="signupForm" class="hidden">
+            <label for="signupEmail">E-mail</label>
+            <input id="signupEmail" name="email" type="email" autocomplete="email" required>
+            <label for="signupPassword">Senha</label>
+            <input id="signupPassword" name="password" type="password" autocomplete="new-password" minlength="8" required>
+            <div class="hint">Mínimo de 8 caracteres.</div>
+            <label for="signupName">Nome (opcional)</label>
+            <input id="signupName" name="displayName" type="text" autocomplete="name">
+            <label for="signupNotes">Pagamento (opcional)</label>
+            <textarea id="signupNotes" name="notes" placeholder="PIX, nome no comprovante ou outra referência para o administrador aprovar."></textarea>
+            <button id="signupBtn" type="submit">Enviar cadastro</button>
+        </form>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="/config.js"></script>
     <script src="/auth.js"></script>
     <script>
-        const form = document.getElementById('loginForm');
+        const loginForm = document.getElementById('loginForm');
+        const signupForm = document.getElementById('signupForm');
         const errorBox = document.getElementById('loginError');
+        const successBox = document.getElementById('loginSuccess');
         const attemptsInfo = document.getElementById('attemptsInfo');
         const loginBtn = document.getElementById('loginBtn');
+        const signupBtn = document.getElementById('signupBtn');
         const emailInput = document.getElementById('email');
         const passwordInput = document.getElementById('password');
+        const panelHint = document.getElementById('panelHint');
 
         let lockoutTimer = null;
+        let currentTab = 'login';
 
         function showError(message) {
             errorBox.textContent = message;
             errorBox.classList.add('visible');
+            successBox.classList.remove('visible');
         }
 
         function hideError() {
             errorBox.classList.remove('visible');
+        }
+
+        function showSuccess(message) {
+            successBox.textContent = message;
+            successBox.classList.add('visible');
+            errorBox.classList.remove('visible');
+        }
+
+        function hideSuccess() {
+            successBox.classList.remove('visible');
         }
 
         function showAttempts(message) {
@@ -164,6 +221,7 @@
             clearLockoutTimer();
             let remaining = Math.max(1, Number(seconds) || 0);
             setFormLocked(true);
+            signupBtn.disabled = true;
 
             function tick() {
                 const mins = Math.floor(remaining / 60);
@@ -171,11 +229,12 @@
                 const clock = mins > 0
                     ? mins + ' min ' + String(secs).padStart(2, '0') + ' s'
                     : secs + ' s';
-                showError('Muitas tentativas incorretas. Tente novamente em ' + clock + '.');
+                showError('Muitas tentativas. Tente novamente em ' + clock + '.');
                 if (remaining <= 0) {
                     clearLockoutTimer();
                     hideError();
                     setFormLocked(false);
+                    signupBtn.disabled = false;
                     return;
                 }
                 remaining -= 1;
@@ -184,6 +243,26 @@
             tick();
             lockoutTimer = setInterval(tick, 1000);
         }
+
+        function switchTab(tab) {
+            currentTab = tab;
+            document.querySelectorAll('.tab').forEach(button => {
+                button.classList.toggle('active', button.dataset.tab === tab);
+            });
+            loginForm.classList.toggle('hidden', tab !== 'login');
+            signupForm.classList.toggle('hidden', tab !== 'signup');
+            hideError();
+            hideAttempts();
+            if (tab === 'login') {
+                panelHint.textContent = 'Entre com o e-mail e a senha da sua assinatura.';
+            } else {
+                panelHint.textContent = 'Crie a conta. O acesso só é liberado depois que o administrador confirmar o pagamento.';
+            }
+        }
+
+        document.querySelectorAll('.tab').forEach(button => {
+            button.addEventListener('click', () => switchTab(button.dataset.tab));
+        });
 
         (async function init() {
             await window.TLMAuth.loadAuthConfig();
@@ -194,9 +273,10 @@
             }
         })();
 
-        form.addEventListener('submit', async (event) => {
+        loginForm.addEventListener('submit', async (event) => {
             event.preventDefault();
             hideError();
+            hideSuccess();
             loginBtn.disabled = true;
             try {
                 await window.TLMAuth.signIn(emailInput.value, passwordInput.value);
@@ -214,6 +294,34 @@
             } finally {
                 if (!lockoutTimer) {
                     loginBtn.disabled = false;
+                }
+            }
+        });
+
+        signupForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            hideError();
+            hideSuccess();
+            signupBtn.disabled = true;
+            try {
+                const result = await window.TLMAuth.signUp({
+                    email: document.getElementById('signupEmail').value,
+                    password: document.getElementById('signupPassword').value,
+                    displayName: document.getElementById('signupName').value,
+                    notes: document.getElementById('signupNotes').value,
+                });
+                signupForm.reset();
+                switchTab('login');
+                showSuccess(result.message || 'Cadastro recebido. Após o pagamento, o administrador libera o acesso.');
+            } catch (error) {
+                if (error.locked && error.retryAfterSec) {
+                    startLockoutCountdown(error.retryAfterSec);
+                } else {
+                    showError(error.message || 'Não foi possível concluir o cadastro.');
+                }
+            } finally {
+                if (!lockoutTimer) {
+                    signupBtn.disabled = false;
                 }
             }
         });

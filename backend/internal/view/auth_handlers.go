@@ -113,7 +113,7 @@ func (s *HTTPServer) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		if !user.Active {
 			s.lockout.RecordSuccess(email, ip)
-			writeError(w, http.StatusForbidden, "cadastro aguardando aprovação do administrador")
+			writeError(w, http.StatusForbidden, "cadastro aguardando aprovação do administrador após o pagamento")
 			return
 		}
 
@@ -139,6 +139,62 @@ func (s *HTTPServer) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+func (s *HTTPServer) handleAuthSignup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.auth.Enabled {
+		writeError(w, http.StatusBadRequest, "autenticação desativada")
+		return
+	}
+	if s.admin == nil {
+		writeError(w, http.StatusServiceUnavailable, "cadastro indisponível")
+		return
+	}
+
+	ip := auth.ClientIP(r, s.proxyTrust)
+	status := s.lockout.Status(auth.SignupLockoutIdentity, ip)
+	if status.Locked {
+		w.WriteHeader(http.StatusTooManyRequests)
+		writeJSON(w, map[string]any{
+			"error":         "muitas tentativas de cadastro. tente novamente em instantes",
+			"locked":        true,
+			"retryAfterSec": status.RetryAfterSec,
+		})
+		return
+	}
+
+	var body auth.SignUpRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.lockout.RecordFailure(auth.SignupLockoutIdentity, ip)
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+
+	_, err := s.admin.SignUpPending(body)
+	s.lockout.RecordFailure(auth.SignupLockoutIdentity, ip)
+	if err != nil {
+		if errors.Is(err, auth.ErrDuplicateSignup) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		msg := err.Error()
+		if strings.Contains(strings.ToLower(msg), "supabase") {
+			writeError(w, http.StatusBadGateway, "não foi possível concluir o cadastro")
+			return
+		}
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, map[string]any{
+		"pending": true,
+		"message": "Cadastro recebido. Após a confirmação do pagamento, o administrador libera o acesso.",
+	})
 }
 
 func (s *HTTPServer) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
@@ -227,7 +283,13 @@ func (s *HTTPServer) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 			writeInternalError(w, r, err)
 			return
 		}
-		writeJSON(w, map[string]any{"users": users})
+		pendingCount := 0
+		for _, u := range users {
+			if !u.Active && u.Role != "admin" {
+				pendingCount++
+			}
+		}
+		writeJSON(w, map[string]any{"users": users, "pendingCount": pendingCount})
 	case http.MethodPost:
 		var body auth.CreateSubscriberRequest
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

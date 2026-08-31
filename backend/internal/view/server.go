@@ -108,6 +108,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/admin/lives/delete", s.handleAdminLivesDelete)
 	mux.HandleFunc("/api/auth/config", s.handleAuthConfig)
 	mux.HandleFunc("/api/auth/login", s.handleAuthLogin)
+	mux.HandleFunc("/api/auth/signup", s.handleAuthSignup)
 	mux.HandleFunc("/api/auth/logout", s.handleAuthLogout)
 	mux.HandleFunc("/api/auth/me", s.handleAuthMe)
 	mux.HandleFunc("/api/admin/users", s.handleAdminUsers)

@@ -56,12 +56,12 @@ Outra origem exige CORS liberado no backend:
    `SUPABASE_SERVICE_ROLE_KEY`.
 6. Recrie apenas o backend: `docker compose up -d --force-recreate backend`.
 
-Novos clientes cadastrados pela tela administrativa ficam em **Aguardando
-aprovação**. Depois da confirmação do pagamento, o administrador usa
-**Aprovar**. Suspensão e validade da assinatura também são controladas nessa
-tela, disponível separadamente em `/admin.html`. O backend só atende os
-endpoints `/api/admin/*` para uma sessão ativa com papel `admin`; o frontend
-também restringe o acesso à página.
+Novos clientes se cadastram em `/login.html` (Criar conta) e ficam em
+**Aguardando pagamento**. Depois da confirmação do pagamento, o administrador
+abre `/admin.html` e usa **Aprovar pagamento**. A conta só passa a entrar no
+monitor depois dessa aprovação. Suspensão e validade da assinatura também são
+controladas nessa tela. O backend só atende os endpoints `/api/admin/*` para
+uma sessão ativa com papel `admin`.
 
 Nunca envie `SUPABASE_SERVICE_ROLE_KEY` ao navegador, à Vercel como variável
 pública ou ao repositório. Ela é usada somente pelo backend Go.

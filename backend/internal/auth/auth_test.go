@@ -167,3 +167,12 @@ func TestValidateTokenDefaultsAccountToPending(t *testing.T) {
 		t.Fatal("conta sem app_metadata.active deveria ficar pendente")
 	}
 }
+
+func TestPublicPathAllowsSignup(t *testing.T) {
+	if !PublicPath("/api/auth/signup") {
+		t.Fatal("cadastro público precisa ser acessível sem token")
+	}
+	if PublicPath("/api/admin/users") {
+		t.Fatal("administração não pode ser pública")
+	}
+}
