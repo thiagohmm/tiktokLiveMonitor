@@ -175,7 +175,6 @@
                     clearLockoutTimer();
                     hideError();
                     setFormLocked(false);
-                    refreshLockoutStatus();
                     return;
                 }
                 remaining -= 1;
@@ -183,30 +182,6 @@
 
             tick();
             lockoutTimer = setInterval(tick, 1000);
-        }
-
-        async function refreshLockoutStatus() {
-            const email = emailInput.value.trim();
-            if (!email) {
-                hideAttempts();
-                return;
-            }
-            const status = await window.TLMAuth.getLoginStatus(email);
-            if (!status) return;
-
-            if (status.locked) {
-                startLockoutCountdown(status.retryAfterSec);
-                hideAttempts();
-                return;
-            }
-
-            clearLockoutTimer();
-            setFormLocked(false);
-            if (typeof status.remainingAttempts === 'number' && status.remainingAttempts < status.maxAttempts) {
-                showAttempts('Tentativas restantes: ' + status.remainingAttempts + ' de ' + status.maxAttempts);
-            } else {
-                hideAttempts();
-            }
         }
 
         (async function init() {
@@ -218,15 +193,14 @@
             }
         })();
 
-        emailInput.addEventListener('blur', refreshLockoutStatus);
-
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
             hideError();
             loginBtn.disabled = true;
             try {
                 await window.TLMAuth.signIn(emailInput.value, passwordInput.value);
-                window.location.href = '/';
+                const next = new URLSearchParams(window.location.search).get('next');
+                window.location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : '/';
             } catch (error) {
                 if (error.locked && error.retryAfterSec) {
                     startLockoutCountdown(error.retryAfterSec);
@@ -235,7 +209,6 @@
                     if (typeof error.remainingAttempts === 'number') {
                         showAttempts('Tentativas restantes: ' + error.remainingAttempts);
                     }
-                    await refreshLockoutStatus();
                 }
             } finally {
                 if (!lockoutTimer) {

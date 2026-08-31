@@ -2,6 +2,7 @@ package view
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -16,11 +17,11 @@ func (s *HTTPServer) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	lockout := s.lockout.Config()
 	writeJSON(w, map[string]any{
-		"enabled":         s.auth.Enabled,
-		"supabaseUrl":     s.auth.SupabaseURL,
-		"supabaseAnonKey": s.auth.SupabaseAnon,
+		"enabled":          s.auth.Enabled,
+		"supabaseUrl":      s.auth.SupabaseURL,
+		"supabaseAnonKey":  s.auth.SupabaseAnon,
 		"maxLoginAttempts": lockout.MaxAttempts,
-		"lockoutMinutes":  int(lockout.Lockout.Minutes()),
+		"lockoutMinutes":   int(lockout.Lockout.Minutes()),
 		"theme": map[string]string{
 			"pink": s.theme.Pink,
 			"cyan": s.theme.Cyan,
@@ -35,16 +36,21 @@ func (s *HTTPServer) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := auth.ClientIP(r)
+	ip := auth.ClientIP(r, s.proxyTrust)
 
 	switch r.Method {
 	case http.MethodGet:
-		email := strings.TrimSpace(r.URL.Query().Get("email"))
-		if email == "" {
-			writeError(w, http.StatusBadRequest, "email é obrigatório")
-			return
-		}
-		writeJSON(w, s.lockout.Status(email, ip))
+		// Resposta genérica: sem autenticação não é possível consultar o
+		// estado real de lockout de um email arbitrário (evita enumeração).
+		// Limites configurados continuam públicos para exibição na UI.
+		lockout := s.lockout.Config()
+		writeJSON(w, map[string]any{
+			"locked":            false,
+			"remainingAttempts": lockout.MaxAttempts,
+			"maxAttempts":       lockout.MaxAttempts,
+			"maxLoginAttempts":  lockout.MaxAttempts,
+			"lockoutMinutes":    int(lockout.Lockout.Minutes()),
+		})
 		return
 	case http.MethodPost:
 		var body struct {
@@ -88,12 +94,39 @@ func (s *HTTPServer) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, payload)
 				return
 			}
-			w.WriteHeader(http.StatusUnauthorized)
+			status := http.StatusUnauthorized
+			if errors.Is(err, auth.ErrAuthUnavailable) {
+				status = http.StatusBadGateway
+			}
+			w.WriteHeader(status)
 			writeJSON(w, payload)
 			return
 		}
 
+		// A senha está correta, mas a conta ainda pode estar aguardando a
+		// aprovação administrativa. Isso não conta como tentativa inválida.
+		user, err := s.auth.ValidateToken(session.AccessToken)
+		if err != nil {
+			s.lockout.RecordSuccess(email, ip)
+			writeError(w, http.StatusUnauthorized, "sessão inválida")
+			return
+		}
+		if !user.Active {
+			s.lockout.RecordSuccess(email, ip)
+			writeError(w, http.StatusForbidden, "cadastro aguardando aprovação do administrador")
+			return
+		}
+
 		s.lockout.RecordSuccess(email, ip)
+		http.SetCookie(w, &http.Cookie{
+			Name:     auth.AccessTokenCookie,
+			Value:    session.AccessToken,
+			Path:     "/",
+			MaxAge:   session.ExpiresIn,
+			HttpOnly: true,
+			Secure:   r.TLS != nil,
+			SameSite: http.SameSiteStrictMode,
+		})
 		writeJSON(w, map[string]any{
 			"session": map[string]any{
 				"access_token":  session.AccessToken,
@@ -124,6 +157,15 @@ func (s *HTTPServer) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "falha ao encerrar sessão")
 		return
 	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     auth.AccessTokenCookie,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteStrictMode,
+	})
 
 	writeJSON(w, map[string]bool{"success": true})
 }
@@ -182,7 +224,7 @@ func (s *HTTPServer) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		users, err := s.admin.ListSubscribers()
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeInternalError(w, r, err)
 			return
 		}
 		writeJSON(w, map[string]any{"users": users})

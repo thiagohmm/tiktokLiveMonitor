@@ -25,7 +25,16 @@ func setupTestServer(t *testing.T) (*HTTPServer, model.Repository, string, *moni
 	t.Helper()
 	dir := t.TempDir()
 
-	repo, err := database.Open(dir)
+	baseDSN := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
+	if baseDSN == "" {
+		t.Skip("TEST_DATABASE_URL não configurado: testes exigem PostgreSQL descartável")
+	}
+	dsn, cleanup, err := database.CreateTestDatabase(baseDSN)
+	if err != nil {
+		t.Fatalf("create test database: %v", err)
+	}
+	t.Cleanup(cleanup)
+	repo, err := database.OpenPostgres(dsn)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

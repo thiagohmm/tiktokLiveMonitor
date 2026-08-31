@@ -3,8 +3,10 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -17,7 +19,7 @@ func OpenPostgres(dsn string) (*DB, error) {
 	}
 	conn.SetMaxOpenConns(20)
 
-	db := &DB{conn: conn, driver: driverPostgres}
+	db := &DB{conn: conn}
 	if err := db.migratePostgres(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("migrate postgres: %w", err)
@@ -25,12 +27,13 @@ func OpenPostgres(dsn string) (*DB, error) {
 	return db, nil
 }
 
-// OpenFromEnv opens PostgreSQL when DATABASE_URL is set, otherwise SQLite in DB_DIR.
-func OpenFromEnv(baseDir string) (*DB, error) {
-	if dsn := strings.TrimSpace(os.Getenv("DATABASE_URL")); dsn != "" {
-		return OpenPostgres(dsn)
+// OpenFromEnv opens PostgreSQL; DATABASE_URL is required.
+func OpenFromEnv() (*DB, error) {
+	dsn := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if dsn == "" {
+		return nil, fmt.Errorf("DATABASE_URL não definido (o backend exige PostgreSQL/Supabase)")
 	}
-	return Open(baseDir)
+	return OpenPostgres(dsn)
 }
 
 func (db *DB) migratePostgres() error {
@@ -141,4 +144,60 @@ func (db *DB) migratePostgres() error {
 		}
 	}
 	return nil
+}
+
+// safeTestDBName reports whether name can be interpolated into DDL safely.
+func safeTestDBName(name string) bool {
+	if name == "" || len(name) > 63 {
+		return false
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// dsnForDatabase derives a URL-style DSN pointing at the given database name.
+func dsnForDatabase(baseDSN, name string) (string, error) {
+	u, err := url.Parse(baseDSN)
+	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
+		return "", fmt.Errorf("DSN deve ser uma URL postgres:// (recebido: %q)", baseDSN)
+	}
+	u.Path = "/" + name
+	return u.String(), nil
+}
+
+// CreateTestDatabase creates a disposable database named uniquely after the
+// server reachable via baseDSN and returns its DSN plus a cleanup function
+// that drops it. Intended for tests: never point it at a production server.
+func CreateTestDatabase(baseDSN string) (string, func(), error) {
+	baseDSN = strings.TrimSpace(baseDSN)
+	if baseDSN == "" {
+		return "", nil, fmt.Errorf("base DSN vazio")
+	}
+	name := fmt.Sprintf("tlm_test_%d", time.Now().UnixNano())
+	if !safeTestDBName(name) {
+		return "", nil, fmt.Errorf("nome de banco inválido: %s", name)
+	}
+	dsn, err := dsnForDatabase(baseDSN, name)
+	if err != nil {
+		return "", nil, err
+	}
+
+	conn, err := sql.Open("pgx", baseDSN)
+	if err != nil {
+		return "", nil, fmt.Errorf("connect admin: %w", err)
+	}
+	if _, err := conn.Exec(fmt.Sprintf(`CREATE DATABASE "%s"`, name)); err != nil {
+		conn.Close()
+		return "", nil, fmt.Errorf("create database: %w", err)
+	}
+
+	cleanup := func() {
+		_, _ = conn.Exec(fmt.Sprintf(`DROP DATABASE IF EXISTS "%s" WITH (FORCE)`, name))
+		_ = conn.Close()
+	}
+	return dsn, cleanup, nil
 }

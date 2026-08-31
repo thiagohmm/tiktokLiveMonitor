@@ -1236,6 +1236,7 @@
                 <button id="listenBtn" class="secondary-btn" type="button">Escuta</button>
                 <div id="authUserBar" class="auth-user-bar" style="display: none;">
                     <span id="authUserEmail" class="auth-user-email"></span>
+                    <button id="adminPageBtn" class="small-btn" style="display: none;" type="button">Administração</button>
                     <button id="logoutBtn" class="small-btn secondary-btn" type="button">Sair</button>
                 </div>
             </div>
@@ -1440,70 +1441,6 @@
             <div id="reportError" class="report-error" style="display: none;"></div>
         </div>
 
-        <!-- Administração: assinantes -->
-        <div id="adminUsersSection" style="display: none;">
-            <div class="section-title">
-                <div class="section-title-label">
-                    <h3>👤 Administração — Assinantes</h3>
-                </div>
-                <div class="section-title-actions">
-                    <button id="adminUsersRefreshBtn" class="small-btn" type="button">Atualizar</button>
-                </div>
-            </div>
-            <div class="admin-users-form">
-                <input type="email" id="newSubscriberEmail" placeholder="E-mail do assinante">
-                <input type="password" id="newSubscriberPassword" placeholder="Senha (mín. 8 caracteres)">
-                <input type="text" id="newSubscriberName" placeholder="Nome (opcional)">
-                <input type="datetime-local" id="newSubscriberExpires" title="Validade da assinatura">
-                <input type="text" id="newSubscriberNotes" placeholder="Observações (opcional)">
-                <button id="createSubscriberBtn" class="small-btn" type="button">Criar assinante</button>
-            </div>
-            <div class="table-container">
-                <table class="tbl-lives">
-                    <thead>
-                        <tr>
-                            <th>E-mail</th>
-                            <th>Nome</th>
-                            <th>Status</th>
-                            <th>Validade</th>
-                            <th>Observações</th>
-                            <th>Ações</th>
-                        </tr>
-                    </thead>
-                    <tbody id="adminUsersTableBody"></tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Administração: lives e horários -->
-        <div id="adminLivesSection">
-        <div class="section-title">
-            <div class="section-title-label">
-                <h3>🛠️ Administração — Lives e Horários</h3>
-            </div>
-            <div class="section-title-actions">
-                <button id="adminLivesMoreBtn" class="small-btn" type="button" style="display: none;">Carregar mais</button>
-                <button id="adminLivesRefreshBtn" class="small-btn" type="button">Atualizar</button>
-            </div>
-        </div>
-        <div id="adminLivesContainer" class="table-container">
-            <table class="tbl-lives">
-                <thead>
-                    <tr>
-                        <th>Live</th>
-                        <th>Dia</th>
-                        <th>Início</th>
-                        <th>Fim</th>
-                        <th>Duração</th>
-                        <th>Eventos</th>
-                        <th>Ações</th>
-                    </tr>
-                </thead>
-                <tbody id="adminLivesTableBody"></tbody>
-            </table>
-        </div>
-        </div>
-
     </div>
 
     <div id="historyModalBackdrop" class="modal-backdrop" aria-hidden="true">
@@ -1524,23 +1461,6 @@
                     <button id="profileModalCloseBtn" class="modal-close" type="button" aria-label="Fechar">×</button>
                 </div>
                 <div id="profileModalBody" class="modal-body"></div>
-            </div>
-        </div>
-
-        <!-- Confirmação de exclusão de live -->
-        <div id="deleteLiveModalBackdrop" class="modal-backdrop" aria-hidden="true">
-            <div class="modal delete-live-modal" role="dialog" aria-modal="true" aria-labelledby="deleteLiveModalTitle">
-                <div class="modal-header">
-                    <h2 id="deleteLiveModalTitle">🗑️ Deletar live</h2>
-                    <button id="deleteLiveModalCloseBtn" class="modal-close" type="button" aria-label="Fechar">×</button>
-                </div>
-                <div class="modal-body">
-                    <p id="deleteLiveModalMessage" class="delete-live-message"></p>
-                    <div class="delete-live-actions">
-                        <button id="deleteLiveModalCancelBtn" class="small-btn secondary-btn" type="button">Cancelar</button>
-                        <button id="deleteLiveModalConfirmBtn" class="small-btn delete-btn" type="button">Deletar</button>
-                    </div>
-                </div>
             </div>
         </div>
 

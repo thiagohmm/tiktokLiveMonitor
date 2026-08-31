@@ -3,12 +3,21 @@ package auth
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 )
+
+// ErrInvalidCredentials é a mensagem genérica devolvida ao cliente para
+// qualquer falha de credenciais, evitando enumeração de usuários (o
+// error_description do Supabase diferencia e-mail inexistente de senha errada).
+var ErrInvalidCredentials = errors.New("email ou senha inválidos")
+
+// ErrAuthUnavailable indica falha de rede/servidor ao contatar o Supabase.
+var ErrAuthUnavailable = errors.New("serviço de autenticação indisponível, tente novamente")
 
 type LoginSession struct {
 	AccessToken  string `json:"access_token"`
@@ -45,37 +54,22 @@ func (c Config) SignInWithPassword(email, password string) (*LoginSession, error
 	client := &http.Client{Timeout: 20 * time.Second}
 	res, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, ErrAuthUnavailable
 	}
 	defer res.Body.Close()
 
 	raw, err := io.ReadAll(res.Body)
 	if err != nil {
-		return nil, err
+		return nil, ErrAuthUnavailable
+	}
+	if res.StatusCode >= 500 {
+		return nil, ErrAuthUnavailable
 	}
 	if res.StatusCode >= 300 {
-		msg := strings.TrimSpace(string(raw))
-		var errBody struct {
-			Error            string `json:"error"`
-			ErrorDescription string `json:"error_description"`
-			Msg              string `json:"msg"`
-			Message          string `json:"message"`
-		}
-		_ = json.Unmarshal(raw, &errBody)
-		switch {
-		case errBody.ErrorDescription != "":
-			msg = errBody.ErrorDescription
-		case errBody.Message != "":
-			msg = errBody.Message
-		case errBody.Msg != "":
-			msg = errBody.Msg
-		case errBody.Error != "":
-			msg = errBody.Error
-		}
-		if msg == "" {
-			msg = "credenciais inválidas"
-		}
-		return nil, fmt.Errorf("%s", msg)
+		// Anti-enumeração: o error_description do Supabase discrimina
+		// "e-mail não cadastrado" de "senha incorreta" — não repassamos o
+		// detalhe ao cliente.
+		return nil, ErrInvalidCredentials
 	}
 
 	var session LoginSession

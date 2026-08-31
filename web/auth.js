@@ -1,5 +1,6 @@
 (function () {
     const SESSION_KEY = 'tlm.auth.session';
+    const nativeFetch = window.fetch.bind(window);
 
     let authConfig = {
         enabled: false,
@@ -38,7 +39,7 @@
     }
 
     async function loadAuthConfig() {
-        const response = await fetch('/api/auth/config');
+        const response = await nativeFetch('/api/auth/config');
         if (!response.ok) {
             throw new Error('Não foi possível carregar a configuração de login.');
         }
@@ -66,13 +67,9 @@
             currentUser = { role: 'admin', active: true, authenticated: true };
             return currentUser;
         }
-        if (!token) {
-            currentUser = null;
-            return null;
-        }
-        const response = await fetch('/api/auth/me', {
-            headers: { Authorization: 'Bearer ' + token },
-        });
+        const headers = {};
+        if (token) headers.Authorization = 'Bearer ' + token;
+        const response = await nativeFetch('/api/auth/me', { headers });
         if (!response.ok) {
             writeSession(null);
             currentUser = null;
@@ -90,7 +87,7 @@
             headers.set('Authorization', 'Bearer ' + token);
         }
         options.headers = headers;
-        const response = await fetch(input, options);
+        const response = await nativeFetch(input, options);
         if (response.status === 401 && authConfig.enabled) {
             writeSession(null);
             currentUser = null;
@@ -101,23 +98,100 @@
         return response;
     }
 
-    function eventsURL() {
-        const token = getAccessToken();
-        if (!token) return '/events';
-        return '/events?access_token=' + encodeURIComponent(token);
-    }
+    // SSE via fetch + ReadableStream: EventSource não envia headers, e o
+    // token não pode mais viajar na query string (vazava em logs/Referer).
+    function createEventStream() {
+        const listeners = {};
+        let errorHandler = null;
+        let stopped = false;
+        let reconnectDelay = 1000;
 
-    async function getLoginStatus(email) {
-        const query = new URLSearchParams({ email: String(email || '').trim() });
-        const response = await fetch('/api/auth/login?' + query.toString());
-        if (!response.ok) {
-            return null;
+        function dispatchFrame(frame) {
+            let eventName = 'message';
+            let data = '';
+            for (const line of frame.split('\n')) {
+                if (line.startsWith('event:')) {
+                    eventName = line.slice(6).trim();
+                } else if (line.startsWith('data:')) {
+                    data = data ? data + '\n' + line.slice(5).trim() : line.slice(5).trim();
+                }
+            }
+            (listeners[eventName] || []).forEach(handler => {
+                try {
+                    handler({ type: eventName, data });
+                } catch (err) {
+                    console.error('SSE handler error:', err);
+                }
+            });
         }
-        return response.json();
+
+        async function connectOnce() {
+            const headers = {};
+            const token = getAccessToken();
+            if (token) {
+                headers['Authorization'] = 'Bearer ' + token;
+            }
+            const response = await nativeFetch('/events', { headers, cache: 'no-store' });
+            if (response.status === 401 && authConfig.enabled) {
+                writeSession(null);
+                currentUser = null;
+                window.location.href = '/login.html';
+                return;
+            }
+            if (!response.ok || !response.body) {
+                throw new Error('SSE HTTP ' + response.status);
+            }
+            reconnectDelay = 1000;
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            for (;;) {
+                const { value, done } = await reader.read();
+                if (stopped || done) return;
+                buffer += decoder.decode(value, { stream: true });
+                let idx;
+                while ((idx = buffer.indexOf('\n\n')) !== -1) {
+                    const frame = buffer.slice(0, idx);
+                    buffer = buffer.slice(idx + 2);
+                    if (frame.trim()) dispatchFrame(frame);
+                }
+            }
+        }
+
+        (async function connectLoop() {
+            while (!stopped) {
+                try {
+                    await connectOnce();
+                } catch (_) {
+                    // stream caiu: reconecta com backoff
+                }
+                if (stopped) return;
+                if (typeof errorHandler === 'function') {
+                    try { errorHandler({ type: 'error' }); } catch (_) { /* noop */ }
+                }
+                await new Promise(resolve => setTimeout(resolve, reconnectDelay));
+                reconnectDelay = Math.min(reconnectDelay * 2, 15000);
+            }
+        })();
+
+        return {
+            addEventListener(name, handler) {
+                (listeners[name] = listeners[name] || []).push(handler);
+            },
+            close() {
+                stopped = true;
+            },
+            get onerror() {
+                return errorHandler;
+            },
+            set onerror(fn) {
+                errorHandler = typeof fn === 'function' ? fn : null;
+            },
+        };
     }
 
     async function signIn(email, password) {
-        const response = await fetch('/api/auth/login', {
+        const response = await nativeFetch('/api/auth/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -139,15 +213,12 @@
 
     async function signOut() {
         const token = getAccessToken();
-        if (token) {
-            try {
-                await fetch('/api/auth/logout', {
-                    method: 'POST',
-                    headers: { Authorization: 'Bearer ' + token },
-                });
-            } catch (_) {
-                // ignore network errors; local session is still cleared
-            }
+        try {
+            const headers = {};
+            if (token) headers.Authorization = 'Bearer ' + token;
+            await nativeFetch('/api/auth/logout', { method: 'POST', headers });
+        } catch (_) {
+            // ignore network errors; local session is still cleared
         }
         writeSession(null);
         currentUser = null;
@@ -168,12 +239,6 @@
             return currentUser;
         }
 
-        const session = readSession();
-        if (!session || !session.access_token) {
-            window.location.href = '/login.html';
-            return null;
-        }
-
         const me = await refreshMe();
         if (!me || !me.authenticated) {
             window.location.href = '/login.html';
@@ -191,16 +256,40 @@
         return !!currentUser && currentUser.role === 'admin';
     }
 
+    function isAuthEnabled() {
+        return !!authConfig.enabled;
+    }
+
+    async function requireAdmin() {
+        await loadAuthConfig();
+        if (!authConfig.enabled) {
+            currentUser = null;
+            return null;
+        }
+        const me = await refreshMe();
+        if (!me || !me.authenticated) {
+            window.location.href = '/login.html?next=' + encodeURIComponent('/admin.html');
+            return null;
+        }
+        if (!me.active || me.role !== 'admin') {
+            alert('Acesso exclusivo para administradores.');
+            window.location.href = '/';
+            return null;
+        }
+        return me;
+    }
+
     window.TLMAuth = {
         applyTheme,
         authFetch,
-        eventsURL,
+        createEventStream,
         getAccessToken,
-        getLoginStatus,
         getUser: () => currentUser,
         isAdmin,
+        isAuthEnabled,
         loadAuthConfig,
         refreshMe,
+        requireAdmin,
         requireSession,
         signIn,
         signOut,

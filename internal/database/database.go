@@ -1,201 +1,22 @@
-// Package database provides SQLite implementation of the model.Repository interface.
+// Package database provides the PostgreSQL (Supabase) implementation of the model.Repository interface.
 package database
 
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 // DB wraps the database connection with thread-safe access and implements model.Repository.
 type DB struct {
-	conn   *sql.DB
-	mu     sync.Mutex
-	driver driverKind
-}
-
-// Open creates or opens the SQLite database at the given directory.
-func Open(dir string) (*DB, error) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("create db dir: %w", err)
-	}
-	dbPath := filepath.Join(dir, "feedback.db")
-	conn, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL")
-	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
-	}
-
-	conn.SetMaxOpenConns(1) // SQLite serializes writes
-
-	db := &DB{conn: conn, driver: driverSQLite}
-	if err := db.migrate(); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
-	}
-
-	return db, nil
-}
-
-func (db *DB) migrate() error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS false_positives (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			comment TEXT NOT NULL,
-			category TEXT NOT NULL,
-			expected TEXT DEFAULT 'NAO',
-			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`CREATE TABLE IF NOT EXISTS anomaly_logs (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			live_name TEXT NOT NULL,
-			day DATE NOT NULL,
-			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-			uniqueId TEXT,
-			comment TEXT NOT NULL,
-			is_anomaly BOOLEAN,
-			category TEXT
-		)`,
-		`CREATE TABLE IF NOT EXISTS gifts (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			live_name TEXT NOT NULL,
-			uniqueId TEXT NOT NULL,
-			nickname TEXT NOT NULL,
-			gift_name TEXT NOT NULL,
-			repeat_count INTEGER DEFAULT 1,
-			gift_type INTEGER DEFAULT 0,
-			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`CREATE TABLE IF NOT EXISTS shares (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			live_name TEXT NOT NULL,
-			uniqueId TEXT NOT NULL,
-			nickname TEXT NOT NULL,
-			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`CREATE TABLE IF NOT EXISTS likes (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			live_name TEXT NOT NULL,
-			uniqueId TEXT NOT NULL,
-			nickname TEXT NOT NULL,
-			like_count INTEGER DEFAULT 1,
-			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`CREATE TABLE IF NOT EXISTS room_like_totals (
-			live_name TEXT PRIMARY KEY,
-			total INTEGER NOT NULL DEFAULT 0,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`CREATE TABLE IF NOT EXISTS user_messages (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			live_name TEXT NOT NULL DEFAULT '',
-			uniqueId TEXT NOT NULL,
-			username TEXT NOT NULL,
-			message TEXT NOT NULL,
-			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`CREATE TABLE IF NOT EXISTS target_gift_history (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			live_name TEXT NOT NULL,
-			uniqueId TEXT NOT NULL,
-			nickname TEXT NOT NULL,
-			gift_name TEXT NOT NULL,
-			received_at DATETIME NOT NULL,
-			answered_at DATETIME,
-			response_type TEXT
-		)`,
-		`CREATE TABLE IF NOT EXISTS gift_goals (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			live_name TEXT NOT NULL,
-			title TEXT NOT NULL,
-			gift_name TEXT NOT NULL DEFAULT '',
-			target_units INTEGER NOT NULL,
-			status TEXT NOT NULL,
-			milestones TEXT DEFAULT '[]',
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			completed_at DATETIME
-		)`,
-		`CREATE TABLE IF NOT EXISTS pinned_comments (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			live_name TEXT NOT NULL,
-			uniqueId TEXT NOT NULL,
-			nickname TEXT NOT NULL,
-			comment TEXT NOT NULL,
-			pin_id TEXT,
-			is_follower INTEGER,
-			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`CREATE TABLE IF NOT EXISTS settings (
-			key TEXT PRIMARY KEY,
-			value TEXT NOT NULL
-		)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_pinned_comments_pin
-			ON pinned_comments(live_name, pin_id)
-			WHERE pin_id IS NOT NULL AND pin_id != ''`,
-		`CREATE INDEX IF NOT EXISTS idx_user_messages_dedup
-			ON user_messages(LOWER(uniqueId), LOWER(message))`,
-	}
-
-	for _, s := range stmts {
-		if _, err := db.exec(s); err != nil {
-			return fmt.Errorf("exec migration: %w", err)
-		}
-	}
-
-	// user_messages created by older versions may lack the live_name column.
-	if err := db.ensureColumn("user_messages", "live_name", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return err
-	}
-	// gift_goals created by older versions may lack the gift_name column.
-	if err := db.ensureColumn("gift_goals", "gift_name", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return err
-	}
-	return nil
-}
-
-// ensureColumn adds a column to a table if it does not already exist.
-func (db *DB) ensureColumn(table, column, decl string) error {
-	rows, err := db.query("PRAGMA table_info(" + table + ")")
-	if err != nil {
-		return fmt.Errorf("inspect table %s: %w", table, err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var (
-			cid     int
-			name    string
-			ctype   string
-			notnull int
-			dflt    interface{}
-			pk      int
-		)
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			return fmt.Errorf("scan table_info %s: %w", table, err)
-		}
-		if name == column {
-			return rows.Err()
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	if _, err := db.exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + decl); err != nil {
-		return fmt.Errorf("add column %s.%s: %w", table, column, err)
-	}
-	return nil
+	conn *sql.DB
+	mu   sync.Mutex
 }
 
 // --- FeedbackRepository ---
@@ -210,7 +31,8 @@ func (db *DB) GetFalsePositiveComments(limit int) ([]string, error) {
 	defer db.mu.Unlock()
 
 	rows, err := db.query(
-		"SELECT DISTINCT comment FROM false_positives WHERE expected = 'NAO' ORDER BY timestamp DESC LIMIT ?",
+		`SELECT comment, MAX(timestamp) AS latest FROM false_positives
+		 WHERE expected = 'NAO' GROUP BY comment ORDER BY latest DESC LIMIT ?`,
 		limit,
 	)
 	if err != nil {
@@ -221,7 +43,8 @@ func (db *DB) GetFalsePositiveComments(limit int) ([]string, error) {
 	out := make([]string, 0)
 	for rows.Next() {
 		var c string
-		if err := rows.Scan(&c); err != nil {
+		var latest sql.NullString
+		if err := rows.Scan(&c, &latest); err != nil {
 			return nil, fmt.Errorf("scan false positive comment: %w", err)
 		}
 		out = append(out, c)
@@ -235,10 +58,6 @@ func (db *DB) GetFalsePositiveComments(limit int) ([]string, error) {
 func (db *DB) LogAnomaly(liveName, comment string, isAnomaly bool, category, uniqueID string) error {
 	now := time.Now()
 	day := now.UTC().Format("2006-01-02")
-	var anomalyInt int
-	if isAnomaly {
-		anomalyInt = 1
-	}
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -246,7 +65,7 @@ func (db *DB) LogAnomaly(liveName, comment string, isAnomaly bool, category, uni
 	_, err := db.exec(
 		`INSERT INTO anomaly_logs (live_name, day, uniqueId, comment, is_anomaly, category)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		liveName, day, uniqueID, comment, anomalyInt, category,
+		liveName, day, uniqueID, comment, isAnomaly, category,
 	)
 	if err != nil {
 		return fmt.Errorf("insert anomaly: %w", err)
@@ -334,7 +153,7 @@ func (db *DB) GetAnomalyLogsByUser(uniqueID string, limit int) ([]model.AnomalyL
 	rows, err := db.query(
 		`SELECT id, live_name, day, timestamp, uniqueId, comment, is_anomaly, category
 		 FROM anomaly_logs
-		 WHERE LOWER(uniqueId) = LOWER(?) AND is_anomaly = 1
+		 WHERE LOWER(uniqueId) = LOWER(?) AND is_anomaly = TRUE
 		 ORDER BY timestamp DESC
 		 LIMIT ?`,
 		uniqueID, limit,
@@ -486,11 +305,11 @@ func (db *DB) BatchAddUserMessages(entries []UserMessageEntry) error {
 		if ts.IsZero() {
 			ts = time.Now()
 		}
-		_, err := tx.Exec(`
+		_, err := tx.Exec(db.bind(`
 			INSERT INTO user_messages (live_name, uniqueId, username, message, timestamp)
 			SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (
 				SELECT 1 FROM user_messages WHERE LOWER(uniqueId) = ? AND LOWER(message) = ?
-			)`, liveName, e.UniqueID, username, e.Message, ts, uid, msg)
+			)`), liveName, e.UniqueID, username, e.Message, ts, uid, msg)
 		if err != nil {
 			return fmt.Errorf("batch insert user message: %w", err)
 		}
@@ -498,11 +317,11 @@ func (db *DB) BatchAddUserMessages(entries []UserMessageEntry) error {
 	}
 
 	for uid := range users {
-		_, err := tx.Exec(`
+		_, err := tx.Exec(db.bind(`
 			DELETE FROM user_messages WHERE id NOT IN (
 				SELECT id FROM user_messages WHERE LOWER(uniqueId) = ?
 				ORDER BY timestamp DESC LIMIT 10
-			) AND LOWER(uniqueId) = ?`, uid, uid)
+			) AND LOWER(uniqueId) = ?`), uid, uid)
 		if err != nil {
 			return fmt.Errorf("prune user messages: %w", err)
 		}
@@ -1279,7 +1098,7 @@ func (db *DB) GetRecentPinnedComments(liveName string, limit int) ([]model.Pinne
 
 // --- SessionRepository ---
 
-func parseSQLiteTime(s string) (time.Time, error) {
+func parseStoredTime(s string) (time.Time, error) {
 	layouts := []string{
 		time.RFC3339Nano,
 		time.RFC3339,
@@ -1307,7 +1126,7 @@ func (db *DB) maxTimestamp(query string, args ...any) (time.Time, bool, error) {
 	if !raw.Valid || raw.String == "" {
 		return time.Time{}, false, nil
 	}
-	ts, err := parseSQLiteTime(raw.String)
+	ts, err := parseStoredTime(raw.String)
 	if err != nil {
 		return time.Time{}, false, err
 	}
@@ -1362,19 +1181,19 @@ func (db *DB) DeleteSessionData(liveName string) error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec("DELETE FROM gifts WHERE live_name = ?", liveName); err != nil {
+	if _, err := tx.Exec(db.bind("DELETE FROM gifts WHERE live_name = ?"), liveName); err != nil {
 		return fmt.Errorf("delete session gifts: %w", err)
 	}
-	if _, err := tx.Exec("DELETE FROM anomaly_logs WHERE live_name = ?", liveName); err != nil {
+	if _, err := tx.Exec(db.bind("DELETE FROM anomaly_logs WHERE live_name = ?"), liveName); err != nil {
 		return fmt.Errorf("delete session anomalies: %w", err)
 	}
-	if _, err := tx.Exec("DELETE FROM user_messages WHERE live_name = ?", liveName); err != nil {
+	if _, err := tx.Exec(db.bind("DELETE FROM user_messages WHERE live_name = ?"), liveName); err != nil {
 		return fmt.Errorf("delete session messages: %w", err)
 	}
-	if _, err := tx.Exec("DELETE FROM pinned_comments WHERE live_name = ?", liveName); err != nil {
+	if _, err := tx.Exec(db.bind("DELETE FROM pinned_comments WHERE live_name = ?"), liveName); err != nil {
 		return fmt.Errorf("delete session pinned comments: %w", err)
 	}
-	if _, err := tx.Exec("DELETE FROM target_gift_history WHERE live_name = ?", liveName); err != nil {
+	if _, err := tx.Exec(db.bind("DELETE FROM target_gift_history WHERE live_name = ?"), liveName); err != nil {
 		return fmt.Errorf("delete session target gift history: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -1406,14 +1225,14 @@ func (db *DB) LiveFirstSeen(liveName string) (string, error) {
 		UNION ALL SELECT received_at FROM target_gift_history WHERE live_name = ?
 		UNION ALL SELECT timestamp FROM anomaly_logs WHERE live_name = ?
 	)`
-	err := db.queryRow(query, liveName, liveName, liveName, liveName).Scan(&ts)
+	err := db.queryRow(query, liveName, liveName, liveName, liveName, liveName).Scan(&ts)
 	if err != nil {
 		return "", fmt.Errorf("query live first seen: %w", err)
 	}
 	if !ts.Valid || ts.String == "" {
 		return "", nil
 	}
-	at, perr := parseSQLiteTime(ts.String)
+	at, perr := parseStoredTime(ts.String)
 	if perr != nil {
 		return ts.String, nil
 	}
@@ -1464,6 +1283,7 @@ func (db *DB) ListLives(limit int) ([]model.Live, error) {
 		if err := rows.Scan(&l.Name, &l.Day, &s, &e, &l.Events); err != nil {
 			return nil, fmt.Errorf("scan live: %w", err)
 		}
+		l.Day = normalizeDate(l.Day)
 		if s.Valid {
 			l.StartedAt = normalizeTime(s.String)
 		}
@@ -1500,13 +1320,26 @@ func (db *DB) DeleteLive(liveName string) (int64, error) {
 	return total, nil
 }
 
-// normalizeTime converts a SQLite timestamp string to RFC3339 UTC when possible.
+// normalizeTime converts a stored timestamp string to RFC3339 UTC when possible.
 func normalizeTime(raw string) string {
-	at, err := parseSQLiteTime(raw)
+	at, err := parseStoredTime(raw)
 	if err != nil {
 		return raw
 	}
 	return at.UTC().Format(time.RFC3339)
+}
+
+// normalizeDate reduz um DATE escaneado como timestamp (ex.:
+// "2026-08-24T00:00:00Z") para "YYYY-MM-DD".
+func normalizeDate(day string) string {
+	day = strings.TrimSpace(day)
+	if len(day) >= 10 && day[4] == '-' && day[7] == '-' {
+		return day[:10]
+	}
+	if t, err := parseStoredTime(day); err == nil {
+		return t.Format("2006-01-02")
+	}
+	return day
 }
 
 // LiveStatsByUser returns per-user aggregated stats for a live.
@@ -1719,14 +1552,14 @@ func (db *DB) RecentLivesForUser(uniqueID string, limit int) ([]model.UserLiveSu
 		}
 		ls := model.UserLiveSummary{LiveName: liveName, Messages: messages, Gifts: gifts}
 		if firstSeen.Valid && firstSeen.String != "" {
-			if at, perr := parseSQLiteTime(firstSeen.String); perr == nil {
+			if at, perr := parseStoredTime(firstSeen.String); perr == nil {
 				ls.FirstSeen = at.UTC().Format(time.RFC3339)
 			} else {
 				ls.FirstSeen = firstSeen.String
 			}
 		}
 		if lastSeen.Valid && lastSeen.String != "" {
-			if at, perr := parseSQLiteTime(lastSeen.String); perr == nil {
+			if at, perr := parseStoredTime(lastSeen.String); perr == nil {
 				ls.LastSeen = at.UTC().Format(time.RFC3339)
 			} else {
 				ls.LastSeen = lastSeen.String
@@ -1763,7 +1596,7 @@ func (db *DB) GetSetting(key string) (string, error) {
 	var value string
 	err := db.queryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value)
 	if err != nil {
-		if err != sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return "", nil
 		}
 		return "", fmt.Errorf("get setting %s: %w", key, err)

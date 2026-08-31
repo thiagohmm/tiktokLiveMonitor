@@ -3,6 +3,7 @@ package database
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,8 +12,16 @@ import (
 
 func openTestDB(t *testing.T) *DB {
 	t.Helper()
-	dir := t.TempDir()
-	db, err := Open(dir)
+	baseDSN := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
+	if baseDSN == "" {
+		t.Skip("TEST_DATABASE_URL não configurado: testes exigem PostgreSQL descartável")
+	}
+	dsn, cleanup, err := CreateTestDatabase(baseDSN)
+	if err != nil {
+		t.Fatalf("create test database: %v", err)
+	}
+	t.Cleanup(cleanup)
+	db, err := OpenPostgres(dsn)
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
@@ -32,7 +41,7 @@ func TestGetFalsePositiveComments(t *testing.T) {
 
 	seed := func(comment, category, expected string) {
 		t.Helper()
-		if _, err := db.conn.Exec(
+		if err := db.ExecSQL(
 			"INSERT INTO false_positives (comment, category, expected) VALUES (?, ?, ?)",
 			comment, category, expected,
 		); err != nil {
@@ -442,14 +451,14 @@ func TestClearGifts(t *testing.T) {
 func TestCleanupOldAnomalies(t *testing.T) {
 	db := openTestDB(t)
 
-	_, err := db.conn.Exec("INSERT INTO anomaly_logs (live_name, day, comment, is_anomaly, category) VALUES ('live1', '2020-01-01', 'old', 1, 'SPAM')")
+	err := db.ExecSQL("INSERT INTO anomaly_logs (live_name, day, comment, is_anomaly, category) VALUES ('live1', '2020-01-01', 'old', TRUE, 'SPAM')")
 	if err != nil {
 		t.Fatalf("insert old: %v", err)
 	}
 
-	// day is stored in UTC; seed 'today' with date('now') so the test
+	// day is stored in UTC; seed 'today' with CURRENT_DATE so the test
 	// is independent of the host timezone.
-	_, err = db.conn.Exec("INSERT INTO anomaly_logs (live_name, day, comment, is_anomaly, category) VALUES ('live1', date('now'), 'new', 0, 'OK')")
+	err = db.ExecSQL("INSERT INTO anomaly_logs (live_name, day, comment, is_anomaly, category) VALUES ('live1', CURRENT_DATE, 'new', FALSE, 'OK')")
 	if err != nil {
 		t.Fatalf("insert new: %v", err)
 	}
@@ -464,24 +473,10 @@ func TestCleanupOldAnomalies(t *testing.T) {
 	}
 }
 
-func TestDatabaseFilePath(t *testing.T) {
-	dir := t.TempDir()
-	db, err := Open(dir)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	db.Close()
-
-	_, err = os.Stat(dir + "/feedback.db")
-	if err != nil {
-		t.Fatalf("expected feedback.db to exist: %v", err)
-	}
-}
-
 func countTable(t *testing.T, db *DB, query string, args ...any) int {
 	t.Helper()
 	var n int
-	if err := db.conn.QueryRow(query, args...).Scan(&n); err != nil {
+	if err := db.queryRow(query, args...).Scan(&n); err != nil {
 		t.Fatalf("count query: %v", err)
 	}
 	return n
@@ -502,21 +497,21 @@ func TestGetLastSessionActivityEmpty(t *testing.T) {
 func TestGetLastSessionActivityUsesLatestAcrossTables(t *testing.T) {
 	db := openTestDB(t)
 
-	_, err := db.conn.Exec(
+	err := db.ExecSQL(
 		`INSERT INTO gifts (live_name, uniqueId, nickname, gift_name, timestamp) VALUES (?, ?, ?, ?, ?)`,
 		"live1", "user1", "User", "Rose", "2026-08-17 10:00:00",
 	)
 	if err != nil {
 		t.Fatalf("insert gift: %v", err)
 	}
-	_, err = db.conn.Exec(
+	err = db.ExecSQL(
 		`INSERT INTO anomaly_logs (live_name, day, comment, is_anomaly, category, timestamp) VALUES (?, ?, ?, ?, ?, ?)`,
-		"live1", "2026-08-17", "spam", 1, "SPAM", "2026-08-17 11:00:00",
+		"live1", "2026-08-17", "spam", true, "SPAM", "2026-08-17 11:00:00",
 	)
 	if err != nil {
 		t.Fatalf("insert anomaly: %v", err)
 	}
-	_, err = db.conn.Exec(
+	err = db.ExecSQL(
 		`INSERT INTO user_messages (live_name, uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?, ?)`,
 		"live1", "user1", "User", "hello", "2026-08-17 12:30:00",
 	)
@@ -524,11 +519,11 @@ func TestGetLastSessionActivityUsesLatestAcrossTables(t *testing.T) {
 		t.Fatalf("insert message: %v", err)
 	}
 	// Mensagem mais recente de OUTRA live: não deve contar para live1.
-	_, err = db.conn.Exec(
+	err = db.ExecSQL(
 		`INSERT INTO user_messages (live_name, uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?, ?)`,
 		"other", "user2", "Other", "oi", "2026-08-17 14:00:00",
 	)
-	_, err = db.conn.Exec(
+	err = db.ExecSQL(
 		`INSERT INTO gifts (live_name, uniqueId, nickname, gift_name, timestamp) VALUES (?, ?, ?, ?, ?)`,
 		"other", "user2", "Other", "Tiger", "2026-08-17 23:00:00",
 	)
@@ -570,7 +565,7 @@ func TestDeleteSessionData(t *testing.T) {
 	if err := db.AddUserMessageDedup("live2", "user2", "User Two", "oi"); err != nil {
 		t.Fatalf("add message live2: %v", err)
 	}
-	if _, err := db.conn.Exec(
+	if err := db.ExecSQL(
 		"INSERT INTO false_positives (comment, category, expected) VALUES (?, ?, ?)",
 		"example", "SPAM", "SIM_SPAM",
 	); err != nil {
@@ -642,7 +637,7 @@ func TestSessionReuseAgeCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			db := openTestDB(t)
-			_, err := db.conn.Exec(
+			err := db.ExecSQL(
 				`INSERT INTO gifts (live_name, uniqueId, nickname, gift_name, timestamp) VALUES (?, ?, ?, ?, ?)`,
 				"live1", "user1", "User", "Rose", tt.at.UTC().Format("2006-01-02 15:04:05"),
 			)
@@ -880,7 +875,7 @@ func TestListLives(t *testing.T) {
 		t.Helper()
 		switch table {
 		case "user_messages":
-			_, err := db.conn.Exec(
+			err := db.ExecSQL(
 				"INSERT INTO user_messages (live_name, uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?, ?)",
 				liveName, "u1", "User", "oi", ts,
 			)
@@ -888,7 +883,7 @@ func TestListLives(t *testing.T) {
 				t.Fatalf("seed user_messages: %v", err)
 			}
 		case "gifts":
-			_, err := db.conn.Exec(
+			err := db.ExecSQL(
 				"INSERT INTO gifts (live_name, uniqueId, nickname, gift_name, timestamp) VALUES (?, ?, ?, ?, ?)",
 				liveName, "u1", "User", "rose", ts,
 			)
@@ -947,7 +942,7 @@ func TestListLivesEmpty(t *testing.T) {
 func TestListLivesLimit(t *testing.T) {
 	db := openTestDB(t)
 	for i := 0; i < 5; i++ {
-		if _, err := db.conn.Exec(
+		if err := db.ExecSQL(
 			"INSERT INTO gifts (live_name, uniqueId, nickname, gift_name) VALUES (?, ?, ?, ?)",
 			fmt.Sprintf("live%d", i), "u1", "User", "rose",
 		); err != nil {
@@ -971,17 +966,17 @@ func TestDeleteLive(t *testing.T) {
 		var err error
 		switch table {
 		case "gifts":
-			_, err = db.conn.Exec(
+			err = db.ExecSQL(
 				"INSERT INTO gifts (live_name, uniqueId, nickname, gift_name) VALUES (?, ?, ?, ?)",
 				liveName, "u1", "User", "rose",
 			)
 		case "user_messages":
-			_, err = db.conn.Exec(
+			err = db.ExecSQL(
 				"INSERT INTO user_messages (live_name, uniqueId, username, message) VALUES (?, ?, ?, ?)",
 				liveName, "u1", "User", "oi",
 			)
 		case "gift_goals":
-			_, err = db.conn.Exec(
+			err = db.ExecSQL(
 				"INSERT INTO gift_goals (live_name, title, target_units, status) VALUES (?, ?, ?, ?)",
 				liveName, "meta", 100, "active",
 			)
@@ -1177,14 +1172,13 @@ func seedMessagesAt(t *testing.T, db *DB, liveName, uid, user string, from time.
 	t.Helper()
 	ids := make([]int64, 0, n)
 	for i := 0; i < n; i++ {
-		res, err := db.conn.Exec(
+		id, err := db.insertID(
 			"INSERT INTO user_messages (live_name, uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?, ?)",
 			liveName, uid, user, fmt.Sprintf("msg %d", i), from.Add(time.Duration(i)*time.Minute),
 		)
 		if err != nil {
 			t.Fatalf("seed message %d: %v", i, err)
 		}
-		id, _ := res.LastInsertId()
 		ids = append(ids, id)
 	}
 	return ids

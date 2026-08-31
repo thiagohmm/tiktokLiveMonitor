@@ -751,6 +751,7 @@ const createSubscriberBtn = document.getElementById('createSubscriberBtn');
 const adminLivesSection = document.getElementById('adminLivesSection');
 const authUserBar = document.getElementById('authUserBar');
 const authUserEmail = document.getElementById('authUserEmail');
+const adminPageBtn = document.getElementById('adminPageBtn');
 const logoutBtn = document.getElementById('logoutBtn');
 
 const adminLivesTableBody = document.getElementById('adminLivesTableBody');
@@ -2322,7 +2323,9 @@ async function loadInitialState() {
 }
 
 function setupEventStream() {
-    const eventSource = new EventSource(window.TLMAuth ? window.TLMAuth.eventsURL() : '/events');
+    const eventSource = window.TLMAuth
+        ? window.TLMAuth.createEventStream()
+        : new EventSource('/events');
 
     eventSource.addEventListener('server-state', event => {
         const data = JSON.parse(event.data);
@@ -3223,11 +3226,11 @@ function renderAdminUsers(users) {
         tr.innerHTML = `
             <td data-label="E-mail">${escapeHtml(user.email || '—')}</td>
             <td data-label="Nome">${escapeHtml(user.displayName || '—')}</td>
-            <td data-label="Status">${user.active ? 'Ativo' : 'Desativado'}</td>
+            <td data-label="Status">${user.active ? 'Aprovado' : 'Aguardando aprovação'}</td>
             <td data-label="Validade">${formatSubscriberExpiry(user.subscriptionExpiresAt)}</td>
             <td data-label="Observações">${escapeHtml(user.notes || '—')}</td>
             <td data-label="Ações">
-                <button class="small-btn secondary-btn" type="button" data-action="toggle">${user.active ? 'Desativar' : 'Ativar'}</button>
+                <button class="small-btn secondary-btn" type="button" data-action="toggle">${user.active ? 'Suspender' : 'Aprovar'}</button>
                 <button class="small-btn delete-btn" type="button" data-action="delete">Remover</button>
             </td>
         `;
@@ -3322,7 +3325,8 @@ function setupAuthUI(user) {
         if (authUserBar) authUserBar.style.display = 'flex';
         if (authUserEmail) authUserEmail.textContent = user?.email || 'Usuário';
     }
-    const isAdmin = window.TLMAuth && window.TLMAuth.isAdmin();
+    const isAdmin = window.TLMAuth && window.TLMAuth.isAuthEnabled() && window.TLMAuth.isAdmin();
+    if (adminPageBtn) adminPageBtn.style.display = isAdmin ? 'inline-block' : 'none';
     if (adminUsersSection) adminUsersSection.style.display = isAdmin ? 'block' : 'none';
     if (adminLivesSection) adminLivesSection.style.display = isAdmin ? 'block' : 'none';
 }
@@ -3335,6 +3339,11 @@ if (createSubscriberBtn) {
 }
 if (logoutBtn) {
     logoutBtn.addEventListener('click', () => window.TLMAuth.signOut());
+}
+if (adminPageBtn) {
+    adminPageBtn.addEventListener('click', () => {
+        window.location.href = '/admin.html';
+    });
 }
 
 // --- Administração: lives e horários ---

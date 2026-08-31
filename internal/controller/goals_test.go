@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
@@ -10,8 +12,16 @@ import (
 
 func newTestController(t *testing.T, liveName string) *AppController {
 	t.Helper()
-	dir := t.TempDir()
-	db, err := database.Open(dir)
+	baseDSN := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
+	if baseDSN == "" {
+		t.Skip("TEST_DATABASE_URL não configurado: testes exigem PostgreSQL descartável")
+	}
+	dsn, cleanup, err := database.CreateTestDatabase(baseDSN)
+	if err != nil {
+		t.Fatalf("create test database: %v", err)
+	}
+	t.Cleanup(cleanup)
+	db, err := database.OpenPostgres(dsn)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

@@ -1,6 +1,8 @@
 package monitor
 
 import (
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -174,7 +176,16 @@ func TestSessionReusable(t *testing.T) {
 
 func newMonitorWithDB(t *testing.T) (*Monitor, *database.DB) {
 	t.Helper()
-	db, err := database.Open(t.TempDir())
+	baseDSN := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
+	if baseDSN == "" {
+		t.Skip("TEST_DATABASE_URL não configurado: testes exigem PostgreSQL descartável")
+	}
+	dsn, cleanup, err := database.CreateTestDatabase(baseDSN)
+	if err != nil {
+		t.Fatalf("create test database: %v", err)
+	}
+	t.Cleanup(cleanup)
+	db, err := database.OpenPostgres(dsn)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -231,7 +242,7 @@ func TestRestoreOrPurgeDeletesStaleSession(t *testing.T) {
 	}
 	err = db.ExecSQL(
 		`INSERT INTO anomaly_logs (live_name, day, uniqueId, comment, is_anomaly, category, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		"live1", "2020-01-01", "user1", "old", 1, "SPAM", stale,
+		"live1", "2020-01-01", "user1", "old", true, "SPAM", stale,
 	)
 	if err != nil {
 		t.Fatalf("insert anomaly: %v", err)

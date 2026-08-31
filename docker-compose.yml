@@ -10,6 +10,21 @@
 #   docker compose -f docker-compose.raspberry.yml up -d
 
 services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tiktok_live_monitor}
+      POSTGRES_USER: ${POSTGRES_USER:-tlm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tlm-local-dev-only}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   tiktok-live-monitor:
     build:
       context: .
@@ -23,20 +38,21 @@ services:
     environment:
       HOST: "0.0.0.0"
       PORT: "3001"
-      DB_DIR: "/data"
       AUTH_ENABLED: ${AUTH_ENABLED:-1}
       SUPABASE_URL: ${SUPABASE_URL:-}
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-}
       SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
-      DATABASE_URL: ${DATABASE_URL:-}
+      DATABASE_URL: ${DATABASE_URL:-postgres://tlm:tlm-local-dev-only@postgres:5432/tiktok_live_monitor?sslmode=disable}
       AUTH_MAX_LOGIN_ATTEMPTS: ${AUTH_MAX_LOGIN_ATTEMPTS:-5}
       AUTH_LOCKOUT_MINUTES: ${AUTH_LOCKOUT_MINUTES:-15}
       AUTH_THEME_PINK: ${AUTH_THEME_PINK:-#fe2c55}
       AUTH_THEME_CYAN: ${AUTH_THEME_CYAN:-#25f4ee}
       AUTH_THEME_BG: ${AUTH_THEME_BG:-#0b0d12}
-    volumes:
-      - monitor-data:/data
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3001/api/readiness || exit 1"]
@@ -46,4 +62,4 @@ services:
       retries: 5
 
 volumes:
-  monitor-data:
+  postgres-data:

@@ -18,6 +18,8 @@ type contextKey string
 
 const userContextKey contextKey = "authUser"
 
+const AccessTokenCookie = "tlm_access_token"
+
 // User holds authenticated identity extracted from a Supabase access token.
 type User struct {
 	ID     string `json:"id"`
@@ -33,6 +35,8 @@ type Config struct {
 	SupabaseURL    string
 	SupabaseAnon   string
 	ServiceRoleKey string
+	JWTAudience    string
+	JWTIssuer      string
 }
 
 // LoadConfigFromEnv builds auth settings from environment variables.
@@ -43,18 +47,34 @@ func LoadConfigFromEnv() Config {
 	if jwtSecret == "" {
 		enabled = false
 	}
+	supabaseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("SUPABASE_URL")), "/")
+
+	audience := strings.TrimSpace(os.Getenv("SUPABASE_JWT_AUD"))
+	if audience == "" {
+		audience = "authenticated"
+	}
+	issuer := strings.TrimSpace(os.Getenv("SUPABASE_JWT_ISSUER"))
+	if issuer == "" && supabaseURL != "" {
+		issuer = supabaseURL + "/auth/v1"
+	}
+
 	return Config{
 		Enabled:        enabled,
 		JWTSecret:      jwtSecret,
-		SupabaseURL:    strings.TrimRight(strings.TrimSpace(os.Getenv("SUPABASE_URL")), "/"),
+		SupabaseURL:    supabaseURL,
 		SupabaseAnon:   strings.TrimSpace(os.Getenv("SUPABASE_ANON_KEY")),
 		ServiceRoleKey: strings.TrimSpace(os.Getenv("SUPABASE_SERVICE_ROLE_KEY")),
+		JWTAudience:    audience,
+		JWTIssuer:      issuer,
 	}
 }
 
 // PublicPath reports whether a request path can be accessed without a token.
 // Static web assets stay public; API routes and SSE require authentication.
 func PublicPath(path string) bool {
+	if path == "/admin.html" {
+		return false
+	}
 	if path == "/login.html" || path == "/auth.js" || path == "/api/auth/config" || path == "/api/auth/login" || path == "/api/readiness" {
 		return true
 	}
@@ -67,13 +87,18 @@ func PublicPath(path string) bool {
 	return true
 }
 
-// TokenFromRequest reads a bearer token or ?access_token= for SSE clients.
+// TokenFromRequest reads a bearer token from the Authorization header.
+// Tokens in the URL (?access_token=) are rejected to avoid leaking them
+// into logs, Referer headers and browser history.
 func TokenFromRequest(r *http.Request) string {
 	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
 	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
 		return strings.TrimSpace(authHeader[7:])
 	}
-	return strings.TrimSpace(r.URL.Query().Get("access_token"))
+	if cookie, err := r.Cookie(AccessTokenCookie); err == nil {
+		return strings.TrimSpace(cookie.Value)
+	}
+	return ""
 }
 
 // ValidateToken parses and validates a Supabase JWT.
@@ -85,12 +110,22 @@ func (c Config) ValidateToken(tokenString string) (*User, error) {
 		return nil, errors.New("token ausente")
 	}
 
+	parseOpts := []jwt.ParserOption{
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+	}
+	if c.JWTIssuer != "" {
+		parseOpts = append(parseOpts, jwt.WithIssuer(c.JWTIssuer))
+	}
+	if c.JWTAudience != "" {
+		parseOpts = append(parseOpts, jwt.WithAudience(c.JWTAudience))
+	}
+
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (any, error) {
 		if token.Method != jwt.SigningMethodHS256 {
 			return nil, fmt.Errorf("algoritmo inesperado: %v", token.Method.Alg())
 		}
 		return []byte(c.JWTSecret), nil
-	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
+	}, parseOpts...)
 	if err != nil || !token.Valid {
 		return nil, errors.New("token inválido")
 	}
@@ -107,7 +142,9 @@ func (c Config) ValidateToken(tokenString string) (*User, error) {
 
 	email, _ := claims["email"].(string)
 	role := "subscriber"
-	active := true
+	// Contas sem a claim explícita ficam pendentes por padrão. Isso impede que
+	// um usuário criado fora do fluxo administrativo ganhe acesso por acidente.
+	active := false
 	var subscriptionExpiresAt *time.Time
 
 	if appMeta, ok := claims["app_metadata"].(map[string]any); ok {
@@ -140,6 +177,10 @@ func (c Config) ValidateToken(tokenString string) (*User, error) {
 func (c Config) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !c.Enabled {
+			if r.URL.Path == "/admin.html" {
+				writeAuthError(w, http.StatusServiceUnavailable, "administração indisponível: autenticação não configurada")
+				return
+			}
 			ctx := context.WithValue(r.Context(), userContextKey, &User{Role: "admin", Active: true})
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
@@ -151,11 +192,19 @@ func (c Config) Middleware(next http.Handler) http.Handler {
 
 		user, err := c.ValidateToken(TokenFromRequest(r))
 		if err != nil {
+			if r.URL.Path == "/admin.html" {
+				http.Redirect(w, r, "/login.html?next=%2Fadmin.html", http.StatusSeeOther)
+				return
+			}
 			writeAuthError(w, http.StatusUnauthorized, "não autorizado")
 			return
 		}
 		if !user.Active {
 			writeAuthError(w, http.StatusForbidden, "conta desativada")
+			return
+		}
+		if r.URL.Path == "/admin.html" && user.Role != "admin" {
+			writeAuthError(w, http.StatusForbidden, "acesso exclusivo para administradores")
 			return
 		}
 

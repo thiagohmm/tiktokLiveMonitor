@@ -176,18 +176,20 @@ func (a *AdminClient) CreateSubscriber(req CreateSubscriberRequest) (*Subscriber
 		"email":         email,
 		"password":      password,
 		"email_confirm": true,
-		"app_metadata":  subscriberAppMetadata(true, expiresAt),
+		// O cliente nasce pendente. A liberação é uma ação separada do admin,
+		// feita depois da confirmação do pagamento.
+		"app_metadata": subscriberAppMetadata(false, expiresAt),
 	}, &authResp); err != nil {
 		return nil, err
 	}
 
 	profile := map[string]any{
-		"email":         email,
-		"display_name":  strings.TrimSpace(req.DisplayName),
-		"role":          "subscriber",
-		"active":        true,
-		"notes":         strings.TrimSpace(req.Notes),
-		"updated_at":    time.Now().UTC(),
+		"email":        email,
+		"display_name": strings.TrimSpace(req.DisplayName),
+		"role":         "subscriber",
+		"active":       false,
+		"notes":        strings.TrimSpace(req.Notes),
+		"updated_at":   time.Now().UTC(),
 	}
 	if expiresAt != nil {
 		profile["subscription_expires_at"] = expiresAt.UTC().Format(time.RFC3339Nano)

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Administração — TikTok Live Monitor</title>
+    <style>
+        :root {
+            --bg: #0b0d12; --card: #151923; --border: rgba(255,255,255,.1);
+            --pink: #fe2c55; --cyan: #25f4ee; --text: #f2f3f5;
+            --muted: #9aa0aa; --danger: #ef4444;
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; padding: 24px; font-family: Inter, system-ui, sans-serif; color: var(--text); background: var(--bg); }
+        .container { width: min(1200px, 100%); margin: 0 auto; }
+        header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 28px; }
+        h1, h2 { margin: 0; }
+        h1 { font-size: 1.6rem; }
+        h2 { font-size: 1.15rem; }
+        .muted { color: var(--muted); }
+        .actions, .section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+        .panel { margin-bottom: 24px; padding: 20px; border: 1px solid var(--border); border-radius: 14px; background: var(--card); }
+        .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 16px 0; }
+        input, button { padding: 11px 13px; border-radius: 9px; border: 1px solid var(--border); font: inherit; }
+        input { width: 100%; color: var(--text); background: rgba(255,255,255,.05); }
+        button { cursor: pointer; color: white; font-weight: 700; background: var(--pink); }
+        button.secondary { color: var(--text); background: transparent; }
+        button.danger { background: var(--danger); }
+        button:disabled { opacity: .55; cursor: wait; }
+        .table-wrap { overflow-x: auto; margin-top: 14px; }
+        table { width: 100%; border-collapse: collapse; min-width: 760px; }
+        th, td { padding: 11px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: middle; }
+        th { color: var(--muted); font-size: .82rem; text-transform: uppercase; }
+        td button { padding: 7px 9px; margin: 2px; font-size: .8rem; }
+        .badge { display: inline-block; padding: 4px 8px; border-radius: 999px; font-size: .78rem; font-weight: 700; }
+        .approved { color: #86efac; background: rgba(34,197,94,.15); }
+        .pending { color: #fde68a; background: rgba(245,158,11,.15); }
+        .message { display: none; margin-bottom: 18px; padding: 12px; border-radius: 9px; }
+        .message.visible { display: block; }
+        .message.error { color: #fecaca; background: rgba(220,38,38,.15); }
+        .message.success { color: #bbf7d0; background: rgba(22,163,74,.15); }
+        #adminContent { display: none; }
+        @media (max-width: 650px) { body { padding: 14px; } header { align-items: flex-start; flex-direction: column; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>Administração</h1>
+                <div id="adminIdentity" class="muted">Validando acesso…</div>
+            </div>
+            <div class="actions">
+                <button id="backBtn" class="secondary" type="button">Voltar ao monitor</button>
+                <button id="logoutBtn" class="secondary" type="button">Sair</button>
+            </div>
+        </header>
+
+        <div id="pageMessage" class="message"></div>
+
+        <main id="adminContent">
+            <section class="panel">
+                <div class="section-head">
+                    <h2>Assinantes</h2>
+                    <button id="refreshUsersBtn" class="secondary" type="button">Atualizar</button>
+                </div>
+                <div class="form-grid">
+                    <input type="email" id="subscriberEmail" placeholder="E-mail do assinante">
+                    <input type="password" id="subscriberPassword" placeholder="Senha (mín. 8 caracteres)">
+                    <input type="text" id="subscriberName" placeholder="Nome (opcional)">
+                    <input type="datetime-local" id="subscriberExpires" title="Validade da assinatura">
+                    <input type="text" id="subscriberNotes" placeholder="Observações (opcional)">
+                    <button id="createSubscriberBtn" type="button">Cadastrar pendente</button>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>E-mail</th><th>Nome</th><th>Status</th><th>Validade</th><th>Observações</th><th>Ações</th></tr></thead>
+                        <tbody id="usersBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="section-head">
+                    <h2>Lives e horários</h2>
+                    <button id="refreshLivesBtn" class="secondary" type="button">Atualizar</button>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>Live</th><th>Dia</th><th>Início</th><th>Fim</th><th>Duração</th><th>Eventos</th><th>Ações</th></tr></thead>
+                        <tbody id="livesBody"></tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+    </div>
+    <script src="/auth.js"></script>
+    <script src="/admin.js"></script>
+</body>
+</html>

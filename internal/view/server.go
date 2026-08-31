@@ -39,6 +39,7 @@ type HTTPServer struct {
 	auth       auth.Config
 	admin      *auth.AdminClient
 	lockout    *auth.LoginLockout
+	proxyTrust auth.ProxyTrust
 	theme      auth.ThemeColors
 }
 
@@ -96,6 +97,7 @@ func New(cfg Config, ctrl *controller.AppController) *HTTPServer {
 		auth:       authCfg,
 		admin:      auth.NewAdminClient(authCfg),
 		lockout:    auth.NewLoginLockout(auth.LoadLockoutConfigFromEnv()),
+		proxyTrust: auth.LoadProxyTrustFromEnv(),
 		theme:      auth.LoadThemeFromEnv(),
 	}
 }
@@ -206,8 +208,14 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 
 	addr := fmt.Sprintf("%s:%d", host, port)
 	s.httpServer = &http.Server{
-		Addr:    addr,
+		Addr: addr,
 		Handler: handler,
+		// Hardening against Slowloris and stuck connections. The SSE handler
+		// clears the write/read deadlines per connection via ResponseController.
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:     30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	// Graceful shutdown.
@@ -238,6 +246,12 @@ func (s *HTTPServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "SSE not supported", http.StatusInternalServerError)
 		return
 	}
+
+	// SSE connections live for hours: clear the server-wide read/write
+	// deadlines for this connection only.
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Time{})
+	_ = rc.SetReadDeadline(time.Time{})
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -322,7 +336,7 @@ func (s *HTTPServer) handleHistory(w http.ResponseWriter, r *http.Request) {
 		}
 		deleted, err := s.controller.DeleteModeration(id)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeInternalError(w, r, err)
 			return
 		}
 		writeJSON(w, map[string]interface{}{"success": true, "deleted": deleted})
@@ -331,7 +345,7 @@ func (s *HTTPServer) handleHistory(w http.ResponseWriter, r *http.Request) {
 
 	history, err := s.controller.GetRecentModerations(100)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, history)
@@ -356,7 +370,7 @@ func (s *HTTPServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.controller.StartMonitoring(context.Background(), body.Username); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeInternalError(w, r, err)
 		return
 	}
 
@@ -371,7 +385,7 @@ func (s *HTTPServer) handleDisconnect(w http.ResponseWriter, r *http.Request) {
 func (s *HTTPServer) handleClearHistory(w http.ResponseWriter, r *http.Request) {
 	deleted, err := s.controller.ClearHistory()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, map[string]interface{}{"success": true, "deleted": deleted})
@@ -395,7 +409,7 @@ func (s *HTTPServer) handleGifts(w http.ResponseWriter, r *http.Request) {
 		if userID != "" {
 			gifts, err := s.controller.GetGiftsByUser(userID)
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
+				writeInternalError(w, r, err)
 				return
 			}
 			if gifts == nil {
@@ -407,7 +421,7 @@ func (s *HTTPServer) handleGifts(w http.ResponseWriter, r *http.Request) {
 		state := s.controller.GetState()
 		gifts, err := s.controller.GetRecentGifts(state.Username, limit)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeInternalError(w, r, err)
 			return
 		}
 		if gifts == nil {
@@ -419,7 +433,7 @@ func (s *HTTPServer) handleGifts(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodDelete {
 		affected, err := s.controller.ClearGifts()
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeInternalError(w, r, err)
 			return
 		}
 		writeJSON(w, map[string]interface{}{"success": true, "deleted": affected})
@@ -466,7 +480,7 @@ func (s *HTTPServer) handleTargetGiftHistory(w http.ResponseWriter, r *http.Requ
 		items, err = s.controller.GetRecentTargetGiftHistory(limit)
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeInternalError(w, r, err)
 		return
 	}
 	if items == nil {
@@ -497,7 +511,7 @@ func (s *HTTPServer) handleTargetGiftHistoryAnswer(w http.ResponseWriter, r *htt
 		return
 	}
 	if err := s.controller.AnswerTargetGift(body.ID, body.ResponseType); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, map[string]bool{"success": true})
@@ -516,7 +530,7 @@ func (s *HTTPServer) handlePinnedComments(w http.ResponseWriter, r *http.Request
 	}
 	items, err := s.controller.GetRecentPinnedComments(limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeInternalError(w, r, err)
 		return
 	}
 	if items == nil {
@@ -539,7 +553,7 @@ func (s *HTTPServer) handleRanking(w http.ResponseWriter, r *http.Request) {
 	}
 	ranking, err := s.controller.GetLiveRanking(liveName)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, ranking)
@@ -562,7 +576,7 @@ func (s *HTTPServer) handleAdminLives(w http.ResponseWriter, r *http.Request) {
 	}
 	lives, err := s.controller.GetLives(limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, map[string]interface{}{"lives": lives})
@@ -584,7 +598,7 @@ func (s *HTTPServer) handleAdminLivesDelete(w http.ResponseWriter, r *http.Reque
 	}
 	deleted, err := s.controller.DeleteLive(liveName)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, map[string]interface{}{"deleted": deleted})
@@ -604,7 +618,7 @@ func (s *HTTPServer) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 	report, err := s.controller.GenerateReport(r.Context(), liveName)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, report)
@@ -623,7 +637,7 @@ func (s *HTTPServer) handleProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	profile, err := s.controller.GetUserProfile(uniqueID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeInternalError(w, r, err)
 		return
 	}
 	writeJSON(w, profile)
@@ -634,7 +648,7 @@ func (s *HTTPServer) handleGoals(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		state, err := s.controller.GetGoalsState()
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeInternalError(w, r, err)
 			return
 		}
 		writeJSON(w, state)
@@ -665,7 +679,7 @@ func (s *HTTPServer) handleGoals(w http.ResponseWriter, r *http.Request) {
 			// Update: preserve status/milestones timestamps of the existing goal.
 			state, err := s.controller.GetGoalsState()
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
+				writeInternalError(w, r, err)
 				return
 			}
 			existing := findGoal(state, body.ID)
@@ -680,7 +694,7 @@ func (s *HTTPServer) handleGoals(w http.ResponseWriter, r *http.Request) {
 				existing.Milestones = body.Milestones
 			}
 			if err := s.controller.UpdateGoal(*existing); err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
+				writeInternalError(w, r, err)
 				return
 			}
 			writeJSON(w, *existing)
@@ -770,4 +784,13 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// writeInternalError responde com mensagem genérica (evita vazar detalhes
+// do banco/SQL ao cliente) e registra o erro real no log do servidor.
+func writeInternalError(w http.ResponseWriter, r *http.Request, err error) {
+	log.Printf("[View] erro interno (%s %s): %v", r.Method, r.URL.Path, err)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusInternalServerError)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": "erro interno do servidor"})
 }

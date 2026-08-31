@@ -19,14 +19,14 @@ RUN go mod download
 
 COPY . .
 
-# Etapa de testes; pula com --build-arg SKIP_TESTS=1 (recomendado na Pi 4)
+# Etapa de testes; pula com --build-arg SKIP_TESTS=1 (recomendado na Pi 4).
+# Os testes que tocam o banco exigem TEST_DATABASE_URL (PostgreSQL descartável).
 ARG SKIP_TESTS=0
 RUN if [ "$SKIP_TESTS" = "1" ]; then echo "SKIP_TESTS=1: pulando testes"; \
-    else CGO_ENABLED=1 go test ./internal/... -count=1 -timeout 60s; fi
+    else go test ./internal/... -count=1 -timeout 120s; fi
 
-# CGO (go-sqlite3) exige toolchain nativa da arquitetura alvo:
-# build nativo = rápida; via buildx/QEMU = mais lenta mas funcional.
-RUN CGO_ENABLED=1 GOOS=linux GOARCH=$TARGETARCH go build -o /tiktok-live-monitor .
+# Sem CGO desde a migração para PostgreSQL (pgx puro Go): cross-build rápido.
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -o /tiktok-live-monitor .
 
 # Stage 2: Minimal runtime (multi-arch). Sem Python/llama/GGUF: apenas o
 # backend Go + a bridge Node (tiktok-live-connector) + a UI estática.
