@@ -126,8 +126,9 @@ type UserRank struct {
 	Nickname      string  `json:"nickname"`
 	Score         float64 `json:"score"`
 	GiftScore     float64 `json:"giftScore"`
-	// Diamonds is the total value of gifts sent by the user (sum of gift
-	// units), the metric TikTok's in-room live ranking is based on.
+	// Diamonds is the total coin (diamond) value of the gifts sent by the
+	// user (sum of gift price x repeat count), the metric TikTok's in-room
+	// live ranking is based on.
 	Diamonds int `json:"diamonds"`
 	// Tier holds the TikTok visual tier for the gifter ranking top 3
 	// (crown / headband / medal); empty outside that podium.
@@ -151,6 +152,8 @@ type LiveRanking struct {
 	UserRanks  []UserRank `json:"userRanks"`
 	// Mode is the ranking criterion in use ("engagement" or "tiktok").
 	Mode string `json:"mode,omitempty"`
+	// TotalGiftValue is the room-level sum of gift coin values (💎).
+	TotalGiftValue int `json:"totalGiftValue,omitempty"`
 	// TotalLikes is the room-level cumulative like counter reported by the
 	// TikTok stream (authoritative overall like count for the live).
 	TotalLikes int64 `json:"totalLikes,omitempty"`
@@ -166,6 +169,8 @@ type LiveReport struct {
 	ParticipantCount  int              `json:"participantCount"`
 	GiftCount         int              `json:"giftCount"`
 	GiftTotal         int              `json:"giftTotal"`
+	// GiftValue is the total coin (💎) value of the gifts received in the live.
+	GiftValue         int              `json:"giftValue,omitempty"`
 	TopSupporters     []UserRank       `json:"topSupporters"`
 	FrequentQuestions []string         `json:"frequentQuestions"`
 	ModerationIssues  []AnomalySummary `json:"moderationIssues"`
@@ -191,6 +196,9 @@ type UserProfile struct {
 	// TotalGiftUnits is the sum of repeat_count over the user's gifts
 	// (same metric used by gift goals and reports).
 	TotalGiftUnits int `json:"totalGiftUnits"`
+	// TotalGiftValue is the sum of the coin (💎) value of the user's gifts
+	// (gift price x repeat_count, researched TikTok live gift table).
+	TotalGiftValue int `json:"totalGiftValue,omitempty"`
 	// TotalLikes is the sum of like_count over the user's like events.
 	TotalLikes int `json:"totalLikes"`
 	// TotalShares is the number of share events made by the user.

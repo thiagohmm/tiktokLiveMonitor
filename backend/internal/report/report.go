@@ -47,6 +47,7 @@ func (g *Generator) Generate(ctx context.Context, liveName string) (model.LiveRe
 
 	gifts, _ := g.repo.GetRecentGifts(liveName, 1000)
 	report.GiftTotal = giftTotal(gifts)
+	report.GiftValue = giftValueTotal(gifts)
 	report.GiftCount = len(gifts)
 
 	byLive, _ := g.repo.GetAllUserMessages()
@@ -78,7 +79,8 @@ func topSupporters(stats []model.LiveStat) []model.UserRank {
 		ranks = append(ranks, model.UserRank{
 			UniqueID:      s.UniqueID,
 			Nickname:      s.Nickname,
-			GiftScore:     float64(s.GiftTotal),
+			GiftScore:     float64(s.GiftValue),
+			Diamonds:      s.GiftValue,
 			GiftCount:     s.GiftCount,
 			MessageCount:  s.MessageCount,
 			QuestionCount: s.QuestionCount,
@@ -97,6 +99,15 @@ func giftTotal(gifts []model.Gift) int {
 	total := 0
 	for _, g := range gifts {
 		total += g.RepeatCount
+	}
+	return total
+}
+
+// giftValueTotal sums the coin (💎) value of the gifts (price x repeat count).
+func giftValueTotal(gifts []model.Gift) int {
+	total := 0
+	for _, g := range gifts {
+		total += g.RepeatCount * model.GiftValue(g.GiftName)
 	}
 	return total
 }

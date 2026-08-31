@@ -1293,6 +1293,7 @@ function renderProfile(profile) {
     const statItems = [
         { value: profile.totalMessages != null ? profile.totalMessages : 0, label: 'Mensagens' },
         { value: giftValue, label: 'Presentes' },
+        { value: profile.totalGiftValue != null ? profile.totalGiftValue : 0, label: 'Valor 💎' },
         { value: profile.totalLikes != null ? profile.totalLikes : 0, label: 'Curtidas' },
         { value: profile.totalShares != null ? profile.totalShares : 0, label: 'Compartilhamentos' },
         { value: (profile.lastLives || []).length, label: 'Vidas participadas' }
@@ -2654,6 +2655,21 @@ function renderRanking(ranking) {
         trTotal.appendChild(tdValue);
         rankingTableBody.appendChild(trTotal);
     }
+
+    // Total de valor (💎) dos presentes da live.
+    if (ranking.totalGiftValue > 0) {
+        const trTotal = document.createElement('tr');
+        trTotal.style.fontWeight = '600';
+        const tdLabel = document.createElement('td');
+        tdLabel.colSpan = 8;
+        tdLabel.style.textAlign = 'right';
+        tdLabel.textContent = 'Total de valor dos presentes:';
+        const tdValue = document.createElement('td');
+        tdValue.textContent = String(ranking.totalGiftValue) + ' 💎';
+        trTotal.appendChild(tdLabel);
+        trTotal.appendChild(tdValue);
+        rankingTableBody.appendChild(trTotal);
+    }
 }
 
 // --- Relatório Pós-Live ---
@@ -2695,7 +2711,8 @@ function renderReport(report) {
         { value: report.messageCount || 0, label: 'Mensagens' },
         { value: report.participantCount || 0, label: 'Participantes' },
         { value: report.giftCount || 0, label: 'Presentes' },
-        { value: report.giftTotal || 0, label: 'Total presentes' }
+        { value: report.giftTotal || 0, label: 'Total presentes' },
+        { value: report.giftValue || 0, label: 'Valor 💎' }
     ];
     stats.forEach(stat => {
         const box = document.createElement('div');

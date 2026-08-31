@@ -131,11 +131,16 @@ type LiveStat struct {
 	MessageCount  int
 	QuestionCount int
 	GiftCount     int
-	GiftTotal     int
-	ShareCount    int
-	LikeCount     int
-	FirstSeen     string
-	LastSeen      string
+	// GiftTotal is the sum of gift units (repeat_count) sent by the user.
+	GiftTotal int
+	// GiftValue is the total coin (diamond) value of the gifts sent by the
+	// user: sum of GiftValue(gift_name) x repeat_count, using the researched
+	// TikTok live gift price table.
+	GiftValue  int
+	ShareCount int
+	LikeCount  int
+	FirstSeen  string
+	LastSeen   string
 }
 
 // SettingsRepository persists application settings (target gifts, moderation

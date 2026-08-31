@@ -1389,19 +1389,20 @@ func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
 	}
 	msgRows.Close()
 
-	// Gifts.
+	// Gifts. Grouped by (user, gift) so each gift's researched coin value can
+	// be applied before summing the user's total gift value.
 	giftRows, err := db.query(`
-		SELECT uniqueId, COALESCE((array_agg(nickname ORDER BY timestamp DESC))[1], '') AS nickname, COUNT(*) AS n, SUM(repeat_count) AS total,
+		SELECT uniqueId, COALESCE((array_agg(nickname ORDER BY timestamp DESC))[1], '') AS nickname, gift_name, COUNT(*) AS n, SUM(repeat_count) AS total,
 			MIN(timestamp) AS first, MAX(timestamp) AS last
-		FROM gifts WHERE live_name = ? GROUP BY uniqueId`, liveName)
+		FROM gifts WHERE live_name = ? GROUP BY uniqueId, gift_name`, liveName)
 	if err != nil {
 		return nil, fmt.Errorf("query live stats gifts: %w", err)
 	}
 	for giftRows.Next() {
-		var uid, uname string
+		var uid, uname, giftName string
 		var n, total int
 		var first, last sql.NullString
-		if err := giftRows.Scan(&uid, &uname, &n, &total, &first, &last); err != nil {
+		if err := giftRows.Scan(&uid, &uname, &giftName, &n, &total, &first, &last); err != nil {
 			giftRows.Close()
 			return nil, fmt.Errorf("scan live stat gift: %w", err)
 		}
@@ -1410,9 +1411,14 @@ func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
 		}
 		s := stats[uid]
 		s.UniqueID = uid
-		s.Nickname = coalesceStr(uname, uid)
-		s.GiftCount = n
-		s.GiftTotal = total
+		// Keep the nickname from the most recent gift group (same heuristic as
+		// the per-group array_agg ... ORDER BY timestamp DESC pick).
+		if last.Valid && last.String != "" && last.String > s.LastSeen {
+			s.Nickname = coalesceStr(uname, uid)
+		}
+		s.GiftCount += n
+		s.GiftTotal += total
+		s.GiftValue += total * model.GiftValue(giftName)
 		if first.Valid && first.String != "" {
 			if s.FirstSeen == "" || first.String < s.FirstSeen {
 				s.FirstSeen = first.String

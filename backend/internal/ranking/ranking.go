@@ -15,7 +15,8 @@ var ErrUnparseableTimestamp = errors.New("ranking: unparseable timestamp")
 type Weights struct {
 	// GiftPointPerGift awards points per received gift.
 	GiftPointPerGift float64
-	// GiftPointPerUnit awards points per unit of gift value (repeat count).
+	// GiftPointPerUnit awards points per coin of total gift value (the
+	// researched TikTok live price of each gift, summed over all units).
 	GiftPointPerUnit float64
 	// MessagePointPerMessage awards points per chat message. It is 0 by default
 	// because chat messages are not a ranking criterion (presents, shares,
@@ -37,7 +38,7 @@ type Weights struct {
 // Chat messages no longer determine who tops the ranking.
 var DefaultWeights = Weights{
 	GiftPointPerGift:         20,
-	GiftPointPerUnit:         5,
+	GiftPointPerUnit:         1,
 	MessagePointPerMessage:   0,
 	QuestionPointPerQuestion: 2,
 	SharePointPerShare:       10,
@@ -75,7 +76,7 @@ func (r *Ranker) Compute(stats []model.LiveStat, anomaliesByUser map[string]int)
 	results := make([]ScoreResult, 0, len(stats))
 	for _, s := range stats {
 		giftScore := r.weights.GiftPointPerGift*float64(s.GiftCount) +
-			r.weights.GiftPointPerUnit*float64(s.GiftTotal)
+			r.weights.GiftPointPerUnit*float64(s.GiftValue)
 		messageScore := r.weights.MessagePointPerMessage*float64(s.MessageCount)
 		questionScore := r.weights.QuestionPointPerQuestion*float64(s.QuestionCount)
 		likeScore := r.weights.LikePointPerLike * float64(s.LikeCount)
@@ -95,7 +96,7 @@ func (r *Ranker) Compute(stats []model.LiveStat, anomaliesByUser map[string]int)
 				Nickname:      s.Nickname,
 				Score:         score,
 				GiftScore:     giftScore,
-				Diamonds:      s.GiftTotal,
+				Diamonds:      s.GiftValue,
 				MessageCount:  s.MessageCount,
 				QuestionCount: s.QuestionCount,
 				GiftCount:     s.GiftCount,
@@ -125,34 +126,40 @@ func (r *Ranker) Compute(stats []model.LiveStat, anomaliesByUser map[string]int)
 func (r *Ranker) BuildLiveRanking(liveName string, stats []model.LiveStat, anomaliesByUser map[string]int) model.LiveRanking {
 	ranked := r.Compute(stats, anomaliesByUser)
 	ranks := make([]model.UserRank, 0, len(ranked))
+	totalGiftValue := 0
+	for _, s := range stats {
+		totalGiftValue += s.GiftValue
+	}
 	for _, res := range ranked {
 		ranks = append(ranks, res.UserRank)
 	}
 	return model.LiveRanking{
-		LiveName:   liveName,
-		UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
-		TotalUsers: len(ranks),
-		UserRanks:  ranks,
-		Mode:       model.ModeEngagement,
+		LiveName:       liveName,
+		UpdatedAt:      time.Now().UTC().Format(time.RFC3339),
+		TotalUsers:     len(ranks),
+		UserRanks:      ranks,
+		Mode:           model.ModeEngagement,
+		TotalGiftValue: totalGiftValue,
 	}
 }
 
 // ComputeTikTok reproduces the TikTok in-room live ranking: viewers are
-// ranked purely by the total value (diamonds) of the gifts they sent during
-// the live, in real time — messages, likes and shares do not move the board.
+// ranked purely by the total coin value of the gifts they sent during the
+// live (sum of each gift's researched price x repeat count), in real time —
+// messages, likes and shares do not move the board.
 // Ties break on gift count, then nickname. The top 3 receive the visual
 // tiers TikTok uses on stream: crown (#1), headband (#2), medal (#3).
 func (r *Ranker) ComputeTikTok(stats []model.LiveStat) []ScoreResult {
 	results := make([]ScoreResult, 0, len(stats))
 	for _, s := range stats {
-		diamonds := float64(s.GiftTotal)
+		diamonds := float64(s.GiftValue)
 		results = append(results, ScoreResult{
 			UserRank: model.UserRank{
 				UniqueID:      s.UniqueID,
 				Nickname:      s.Nickname,
 				Score:         diamonds,
 				GiftScore:     diamonds,
-				Diamonds:      s.GiftTotal,
+				Diamonds:      s.GiftValue,
 				MessageCount:  s.MessageCount,
 				QuestionCount: s.QuestionCount,
 				GiftCount:     s.GiftCount,
@@ -194,15 +201,20 @@ func (r *Ranker) ComputeTikTok(stats []model.LiveStat) []ScoreResult {
 func (r *Ranker) BuildTikTokRanking(liveName string, stats []model.LiveStat) model.LiveRanking {
 	ranked := r.ComputeTikTok(stats)
 	ranks := make([]model.UserRank, 0, len(ranked))
+	totalGiftValue := 0
+	for _, s := range stats {
+		totalGiftValue += s.GiftValue
+	}
 	for _, res := range ranked {
 		ranks = append(ranks, res.UserRank)
 	}
 	return model.LiveRanking{
-		LiveName:   liveName,
-		UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
-		TotalUsers: len(ranks),
-		UserRanks:  ranks,
-		Mode:       model.ModeTikTok,
+		LiveName:       liveName,
+		UpdatedAt:      time.Now().UTC().Format(time.RFC3339),
+		TotalUsers:     len(ranks),
+		UserRanks:      ranks,
+		Mode:           model.ModeTikTok,
+		TotalGiftValue: totalGiftValue,
 	}
 }
 

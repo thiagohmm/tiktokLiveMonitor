@@ -10,9 +10,9 @@ func TestComputeOrdersByScore(t *testing.T) {
 	r := New(DefaultWeights)
 
 	stats := []model.LiveStat{
-		{UniqueID: "a", Nickname: "Apos", MessageCount: 50, GiftCount: 0, GiftTotal: 0},
-		{UniqueID: "b", Nickname: "Doador", MessageCount: 5, GiftCount: 3, GiftTotal: 10},
-		{UniqueID: "c", Nickname: "Top", MessageCount: 20, GiftCount: 5, GiftTotal: 100},
+		{UniqueID: "a", Nickname: "Apos", MessageCount: 50, GiftCount: 0, GiftTotal: 0, GiftValue: 0},
+		{UniqueID: "b", Nickname: "Doador", MessageCount: 5, GiftCount: 3, GiftTotal: 10, GiftValue: 10},
+		{UniqueID: "c", Nickname: "Top", MessageCount: 20, GiftCount: 5, GiftTotal: 100, GiftValue: 2500},
 	}
 	anomalies := map[string]int{"b": 1}
 
@@ -80,10 +80,10 @@ func TestComputeTikTokRanksByDiamonds(t *testing.T) {
 	r := New(DefaultWeights)
 	stats := []model.LiveStat{
 		{UniqueID: "chatty", Nickname: "Chatty", MessageCount: 500, LikeCount: 900},
-		{UniqueID: "rich", Nickname: "Rich", GiftCount: 2, GiftTotal: 500},
-		{UniqueID: "steady", Nickname: "Steady", GiftCount: 10, GiftTotal: 300},
-		{UniqueID: "tieB", Nickname: "TieB", GiftCount: 1, GiftTotal: 300},
-		{UniqueID: "tieA", Nickname: "TieA", GiftCount: 5, GiftTotal: 300},
+		{UniqueID: "rich", Nickname: "Rich", GiftCount: 2, GiftTotal: 10, GiftValue: 500},
+		{UniqueID: "steady", Nickname: "Steady", GiftCount: 10, GiftTotal: 30, GiftValue: 300},
+		{UniqueID: "tieB", Nickname: "TieB", GiftCount: 1, GiftTotal: 3, GiftValue: 300},
+		{UniqueID: "tieA", Nickname: "TieA", GiftCount: 5, GiftTotal: 15, GiftValue: 300},
 	}
 	res := r.ComputeTikTok(stats)
 	got := []string{}
@@ -117,7 +117,7 @@ func TestComputeTikTokRanksByDiamonds(t *testing.T) {
 
 func TestBuildTikTokRanking(t *testing.T) {
 	r := New(DefaultWeights)
-	stats := []model.LiveStat{{UniqueID: "u1", Nickname: "User1", GiftCount: 3, GiftTotal: 42}}
+	stats := []model.LiveStat{{UniqueID: "u1", Nickname: "User1", GiftCount: 3, GiftTotal: 42, GiftValue: 210}}
 	lr := r.BuildTikTokRanking("streamer1", stats)
 	if lr.Mode != model.ModeTikTok {
 		t.Fatalf("mode = %s, want %s", lr.Mode, model.ModeTikTok)

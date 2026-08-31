@@ -381,6 +381,7 @@ func (c *AppController) GetUserProfile(uniqueID string) (model.UserProfile, erro
 	out.TotalGifts = len(out.Gifts)
 	for _, g := range out.Gifts {
 		out.TotalGiftUnits += g.RepeatCount
+		out.TotalGiftValue += g.RepeatCount * model.GiftValue(g.GiftName)
 	}
 	if total, err := c.repo.GetUserLikeTotal(uniqueID); err == nil {
 		out.TotalLikes = int(total)
