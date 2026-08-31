@@ -43,8 +43,15 @@ yarn-error.log*
 .vscode/
 .idea/
 
+# SQLite runtime files
+*.db
+*.db-shm
+*.db-wal
+feedback.db
+
 # Go build
 /tiktok-live-monitor
 /backend/tiktok-live-monitor
 /backend/tiktokmonitor
 /main
+/tiktokmonitor
