@@ -1,0 +1,64 @@
+@startuml
+' 00-arquitetura.puml — Visão geral da arquitetura do backend
+title TikTok Live Monitor — Arquitetura do Backend
+caption Backend Go (API SSE + REST) + ponte Node + Supabase (Postgres/Auth)
+
+skinparam componentStyle rectangle
+skinparam defaultFontName "Helvetica"
+
+actor "Frontend (nginx / Vercel / dev)" as FE
+
+package "Backend (Go) — internal/" {
+    component "view\nHTTP SSE + REST + handlers" as VIEW
+    component "controller\nAppController (orquestração)" as CTRL
+    component "monitor\nbridge + estado da live" as MON
+    component "ranking\nRanker" as RANK
+    component "report\nGenerator" as REP
+    component "auth\nJWT / lockout / Supabase" as AUTH
+    component "database\nDB (implementa Repository)" as DB
+    component "model\nentidades + interfaces" as MODEL
+
+    node "Processo filho (Node)" {
+        component "bridge.js\ntiktok-live-connector" as BRIDGE
+    }
+}
+
+package "Externo" {
+    component "Supabase Auth\n/auth/v1 + REST /rest/v1" as SUPAUTH
+    component "Supabase Postgres\n(DATABASE_URL)" as SUPAPG
+    component "TikTok Live\nWebcast (WebSocket)" as TIKTOK
+}
+
+' Camadas internas (dependência estrutural)
+VIEW ..> CTRL : métodos do AppController
+CTRL ..> MON : Start/Stop/GetState + eventos
+CTRL ..> DB : via model.Repository
+CTRL ..> RANK : BuildLiveRanking/BuildTikTokRanking
+CTRL ..> REP : Generate
+DB ..> MODEL : implementa contratos
+CTRL ..> MODEL : usa entidades
+RANK ..> MODEL
+REP ..> MODEL
+MON ..> MODEL
+
+' Fluxo de dados principal
+FE -down-> VIEW : /api/* (HTTP) e /events (SSE)
+
+' ponte Node (processo filho gerenciado pelo monitor)
+MON -down-> BRIDGE : JSON Lines (stdin/stdout) - spawn
+BRIDGE -down-> TIKTOK : conecta no stream da live
+
+' persistência
+DB -right-> SUPAPG : pgx (pool)
+
+' autenticação
+VIEW ..> AUTH : middleware/RequireAdmin
+AUTH -right-> SUPAUTH : login/admin (anon + service role)
+
+note bottom of MODEL
+  model é o "contrato central": sem
+  dependência de I/O; database o implementa
+  e as demais camadas o consomem.
+end note
+
+@enduml

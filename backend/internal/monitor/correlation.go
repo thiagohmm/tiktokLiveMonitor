@@ -181,13 +181,7 @@ func recentChatCandidatesLocked(chat []ChatMessage, now int64) []QuestionEntry {
 		if msg.Timestamp < cutoff {
 			continue
 		}
-		out = append(out, QuestionEntry{
-			UniqueID:   msg.UniqueID,
-			Nickname:   msg.Nickname,
-			Comment:    msg.Comment,
-			Timestamp:  msg.Timestamp,
-			IsFollower: msg.IsFollower,
-		})
+		out = append(out, QuestionEntry(msg))
 	}
 	if len(out) > 40 {
 		out = out[len(out)-40:]
@@ -227,13 +221,7 @@ func getForwardMessages(base QuestionEntry, chat []ChatMessage, limit int) []Que
 	}
 	out := make([]QuestionEntry, 0, len(source))
 	for _, msg := range source {
-		out = append(out, QuestionEntry{
-			UniqueID:   msg.UniqueID,
-			Nickname:   msg.Nickname,
-			Comment:    msg.Comment,
-			Timestamp:  msg.Timestamp,
-			IsFollower: msg.IsFollower,
-		})
+		out = append(out, QuestionEntry(msg))
 	}
 	return out
 }

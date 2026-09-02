@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,14 +18,31 @@ func OpenPostgres(dsn string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
-	conn.SetMaxOpenConns(20)
+	conn.SetMaxOpenConns(maxConns())
+	conn.SetMaxIdleConns(maxConns())
+	// Recicla conexões antigas: provedores em nuvem (Supabase/PgBouncer)
+	// derrubam conexões ociosas; pool com conexões mortas causa erros
+	// intermitentes ("connection closed") sob carga alta.
+	conn.SetConnMaxLifetime(30 * time.Minute)
+	conn.SetConnMaxIdleTime(5 * time.Minute)
 
 	db := &DB{conn: conn}
 	if err := db.migratePostgres(); err != nil {
-		conn.Close()
+		// Cleanup on the failure path: a close error is not actionable here.
+		_ = conn.Close()
 		return nil, fmt.Errorf("migrate postgres: %w", err)
 	}
 	return db, nil
+}
+
+// maxConns retorna o tamanho do pool de conexões (env DB_MAX_CONNS, padrão 20).
+func maxConns() int {
+	if v := os.Getenv("DB_MAX_CONNS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 20
 }
 
 // OpenFromEnv opens PostgreSQL; DATABASE_URL is required.
@@ -152,11 +170,15 @@ func safeTestDBName(name string) bool {
 		return false
 	}
 	for _, r := range name {
-		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_') {
+		if !isTestDBNameChar(r) {
 			return false
 		}
 	}
 	return true
+}
+
+func isTestDBNameChar(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_'
 }
 
 // dsnForDatabase derives a URL-style DSN pointing at the given database name.
@@ -191,7 +213,7 @@ func CreateTestDatabase(baseDSN string) (string, func(), error) {
 		return "", nil, fmt.Errorf("connect admin: %w", err)
 	}
 	if _, err := conn.Exec(fmt.Sprintf(`CREATE DATABASE "%s"`, name)); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return "", nil, fmt.Errorf("create database: %w", err)
 	}
 

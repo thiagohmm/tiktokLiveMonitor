@@ -519,10 +519,12 @@ func TestGetLastSessionActivityUsesLatestAcrossTables(t *testing.T) {
 		t.Fatalf("insert message: %v", err)
 	}
 	// Mensagem mais recente de OUTRA live: não deve contar para live1.
-	err = db.ExecSQL(
+	if err := db.ExecSQL(
 		`INSERT INTO user_messages (live_name, uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?, ?)`,
 		"other", "user2", "Other", "oi", "2026-08-17 14:00:00",
-	)
+	); err != nil {
+		t.Fatalf("insert other message: %v", err)
+	}
 	err = db.ExecSQL(
 		`INSERT INTO gifts (live_name, uniqueId, nickname, gift_name, timestamp) VALUES (?, ?, ?, ?, ?)`,
 		"other", "user2", "Other", "Tiger", "2026-08-17 23:00:00",

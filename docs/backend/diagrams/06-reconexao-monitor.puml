@@ -1,0 +1,53 @@
+@startuml
+' 06-reconexao-monitor.puml — Supervisor de reconexão com backoff exponencial
+title Reconexão automática — supervisor do bridge com backoff exponencial + jitter
+
+skinparam defaultFontName "Helvetica"
+autonumber
+
+participant "bridge.js\n(processo Node)" as BRIDGE
+participant "monitor\nrunSupervisor" as SUP
+participant "monitor\nstate/emit" as MON
+participant "view\nbroadcastSSE" as VIEW
+participant "Cliente SSE" as CLIENT
+
+== Conexão estável ==
+MON -> SUP : startSupervisor (goroutine, idempotente)
+MON -> BRIDGE : startBridge + send connect
+BRIDGE -> MON : connection-status (success=true)
+MON -> SUP : zera reconnectAttempts
+MON -> VIEW : broadcastSSE(connection-status success)
+VIEW -> CLIENT : event: connection-status (connected)
+
+== Queda detectada ==
+alt bridge morreu
+    BRIDGE -->> SUP : bridgeEnded fechado (processo terminou)
+else conexão caiu (bridge vivo)
+    MON -> SUP : reconnectKick (após connection-status success=false)
+end
+
+SUP -> SUP : reconnectAttempts++
+SUP -> MON : emite connection-status success=false\n(retries, nextRetryInMs)
+MON -> VIEW : broadcastSSE(connection-status erro)
+VIEW -> CLIENT : event: connection-status\n"Conexão perdida. Reconectando (tentativa N)..."
+
+SUP -> SUP : espera backoffDelay(attempt)\n= min(base*2^(n-1), max) + jitter 20%
+
+SUP -> BRIDGE : stopBridge + startBridge (reinicia processo)
+SUP -> BRIDGE : send connect(username)
+
+BRIDGE -> MON : connection-status (success=true)
+MON -> SUP : zera reconnectAttempts
+MON -> VIEW : broadcastSSE(connection-status success)
+VIEW -> CLIENT : event: connection-status (reconectado)
+
+== Parada ==
+MON -> SUP : stopSupervisor / ctx cancelado / userStopped
+SUP --> SUP : encerra (close(done))
+
+note bottom of SUP
+  delay: base 1s -> max 30s, jitter até 20%.
+  backoffDelay/limites são ajustáveis por testes (atomics).
+end note
+
+@enduml

@@ -1,0 +1,58 @@
+@startuml
+' 01-fluxo-eventos.puml — Caminho de um evento do stream até o SSE e o banco
+title Fluxo de eventos — do TikTok até a UI (SSE) e o banco
+
+skinparam defaultFontName "Helvetica"
+autonumber
+
+participant "bridge.js\n(processo Node)" as BRIDGE
+participant "monitor\nhandleBridgeEvent" as MON
+participant "controller\nHandle*Event" as CTRL
+participant "MessageCache\n(write-behind)" as CACHE
+participant "database\n(Postgres)" as DB
+participant "view\nbroadcastSSE" as VIEW
+participant "Cliente SSE\n(frontend)" as CLIENT
+
+== Conexão inicial ==
+
+CLIENT -> VIEW : GET /events (SSE)
+activate VIEW
+VIEW --> CLIENT : event: server-state (connected/username)
+deactivate VIEW
+
+== Evento da live (ex.: chat message) ==
+
+BRIDGE -> MON : "new-chat-message" (JSON Lines no stdout)
+activate MON
+MON -> MON : handleChatMessage (buffer, repetição, pergunta, keyword)
+MON -> VIEW : emite eventos (flagged/keyword/...)
+deactivate MON
+
+MON -> CTRL : monitor.OnEvent chama HandleChatMessageEvent (goroutine)
+activate CTRL
+CTRL -> CACHE : msgCache.Add(live, uid, nick, msg)  [sem I/O]
+activate CACHE
+CACHE --> CTRL : ok (buffer em memória)
+deactivate CACHE
+deactivate CTRL
+
+CTRL -> VIEW : broadcastSSE("new-chat-message", data)
+activate VIEW
+VIEW -> CLIENT : event: new-chat-message
+deactivate VIEW
+
+CACHE -> DB : ticker 2s / limite 50 dispara BatchAddUserMessages (lote)
+activate DB
+DB --> CACHE : commit
+deactivate DB
+
+== Presente (fluxo resumido — ver diagrama 05) ==
+
+BRIDGE -> MON : "any-gift-received"
+MON -> MON : streaks/liquidação emite EventAnyGift
+MON -> CTRL : HandleGiftEvent
+CTRL -> DB : AddGift + checkGoalProgress
+CTRL -> VIEW : broadcastSSE("any-gift-received")
+VIEW -> CLIENT : event: any-gift-received
+
+@enduml

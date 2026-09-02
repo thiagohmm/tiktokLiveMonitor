@@ -1,0 +1,45 @@
+@startuml
+' 04-sse-fanout.puml — Fan-out de eventos SSE
+title SSE — fan-out com canal por cliente + ejeção de clientes lentos
+
+skinparam defaultFontName "Helvetica"
+autonumber
+
+participant "monitor / controller\n(produtor de eventos)" as PROD
+participant "HTTPServer\nbroadcastSSE" as SSE
+collections "sseClients (map)" as CLIENTS
+participant "Cliente A\n(rápido)" as CL_A
+participant "Cliente B\n(lento/parado)" as CL_B
+
+== Conexão de um cliente ==
+PROD -> SSE : handler /events
+SSE -> SSE : cria sseClient (canal buffer=256)
+alt acima do teto (SSE_MAX_CLIENTS, padrão 10000)
+    SSE -> CL_B : 503 (novo cliente é recusado)
+else ok
+    SSE -> SSE : registra no mapa + limpa read deadline\n+ envia estado inicial (server-state)
+    SSE -> CL_A : inicia sseWriteLoop (goroutine por cliente)
+end
+
+== Broadcast ==
+PROD -> SSE : broadcastSSE(eventType, data)
+activate SSE
+SSE -> SSE : serializa msg\n"event: type\ndata: json"
+SSE -> CLIENTS : enfileira (select não-bloqueante)
+alt canal tem espaço
+    CLIENTS -> CL_A : ch <- msg
+    CL_A -> CL_A : sseWriteLoop escreve + flush
+else buffer cheio (cliente lento)
+    SSE -> SSE : ejeta cliente (dropSSEClient)\nsem travar os demais
+end
+deactivate SSE
+
+== Detecção de cliente morto ==
+SSE -> SSE : ping a cada 30s (ssePingInterval)
+alt escrita falha / timeout de 5s
+    SSE -> CL_B : dropSSEClient("erro de escrita")
+else cliente desconectou (ctx done)
+    SSE -> SSE : removeSSEClient (sem log)
+end
+
+@enduml

@@ -1,0 +1,12 @@
+version: "2"
+
+linters:
+  # Standard default set (errcheck, govet, ineffassign, staticcheck, ...).
+  default: standard
+  exclusions:
+    rules:
+      # Test scaffolding (t.Cleanup closures, resp.Body.Close, os.Unsetenv,
+      # load-test fan-out) does not need exhaustive error checking.
+      - path: _test\.go
+        linters:
+          - errcheck

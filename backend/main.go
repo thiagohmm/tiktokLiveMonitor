@@ -21,7 +21,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
-	defer repo.Close()
+	defer func() {
+		if err := repo.Close(); err != nil {
+			log.Printf("Database close: %v", err)
+		}
+	}()
 	log.Println("Database initialized.")
 
 	// Service layer: monitor

@@ -34,7 +34,7 @@ func rebindQuery(query string) string {
 			inString = true
 			b.WriteRune(r)
 		case '?':
-			b.WriteString(fmt.Sprintf("$%d", n))
+			fmt.Fprintf(&b, "$%d", n)
 			n++
 		default:
 			b.WriteRune(r)

@@ -1,0 +1,81 @@
+@startuml
+' 03-autenticacao.puml — Login, cadastro e proteção de rotas
+title Autenticação — Supabase Auth + lockout + middleware JWT
+
+skinparam defaultFontName "Helvetica"
+autonumber
+
+participant "Cliente\n(browser)" as CLIENT
+participant "view\nhandleAuth*" as VIEW
+participant "auth\nLoginLockout" as LOCK
+participant "auth.Config\n(JWT)" as JWT
+participant "auth\nAdminClient" as ADMIN
+participant "Supabase\nAuth/PostgREST" as SUPA
+
+== GET /api/auth/config (público) ==
+CLIENT -> VIEW : GET config
+VIEW --> CLIENT : enabled, supabaseUrl, limites, theme
+
+== POST /api/auth/login ==
+CLIENT -> VIEW : POST login (email + senha)
+activate VIEW
+VIEW -> LOCK : Status(email, ip)
+LOCK --> VIEW : bloqueado? (429 + retryAfterSec se sim)
+VIEW -> SUPA : /auth/v1/token?grant_type=password (anon key)
+SUPA --> VIEW : session (access_token) | erro
+
+alt falha de credenciais
+    VIEW -> LOCK : RecordFailure(email, ip)
+    VIEW --> CLIENT : 401/429 (genérico, remainingAttempts)
+else indisponível (rede / 5xx)
+    VIEW --> CLIENT : 502 ErrAuthUnavailable
+else sucesso
+    VIEW -> JWT : ValidateToken(access_token)
+    alt !user.Active (cadastro pendente)
+        VIEW -> LOCK : RecordSuccess
+        VIEW --> CLIENT : 403 "aguardando aprovação"
+    else ativo
+        VIEW -> LOCK : RecordSuccess
+        VIEW --> CLIENT : 200 + Set-Cookie tlm_access_token (HttpOnly)
+    end
+end
+deactivate VIEW
+
+== Requisição protegida (ex.: GET /api/ranking) ==
+CLIENT -> VIEW : GET /api/ranking (Cookie/Bearer)
+activate VIEW
+VIEW -> JWT : Middleware chama ValidateToken
+alt token inválido / expirado
+    VIEW --> CLIENT : 401
+else conta inativa
+    VIEW --> CLIENT : 403
+else válido
+    VIEW -> VIEW : injeta User no contexto\n(auth.Middleware)
+    VIEW --> CLIENT : 200 JSON
+end
+deactivate VIEW
+
+== Endpoint administrativo ==
+CLIENT -> VIEW : POST /api/admin/lives/delete (admin)
+activate VIEW
+VIEW -> JWT : RequireAdmin(user.Role é admin)
+alt não-admin
+    VIEW --> CLIENT : 403
+else admin
+    VIEW --> CLIENT : 200 JSON
+end
+deactivate VIEW
+
+== POST /api/auth/signup (cadastro pendente) ==
+CLIENT -> VIEW : POST signup
+activate VIEW
+VIEW -> LOCK : Status(SignupLockoutIdentity, ip)
+VIEW -> ADMIN : SignUpPending (cria usuário inativo)
+alt e-mail duplicado
+    VIEW --> CLIENT : 409 ErrDuplicateSignup
+else ok
+    VIEW --> CLIENT : 201 { pending: true }
+end
+deactivate VIEW
+
+@enduml

@@ -109,7 +109,8 @@ func (a *AdminClient) request(method, path string, body any, out any) error {
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
+	// Best-effort cleanup; the body read below surfaces any real failure.
+	defer func() { _ = res.Body.Close() }()
 
 	raw, err := io.ReadAll(res.Body)
 	if err != nil {

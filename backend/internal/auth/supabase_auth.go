@@ -56,7 +56,8 @@ func (c Config) SignInWithPassword(email, password string) (*LoginSession, error
 	if err != nil {
 		return nil, ErrAuthUnavailable
 	}
-	defer res.Body.Close()
+	// Best-effort cleanup; the body read below surfaces any real failure.
+	defer func() { _ = res.Body.Close() }()
 
 	raw, err := io.ReadAll(res.Body)
 	if err != nil {
@@ -104,7 +105,8 @@ func (c Config) SignOutGlobal(accessToken string) error {
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
+	// Best-effort cleanup; the body read below surfaces any real failure.
+	defer func() { _ = res.Body.Close() }()
 
 	raw, err := io.ReadAll(res.Body)
 	if err != nil {

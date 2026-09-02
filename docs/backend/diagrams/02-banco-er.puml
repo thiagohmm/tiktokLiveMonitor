@@ -1,0 +1,128 @@
+@startuml
+' 02-banco-er.puml — Modelo de dados do Postgres (Supabase)
+title Banco de dados — Entidades (PostgreSQL / Supabase)
+caption Sem FKs reais: as relações são por live_name e "uniqueId" (convenção da aplicação).
+
+skinparam defaultFontName "Helvetica"
+skinparam linetype ortho
+hide circle
+hide methods
+
+entity "anomaly_logs" as AL {
+  * id : BIGSERIAL PK
+  * live_name : TEXT
+  * day : DATE
+  "uniqueId" : TEXT
+  * comment : TEXT
+  is_anomaly : BOOLEAN
+  category : TEXT
+  timestamp : TIMESTAMPTZ
+}
+
+entity "user_messages" as UM {
+  * id : BIGSERIAL PK
+  live_name : TEXT (default '')
+  "uniqueId" : TEXT
+  * username : TEXT
+  * message : TEXT
+  timestamp : TIMESTAMPTZ
+}
+
+entity "gifts" as GF {
+  * id : BIGSERIAL PK
+  * live_name : TEXT
+  * "uniqueId" : TEXT
+  * nickname : TEXT
+  * gift_name : TEXT
+  repeat_count : INT
+  gift_type : INT
+  timestamp : TIMESTAMPTZ
+}
+
+entity "shares" as SH {
+  * id : BIGSERIAL PK
+  * live_name : TEXT
+  * "uniqueId" : TEXT
+  * nickname : TEXT
+  timestamp : TIMESTAMPTZ
+}
+
+entity "likes" as LK {
+  * id : BIGSERIAL PK
+  * live_name : TEXT
+  * "uniqueId" : TEXT
+  * nickname : TEXT
+  like_count : INT
+  timestamp : TIMESTAMPTZ
+}
+
+entity "room_like_totals" as RL {
+  * live_name : TEXT PK
+  total : BIGINT
+  updated_at : TIMESTAMPTZ
+}
+
+entity "target_gift_history" as TG {
+  * id : BIGSERIAL PK
+  * live_name : TEXT
+  * "uniqueId" : TEXT
+  * nickname : TEXT
+  * gift_name : TEXT
+  * received_at : TIMESTAMPTZ
+  answered_at : TIMESTAMPTZ
+  response_type : TEXT
+}
+
+entity "gift_goals" as GG {
+  * id : BIGSERIAL PK
+  * live_name : TEXT
+  * title : TEXT
+  gift_name : TEXT (default '')
+  * target_units : INT
+  * status : TEXT
+  milestones : TEXT (JSON)
+  created_at : TIMESTAMPTZ
+  completed_at : TIMESTAMPTZ
+}
+
+entity "pinned_comments" as PC {
+  * id : BIGSERIAL PK
+  * live_name : TEXT
+  * "uniqueId" : TEXT
+  * nickname : TEXT
+  * comment : TEXT
+  pin_id : TEXT
+  is_follower : INT
+  timestamp : TIMESTAMPTZ
+}
+
+entity "settings" as ST {
+  * key : TEXT PK
+  * value : TEXT
+}
+
+entity "false_positives" as FP {
+  * id : BIGSERIAL PK
+  * comment : TEXT
+  * category : TEXT
+  expected : TEXT (default 'NAO')
+  timestamp : TIMESTAMPTZ
+}
+
+' lives derivadas não são tabela: agregação por live_name
+note top of GF
+  "Live" é uma visão derivada (LiveStatsByUser /
+  ListLives) agrupada por live_name + day.
+end note
+
+' Agrupamentos conceituais (por live_name / uniqueId)
+UM }o..o{ GF : mesma live_name
+GF }o..o{ SH
+GF }o..o{ LK
+LK }o..|| RL : live_name (1:N contador oficial)
+GF }o..o{ TG
+GF }o..o{ AL
+GF }o..o{ PC
+GG }o..|| GF : live_name (metas contam gifts)
+
+@enduml

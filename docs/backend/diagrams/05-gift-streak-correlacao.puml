@@ -1,0 +1,63 @@
+@startuml
+' 05-gift-streak-correlacao.puml — Streaks de presente e correlação presente↔pergunta
+title Presentes — streaks (combos), liquidação e correlação com pergunta
+
+skinparam defaultFontName "Helvetica"
+autonumber
+
+participant "bridge.js" as BRIDGE
+participant "monitor\nhandleGiftReceived" as MON
+participant "monitor\ntimer/streak" as TIMER
+participant "controller\nHandleGiftEvent" as CTRL
+participant "controller\nmetas / presente-alvo" as GOALS
+participant "monitor\ncorrelateGiftWithQuestion" as CORR
+participant "view\nbroadcastSSE" as VIEW
+
+== Primeiro evento de um combo (repeatEnd=false) ==
+BRIDGE -> MON : any-gift-received (count=1, repeatEnd=false)
+MON -> TIMER : registra streak (chave user|gift)\nagenda timeout 20s
+
+BRIDGE -> MON : any-gift-received (count=5, repeatEnd=false)
+MON -> MON : atualiza streak: maior count=5\nreinicia timer
+
+== Cenário A: evento final chega (repeatEnd=true) ==
+BRIDGE -> MON : any-gift-received (count=5, repeatEnd=true)
+MON -> MON : cancela timer, remove streak
+MON -> CTRL : EventAnyGift
+CTRL -> CTRL : AddGift (persiste) + checkGoalProgress
+CTRL -> VIEW : broadcastSSE(any-gift-received)
+
+BRIDGE -> MON : new-gift-user (evento final)
+MON -> CTRL : EventGiftUser (presente-alvo)
+CTRL -> GOALS : RecordTargetGiftReceived (historyId)
+CTRL -> VIEW : broadcastSSE(new-gift-user)
+MON -> CORR : goroutine correlateGiftWithQuestion (se presente-alvo)
+
+== Cenário B: evento final nunca chega (amostragem do TikTok) ==
+TIMER -> TIMER : 20s sem novos eventos
+TIMER -> MON : settleGiftStreak(key)
+MON -> MON : liquida: repeatEnd=true, count=maior conhecido
+MON -> CTRL : EventAnyGift (liquidação por timeout)
+CTRL -> CTRL : AddGift + checkGoalProgress
+CTRL -> VIEW : broadcastSSE(any-gift-received)
+MON -> CORR : handleTargetGift (se presente-alvo)
+note right of TIMER
+  Final atrasado (repeatEnd=true) que chegar
+  depois é suprimido por 90s (janela keep-after-settle),
+  evitando gravar o mesmo presente duas vezes.
+end note
+
+== Correlação presente ↔ pergunta (heurística, sem IA) ==
+CORR -> CORR : candidatas (perguntas + chat recente, 3min, ≤8)
+alt caminho rápido: 1 mensagem do doador
+    CORR -> VIEW : gift-question-correlation (confiança alta)
+else fallback heurístico
+    CORR -> VIEW : gift-question-correlation (confiança baixa)
+else nenhuma candidata
+    CORR -> CORR : log NO_CANDIDATES / NO_MATCH
+end
+
+CORR -> CORR : agenda revisão adiante (4s)
+CORR -> VIEW : gift-question-correlation (replacement=true)\nse mensagem posterior pontuar melhor
+
+@enduml

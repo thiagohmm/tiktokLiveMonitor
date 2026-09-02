@@ -64,7 +64,7 @@ func TestMessageCacheDedup(t *testing.T) {
 
 	cache.Add("live1", "userA", "nickA", "same message")
 	cache.Add("live1", "USERA", "nickA", "  SAME MESSAGE  ") // case/whitespace insensitive
-	cache.Add("live1", "userA", "nickA", "")                // ignored
+	cache.Add("live1", "userA", "nickA", "")                 // ignored
 
 	if got := cache.pendingLen(); got != 1 {
 		t.Fatalf("expected 1 buffered message, got %d", got)
