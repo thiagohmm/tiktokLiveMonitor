@@ -1,4 +1,4 @@
-import { defineRailway, preserve, project, service } from "railway/iac";
+import { defineRailway, github, preserve, project, service } from "railway/iac";
 
 // Last resort for a per-service CaC repo. Prefer one .railway file for the
 // project and drop this if you later combine services into that file.
@@ -6,6 +6,10 @@ export const partial = "backend";
 
 export default defineRailway(() => {
   const backend = service("backend", {
+    source: github("thiagohmm/tiktokLiveMonitor", {
+      branch: "lite-sem-ia",
+      rootDirectory: "/backend",
+    }),
     healthcheck: "/api/readiness",
     healthcheckTimeout: 300,
     variables: {
