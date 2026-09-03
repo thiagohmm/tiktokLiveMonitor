@@ -268,7 +268,8 @@ func (s *HTTPServer) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
-	if _, ok := auth.RequireAdmin(w, r, s.auth); !ok {
+	adminUser, ok := auth.RequireAdmin(w, r, s.auth)
+	if !ok {
 		return
 	}
 	if s.admin == nil {
@@ -283,13 +284,18 @@ func (s *HTTPServer) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 			writeInternalError(w, r, err)
 			return
 		}
+		visibleUsers := make([]auth.SubscriberProfile, 0, len(users))
 		pendingCount := 0
 		for _, u := range users {
+			if u.ID == adminUser.ID {
+				continue
+			}
+			visibleUsers = append(visibleUsers, u)
 			if !u.Active && u.Role != "admin" {
 				pendingCount++
 			}
 		}
-		writeJSON(w, map[string]any{"users": users, "pendingCount": pendingCount})
+		writeJSON(w, map[string]any{"users": visibleUsers, "pendingCount": pendingCount})
 	case http.MethodPost:
 		var body auth.CreateSubscriberRequest
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -308,7 +314,8 @@ func (s *HTTPServer) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) handleAdminUsersUpdate(w http.ResponseWriter, r *http.Request) {
-	if _, ok := auth.RequireAdmin(w, r, s.auth); !ok {
+	adminUser, ok := auth.RequireAdmin(w, r, s.auth)
+	if !ok {
 		return
 	}
 	if s.admin == nil {
@@ -325,6 +332,10 @@ func (s *HTTPServer) handleAdminUsersUpdate(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
+	if body.ID == adminUser.ID {
+		writeError(w, http.StatusForbidden, "não é possível alterar sua própria conta administrativa")
+		return
+	}
 
 	user, err := s.admin.UpdateSubscriber(body)
 	if err != nil {
@@ -335,7 +346,8 @@ func (s *HTTPServer) handleAdminUsersUpdate(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *HTTPServer) handleAdminUsersDelete(w http.ResponseWriter, r *http.Request) {
-	if _, ok := auth.RequireAdmin(w, r, s.auth); !ok {
+	adminUser, ok := auth.RequireAdmin(w, r, s.auth)
+	if !ok {
 		return
 	}
 	if s.admin == nil {
@@ -350,6 +362,10 @@ func (s *HTTPServer) handleAdminUsersDelete(w http.ResponseWriter, r *http.Reque
 	id := strings.TrimSpace(r.URL.Query().Get("id"))
 	if id == "" {
 		writeError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	if id == adminUser.ID {
+		writeError(w, http.StatusForbidden, "não é possível remover sua própria conta administrativa")
 		return
 	}
 	if err := s.admin.DeleteSubscriber(id); err != nil {
