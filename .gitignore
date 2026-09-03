@@ -6,6 +6,11 @@
 # Dependencies
 node_modules/
 
+# Local deployment links and CLI state
+.vercel/
+frontend/.vercel/
+supabase/.temp/
+
 # Build artifacts
 dist/
 frontend/dist/

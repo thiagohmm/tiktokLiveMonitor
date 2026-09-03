@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -165,6 +166,50 @@ func TestValidateTokenDefaultsAccountToPending(t *testing.T) {
 	}
 	if user.Active {
 		t.Fatal("conta sem app_metadata.active deveria ficar pendente")
+	}
+}
+
+func TestValidateTokenUsesSupabaseAuthWithoutLegacySecret(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/auth/v1/user" {
+			t.Fatalf("path = %s, want /auth/v1/user", r.URL.Path)
+		}
+		if got := r.Header.Get("apikey"); got != "publishable-key" {
+			t.Fatalf("apikey = %q", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer access-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":    "user-1",
+			"email": "user@example.com",
+			"app_metadata": map[string]any{
+				"role":   "subscriber",
+				"active": true,
+			},
+		})
+	}))
+	defer server.Close()
+
+	cfg := Config{Enabled: true, SupabaseURL: server.URL, SupabaseAnon: "publishable-key"}
+	user, err := cfg.ValidateToken("access-token")
+	if err != nil {
+		t.Fatalf("validate remote token: %v", err)
+	}
+	if user.ID != "user-1" || user.Role != "subscriber" || !user.Active {
+		t.Fatalf("unexpected user: %+v", user)
+	}
+}
+
+func TestValidateTokenRejectsRemoteAuthFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	cfg := Config{Enabled: true, SupabaseURL: server.URL, SupabaseAnon: "publishable-key"}
+	if _, err := cfg.ValidateToken("invalid-token"); err == nil {
+		t.Fatal("remote auth failure should reject token")
 	}
 }
 

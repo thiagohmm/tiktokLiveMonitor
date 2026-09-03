@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -40,14 +41,16 @@ type Config struct {
 }
 
 // LoadConfigFromEnv builds auth settings from environment variables.
-// Auth stays disabled when SUPABASE_JWT_SECRET is empty or AUTH_ENABLED=0.
+// A legacy JWT secret enables local HS256 validation. Without it, access
+// tokens are validated by Supabase Auth using the configured project URL/key.
 func LoadConfigFromEnv() Config {
 	enabled := strings.TrimSpace(os.Getenv("AUTH_ENABLED")) != "0"
 	jwtSecret := strings.TrimSpace(os.Getenv("SUPABASE_JWT_SECRET"))
-	if jwtSecret == "" {
+	supabaseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("SUPABASE_URL")), "/")
+	supabaseAnon := strings.TrimSpace(os.Getenv("SUPABASE_ANON_KEY"))
+	if supabaseURL == "" || supabaseAnon == "" {
 		enabled = false
 	}
-	supabaseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("SUPABASE_URL")), "/")
 
 	audience := strings.TrimSpace(os.Getenv("SUPABASE_JWT_AUD"))
 	if audience == "" {
@@ -62,7 +65,7 @@ func LoadConfigFromEnv() Config {
 		Enabled:        enabled,
 		JWTSecret:      jwtSecret,
 		SupabaseURL:    supabaseURL,
-		SupabaseAnon:   strings.TrimSpace(os.Getenv("SUPABASE_ANON_KEY")),
+		SupabaseAnon:   supabaseAnon,
 		ServiceRoleKey: strings.TrimSpace(os.Getenv("SUPABASE_SERVICE_ROLE_KEY")),
 		JWTAudience:    audience,
 		JWTIssuer:      issuer,
@@ -104,6 +107,9 @@ func (c Config) ValidateToken(tokenString string) (*User, error) {
 	}
 	if tokenString == "" {
 		return nil, errors.New("token ausente")
+	}
+	if c.JWTSecret == "" {
+		return c.validateTokenRemotely(tokenString)
 	}
 
 	parseOpts := []jwt.ParserOption{
@@ -167,6 +173,50 @@ func (c Config) ValidateToken(tokenString string) (*User, error) {
 	}
 
 	return &User{ID: sub, Email: email, Role: role, Active: active}, nil
+}
+
+func (c Config) validateTokenRemotely(tokenString string) (*User, error) {
+	req, err := http.NewRequest(http.MethodGet, c.SupabaseURL+"/auth/v1/user", nil)
+	if err != nil {
+		return nil, errors.New("token inválido")
+	}
+	req.Header.Set("apikey", c.SupabaseAnon)
+	req.Header.Set("Authorization", "Bearer "+tokenString)
+
+	res, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	if err != nil {
+		return nil, errors.New("token inválido")
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, res.Body)
+		return nil, errors.New("token inválido")
+	}
+
+	var remoteUser struct {
+		ID          string         `json:"id"`
+		Email       string         `json:"email"`
+		AppMetadata map[string]any `json:"app_metadata"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&remoteUser); err != nil || remoteUser.ID == "" {
+		return nil, errors.New("usuário inválido")
+	}
+
+	role := "subscriber"
+	active := false
+	if value, ok := remoteUser.AppMetadata["role"].(string); ok && value != "" {
+		role = value
+	}
+	if value, ok := remoteUser.AppMetadata["active"].(bool); ok {
+		active = value
+	}
+	if value, ok := remoteUser.AppMetadata["subscription_expires_at"].(string); ok && value != "" {
+		if expiresAt, err := time.Parse(time.RFC3339, value); err == nil && role == "subscriber" && time.Now().After(expiresAt) {
+			return nil, errors.New("assinatura expirada")
+		}
+	}
+
+	return &User{ID: remoteUser.ID, Email: remoteUser.Email, Role: role, Active: active}, nil
 }
 
 // Middleware protects HTTP handlers when auth is enabled. A página /admin.html

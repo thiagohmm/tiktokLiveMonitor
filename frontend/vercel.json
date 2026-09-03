@@ -4,11 +4,11 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://SEU_BACKEND/api/:path*"
+      "destination": "https://backend-production-9986.up.railway.app/api/:path*"
     },
     {
       "source": "/events",
-      "destination": "https://SEU_BACKEND/events"
+      "destination": "https://backend-production-9986.up.railway.app/events"
     }
   ],
   "headers": [

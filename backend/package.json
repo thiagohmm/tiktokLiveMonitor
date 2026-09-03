@@ -10,5 +10,8 @@
   "description": "TikTok Live Monitor (lite, sem IA)",
   "dependencies": {
     "tiktok-live-connector": "^2.1.1-beta1"
+  },
+  "devDependencies": {
+    "railway": "^3.11.0"
   }
 }

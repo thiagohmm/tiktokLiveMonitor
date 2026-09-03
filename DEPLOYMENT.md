@@ -52,8 +52,9 @@ Outra origem exige CORS liberado no backend:
 4. Execute os dois `UPDATE` do final da migração, trocando o e-mail, para
    promover esse usuário nas claims e no perfil.
 5. Preencha no `.env`:
-   `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_JWT_SECRET` e
-   `SUPABASE_SERVICE_ROLE_KEY`.
+   `SUPABASE_URL`, `SUPABASE_ANON_KEY` e `SUPABASE_SERVICE_ROLE_KEY`.
+   `SUPABASE_JWT_SECRET` é opcional: quando vazio, o backend valida os tokens
+   pela API Auth do Supabase; quando preenchido, usa validação HS256 local.
 6. Recrie apenas o backend: `docker compose up -d --force-recreate backend`.
 
 Novos clientes se cadastram em `/login.html` (Criar conta) e ficam em
