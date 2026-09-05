@@ -32,12 +32,6 @@ export class ApiError extends Error {
   }
 }
 
-function timeoutSignal(ms: number): AbortSignal {
-  const controller = new AbortController();
-  setTimeout(() => controller.abort(), ms);
-  return controller.signal;
-}
-
 async function readJson(response: Response): Promise<unknown> {
   const text = await response.text();
   if (!text) {
@@ -90,48 +84,58 @@ export class ApiClient {
       onUnauthorized,
     } = options;
 
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      ...extraHeaders,
-    };
-    if (!noAuth && this.token) {
-      headers.Authorization = `Bearer ${this.token}`;
-    }
+    // Absolute URLs (e.g. the Supabase token refresh) bypass the API base.
+    const url = /^https?:\/\//i.test(path) ? path : `${config.API_BASE}${path}`;
 
-    const doRequest = async (): Promise<T> => {
-      const res = await fetch(`${config.API_BASE}${path}`, {
-        method,
-        headers,
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: timeoutSignal(timeoutMs),
-      });
-
-      const data = await readJson(res);
-
-      if (res.ok) {
-        return data as T;
+    const doRequest = async (retried: boolean): Promise<T> => {
+      // Built per attempt so the post-refresh retry carries the new token.
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...extraHeaders,
+      };
+      if (!noAuth && this.token) {
+        headers.Authorization = `Bearer ${this.token}`;
       }
 
-      if (res.status === 401) {
-        // Prefer a per-request onUnauthorized hook; otherwise fall back to the
-        // client-wide refresh fn set via setRefresh(). Once the refresh hook
-        // runs, retry a single time with a fresh token.
-        const refreshFn = onUnauthorized ?? this.refresh;
-        if (refreshFn) {
-          await refreshFn();
-          return doRequest();
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(url, {
+          method,
+          headers,
+          body: body !== undefined ? JSON.stringify(body) : undefined,
+          signal: controller.signal,
+        });
+
+        const data = await readJson(res);
+
+        if (res.ok) {
+          return data as T;
         }
-      }
 
-      const message =
-        (data && typeof data === 'object' && 'error' in data
-          ? String((data as Record<string, unknown>).error)
-          : undefined) || res.statusText || `HTTP ${res.status}`;
-      throw new ApiError(res.status, message, data);
+        if (res.status === 401 && !retried) {
+          // Prefer a per-request onUnauthorized hook; otherwise fall back to
+          // the client-wide refresh fn set via setRefresh(). Once the refresh
+          // hook runs, retry a single time with a fresh token.
+          const refreshFn = onUnauthorized ?? this.refresh;
+          if (refreshFn) {
+            await refreshFn();
+            return doRequest(true);
+          }
+        }
+
+        const message =
+          (data && typeof data === 'object' && 'error' in data
+            ? String((data as Record<string, unknown>).error)
+            : undefined) || res.statusText || `HTTP ${res.status}`;
+        throw new ApiError(res.status, message, data);
+      } finally {
+        clearTimeout(timer);
+      }
     };
 
-    return doRequest();
+    return doRequest(false);
   }
 
   get<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {

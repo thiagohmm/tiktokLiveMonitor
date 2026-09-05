@@ -6,6 +6,9 @@
  *  - Sign in via `/api/auth/login`, persisting tokens in secure storage.
  *  - Refresh the Supabase access token via `/auth/v1/token`
  *    (grant_type=refresh_token) using the supabaseUrl/supabaseAnonKey from config.
+ *    Runs reactively on 401 and proactively ahead of the token expiry;
+ *    concurrent refreshes are single-flighted (Supabase rotates the token).
+ *    A 4xx from Supabase revokes the session; a plain network error does not.
  *  - Sign out via `/api/auth/logout` and clear local state.
  *  - Wire the access token + refresh hook into the shared {@link apiClient}.
  */
@@ -68,7 +71,30 @@ async function loadUser(): Promise<AuthMe | null> {
   }
 }
 
-/** Persist tokens and keep the shared client in sync with the session. */
+/** Refresh this long before the access token expires. */
+const PROACTIVE_REFRESH_MARGIN_MS = 60_000;
+
+let proactiveRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Single-flight guard: concurrent 401s share one refresh (token rotation). */
+let inFlightRefresh: Promise<void> | null = null;
+
+/** Phase 5 gate for the admin tab (plan: "rota admin só se role === 'admin'"). */
+export const selectIsAdmin = (s: AuthStore): boolean => s.user?.role === 'admin';
+
+/** Persist tokens + expiry timestamp in secure storage. */
+async function persistSession(session: Session): Promise<void> {
+  await secureStore.set(SecureStoreKeys.accessToken, session.access_token);
+  await secureStore.set(SecureStoreKeys.refreshToken, session.refresh_token);
+  if (session.expires_in > 0) {
+    await secureStore.set(
+      SecureStoreKeys.expiresAt,
+      String(Date.now() + session.expires_in * 1000),
+    );
+  }
+}
+
+/** Keep the shared client in sync with the session (token + refresh hook). */
 function syncSession(session: Session): void {
   apiClient.setToken(session.access_token);
   // Refresh hook must resolve to the new access token so the client can retry.
@@ -78,6 +104,65 @@ function syncSession(session: Session): void {
       .refresh()
       .then(() => useAuthStore.getState().token ?? ''),
   );
+  scheduleProactiveRefresh(session.expires_in);
+}
+
+function cancelProactiveRefresh(): void {
+  if (proactiveRefreshTimer) {
+    clearTimeout(proactiveRefreshTimer);
+    proactiveRefreshTimer = null;
+  }
+}
+
+/** Refresh ahead of the access-token expiry (plan: "rodar ... em expiração"). */
+function scheduleProactiveRefresh(expiresInSec: number): void {
+  cancelProactiveRefresh();
+  if (!Number.isFinite(expiresInSec) || expiresInSec <= 0) {
+    return;
+  }
+  const delay = Math.max(expiresInSec * 1000 - PROACTIVE_REFRESH_MARGIN_MS, 0);
+  proactiveRefreshTimer = setTimeout(() => {
+    proactiveRefreshTimer = null;
+    void useAuthStore.getState().refresh().catch(() => {
+      /* performRefresh already signs out when the session is invalid */
+    });
+  }, delay);
+}
+
+/**
+ * Performs the actual Supabase refresh. Single-flight: concurrent callers
+ * share one in-flight promise because Supabase rotates the refresh token
+ * (a second call with the same token would fail and log the user out).
+ */
+async function performRefresh(): Promise<void> {
+  const { refreshToken, config } = useAuthStore.getState();
+  if (!refreshToken) {
+    await useAuthStore.getState().signOut();
+    throw new Error('sem token de atualização');
+  }
+  try {
+    const next = await refreshSession(
+      refreshToken,
+      config?.supabaseUrl,
+      config?.supabaseAnonKey,
+    );
+    const session: Session = {
+      access_token: next.access_token,
+      // Supabase rotates the refresh token; keep the old one if none returned.
+      refresh_token: next.refresh_token || refreshToken,
+      expires_in: next.expires_in,
+      token_type: next.token_type,
+    };
+    await persistSession(session);
+    useAuthStore.getState().setSession(session);
+  } catch (err) {
+    // Revoke the session only when the refresh token itself is invalid
+    // (Supabase 4xx); a plain network error must not destroy a valid session.
+    if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
+      await useAuthStore.getState().signOut();
+    }
+    throw err;
+  }
 }
 
 const initialState: AuthState = {
@@ -113,17 +198,34 @@ export const useAuthStore = create<AuthStore>((setState, getState) => ({
       const refreshToken = await secureStore.get(SecureStoreKeys.refreshToken);
       if (token && refreshToken) {
         setState({ token, refreshToken });
-        apiClient.setToken(token);
+        // Wire the refresh hook before the first request so a 401 on
+        // /api/auth/me self-heals via refresh + retry inside the client.
+        syncSession({ access_token: token, refresh_token: refreshToken, expires_in: 0 });
+
+        // Restore the proactive refresh for the (possibly still valid) session.
+        const expiresAtRaw = await secureStore.get(SecureStoreKeys.expiresAt);
+        if (expiresAtRaw) {
+          const expiresAt = Number(expiresAtRaw);
+          if (Number.isFinite(expiresAt) && expiresAt > Date.now()) {
+            scheduleProactiveRefresh(Math.floor((expiresAt - Date.now()) / 1000));
+          }
+        }
+
         const user = await loadUser();
         if (user?.authenticated) {
           setState({ status: 'authenticated', user, isLoading: false });
           return;
         }
-        // Stale session: attempt a refresh before giving up.
+        // Stale session: attempt a refresh and re-validate before giving up.
         try {
           await getState().refresh();
+          const refreshedUser = await loadUser();
+          if (refreshedUser?.authenticated) {
+            setState({ status: 'authenticated', user: refreshedUser, isLoading: false });
+            return;
+          }
         } catch {
-          /* refresh failed below; fall through to unauthenticated */
+          /* refresh failed; fall through to unauthenticated */
         }
       }
 
@@ -146,10 +248,8 @@ export const useAuthStore = create<AuthStore>((setState, getState) => ({
     setState({ isLoading: true, error: null, lockout: null });
     try {
       const { session } = await fetchSignIn(email, password);
-      setState({ token: session.access_token, refreshToken: session.refresh_token });
-      await secureStore.set(SecureStoreKeys.accessToken, session.access_token);
-      await secureStore.set(SecureStoreKeys.refreshToken, session.refresh_token);
-      syncSession(session);
+      await persistSession(session);
+      getState().setSession(session);
 
       const user = await loadUser();
       setState({
@@ -186,41 +286,29 @@ export const useAuthStore = create<AuthStore>((setState, getState) => ({
   },
 
   async refresh(): Promise<void> {
-    const { refreshToken, config } = getState();
-    if (!refreshToken) {
-      await getState().signOut();
-      throw new Error('sem token de atualização');
+    if (inFlightRefresh) {
+      return inFlightRefresh;
     }
-    try {
-      const next = await refreshSession(
-        refreshToken,
-        config?.supabaseUrl,
-        config?.supabaseAnonKey,
-      );
-      setState({ token: next.access_token, refreshToken: next.refresh_token });
-      await secureStore.set(SecureStoreKeys.accessToken, next.access_token);
-      if (next.refresh_token) {
-        await secureStore.set(SecureStoreKeys.refreshToken, next.refresh_token);
-      }
-      syncSession(next);
-    } catch (err) {
-      // Refresh failed (expired/revoked token, network): log out.
-      await getState().signOut();
-      throw err;
-    }
+    inFlightRefresh = performRefresh().finally(() => {
+      inFlightRefresh = null;
+    });
+    return inFlightRefresh;
   },
 
   async signOut(): Promise<void> {
+    // Detach the refresh hook first so a 401 on the logout request cannot
+    // re-enter refresh() (recursion / deadlock).
+    apiClient.setRefresh(undefined);
     try {
       await fetchSignOut();
     } catch {
       // Ignore network/logout errors; still clear local state.
     } finally {
       apiClient.setToken(null);
-      apiClient.setRefresh(undefined);
+      cancelProactiveRefresh();
       await secureStore.delete(SecureStoreKeys.accessToken);
       await secureStore.delete(SecureStoreKeys.refreshToken);
-      await secureStore.delete(SecureStoreKeys.userId);
+      await secureStore.delete(SecureStoreKeys.expiresAt);
       setState({
         ...initialState,
         status: 'unauthenticated',

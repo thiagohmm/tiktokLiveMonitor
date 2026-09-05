@@ -21,10 +21,12 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const { status, isLoading, lockout, error, signIn, clearError } = useAuthStore();
+  const { status, isLoading, lockout, error, config, signIn, clearError } = useAuthStore();
 
   const locked = Boolean(lockout?.locked);
   const attemptsLeft = lockout?.remainingAttempts;
+  // Backend default is 5 (AUTH_MAX_LOGIN_ATTEMPTS); the config endpoint overrides it.
+  const maxAttempts = config?.maxLoginAttempts ?? 5;
   const isBusy = isLoading || submitting || locked;
 
   async function onSubmit() {
@@ -87,7 +89,7 @@ export default function LoginScreen() {
             </Text>
           )}
 
-          {!locked && attemptsLeft != null && attemptsLeft < 4 && (
+          {!locked && attemptsLeft != null && attemptsLeft < maxAttempts && (
             <Text style={styles.warningText}>
               {attemptsLeft} tentativa(s) restante(s) antes do bloqueio.
             </Text>

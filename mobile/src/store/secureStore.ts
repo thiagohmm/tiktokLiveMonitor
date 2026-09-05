@@ -55,5 +55,6 @@ export const secureStore = {
 export const SecureStoreKeys = {
   accessToken: 'auth.accessToken',
   refreshToken: 'auth.refreshToken',
-  userId: 'auth.userId',
+  /** Epoch ms of the access-token expiry (drives the proactive refresh). */
+  expiresAt: 'auth.expiresAt',
 } as const;
