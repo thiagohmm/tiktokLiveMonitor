@@ -36,6 +36,12 @@ func (s *HTTPServer) handleSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		for _, quantity := range settings.TargetGiftQuantities {
+			if quantity < 1 {
+				writeError(w, http.StatusBadRequest, "A quantidade do presente alvo deve ser um inteiro maior ou igual a 1.")
+				return
+			}
+		}
 		s.controller.SetSettings(settings)
 		// Broadcast updated settings to all SSE clients
 		s.broadcastSSE("settings-update", s.controller.GetSettings())

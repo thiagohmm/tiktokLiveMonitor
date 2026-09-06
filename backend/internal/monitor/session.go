@@ -41,6 +41,9 @@ func (m *Monitor) restoreOrPurgeSessionData() {
 		log.Printf("[Monitor] Error deleting stale session data: %v", err)
 		return
 	}
+	m.mu.Lock()
+	m.targetGiftProgress = nil
+	m.mu.Unlock()
 	log.Printf("[Monitor] Purged session data for %s", liveName)
 }
 

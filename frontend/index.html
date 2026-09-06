@@ -448,11 +448,11 @@
         .tbl-ranking tr.rank-top-1 td { background: rgba(255, 215, 0, 0.10); }
         .tbl-ranking tr.rank-top-2 td { background: rgba(200, 200, 210, 0.08); }
         .tbl-ranking tr.rank-top-3 td { background: rgba(205, 127, 50, 0.10); }
-        }
         .action-group {
             display: flex;
             gap: 8px;
             align-items: center;
+            flex-wrap: wrap;
         }
         .setup-select.small {
             padding: 6px 10px;
@@ -465,6 +465,58 @@
             color: var(--text-muted);
             font-size: 0.85em;
             font-weight: 500;
+        }
+        .target-gifts-actions {
+            width: 100%;
+            display: grid;
+            grid-template-columns: minmax(280px, 1fr) auto;
+            align-items: end;
+            gap: 10px;
+            padding-top: 4px;
+        }
+        .target-gifts-actions .action-group {
+            display: grid;
+            grid-template-columns: minmax(150px, 200px) 88px 38px;
+            align-items: end;
+            gap: 8px;
+            min-width: 0;
+        }
+        .target-gifts-actions .expiration-control {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 4px;
+            line-height: 1.1;
+        }
+        .target-gifts-actions .expiration-control input {
+            box-sizing: border-box;
+            height: 34px;
+        }
+        .target-gifts-actions .ss-wrap {
+            width: 100%;
+            min-width: 0;
+        }
+        .target-gifts-actions .ss-wrap .ss-input {
+            box-sizing: border-box;
+            width: 100%;
+            height: 34px;
+        }
+        .target-gifts-actions .ss-wrap .ss-input.small {
+            min-width: 0;
+        }
+        .target-gifts-actions #targetGiftQuantity {
+            width: 76px;
+        }
+        .target-gifts-actions #addTargetGiftBtn,
+        .target-gifts-actions #targetGiftHistoryBtn {
+            height: 34px;
+        }
+        .target-gifts-actions #targetGiftHistoryBtn {
+            white-space: nowrap;
+        }
+        .target-gifts-secondary {
+            display: flex;
+            align-items: flex-end;
+            gap: 10px;
         }
         .comment-cell {
             max-width: 420px;
@@ -962,6 +1014,30 @@
             .chart-section canvas { height: 150px !important; }
             .section-title { flex-direction: column; align-items: flex-start; gap: 8px; }
             .section-title-actions { width: 100%; justify-content: flex-start; }
+            .target-gifts-actions {
+                display: grid;
+                grid-template-columns: 1fr;
+                align-items: end;
+                gap: 8px;
+            }
+            .target-gifts-actions .action-group {
+                display: flex;
+                align-items: flex-end;
+                flex-wrap: nowrap;
+                gap: 8px;
+                width: 100%;
+            }
+            .target-gifts-actions .ss-wrap {
+                flex: 1 1 auto;
+                min-width: 0;
+                width: auto;
+            }
+            .target-gifts-secondary {
+                width: 100%;
+                justify-content: space-between;
+                align-items: flex-end;
+                gap: 8px;
+            }
             #giftSearchInput { flex: 1 1 100%; min-width: 0; }
 
             /* Tabelas */
@@ -1281,19 +1357,25 @@
                     <!-- Gifts will be listed here -->
                 </div>
             </div>
-            <div class="section-title-actions">
+            <div class="section-title-actions target-gifts-actions">
                 <div class="action-group">
                     <select id="availableGiftSelect" class="setup-select small">
                         <option value="">Conecte na live para carregar...</option>
                     </select>
-                    <button id="addTargetGiftBtn" class="small-btn" type="button">+</button>
+                    <label class="expiration-control" for="targetGiftQuantity">
+                        Quantidade
+                        <input type="number" id="targetGiftQuantity" min="1" step="1" value="1" required
+                            title="Quantidade acumulada por participante para aparecer na tabela">
+                    </label>
+                    <button id="addTargetGiftBtn" class="small-btn" type="button" title="Adicionar ou atualizar presente alvo">+</button>
                 </div>
-                <button id="targetGiftHistoryBtn" class="small-btn" type="button">Histórico</button>
-                <label class="expiration-control">
-                    Expirar em
-                    <input type="number" id="targetExpirationMinutes" min="1" step="1" value="4">
-                    min
-                </label>
+                <div class="target-gifts-secondary">
+                    <button id="targetGiftHistoryBtn" class="small-btn" type="button">Histórico</button>
+                    <label class="expiration-control">
+                        Expirar em (min)
+                        <input type="number" id="targetExpirationMinutes" min="1" step="1" value="4">
+                    </label>
+                </div>
             </div>
         </div>
         <div class="table-container">

@@ -164,25 +164,22 @@ func (m *Monitor) handleTargetGift(data EventData) {
 	user := extractFromData(data)
 	uniqueID := normalizeID(user.UniqueID)
 
-	m.mu.Lock()
-	isPinned := m.pinnedUsers[uniqueID]
-	m.mu.Unlock()
-
 	giftName := asString(data["giftName"])
 	if giftName == "" {
 		giftName = asString(data["name"])
 	}
-	isTarget := m.isTargetGift(giftName)
-
-	data["isRed"] = isTarget && isPinned
-
-	if !isTarget || !m.isGiftCountingSettlement(data) {
+	if !m.isGiftCountingSettlement(data) {
 		return
 	}
+	repeatCount, _ := toInt(data["repeatCount"])
+	qualified, isPinned := m.consumeTargetGift(uniqueID, giftName, repeatCount)
+	if !qualified {
+		return
+	}
+	data["isRed"] = isPinned
 
 	m.emit(EventGiftUser, data)
 
-	repeatCount, _ := toInt(data["repeatCount"])
 	giftType, _ := toInt(data["giftType"])
 	repeatEnd := truthy(data["repeatEnd"])
 

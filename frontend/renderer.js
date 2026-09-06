@@ -716,6 +716,7 @@ const targetGiftHistoryBtn = document.getElementById('targetGiftHistoryBtn');
 const targetGiftsList = document.getElementById('targetGiftsList');
 const availableGiftSelect = document.getElementById('availableGiftSelect');
 const addTargetGiftBtn = document.getElementById('addTargetGiftBtn');
+const targetGiftQuantity = document.getElementById('targetGiftQuantity');
 const pinnedCommentHistoryBtn = document.getElementById('pinnedCommentHistoryBtn');
 const goalTitleInput = document.getElementById('goalTitleInput');
 const goalGiftSelect = document.getElementById('goalGiftSelect');
@@ -2750,7 +2751,7 @@ function renderTargetGifts() {
                 const span = document.createElement('span');
                 span.className = 'target-gift-chip';
                 const label = document.createElement('span');
-                label.textContent = giftName;
+                label.textContent = `${giftName} × ${settings.targetGiftQuantities?.[giftName] || 1}`;
                 span.appendChild(label);
                 const btn = document.createElement('button');
                 btn.type = 'button';
@@ -2772,11 +2773,13 @@ async function removeTargetGift(giftToRemove) {
         const settings = await response.json();
         const gifts = settings.targetGifts || [];
         const updatedGifts = gifts.filter(g => g !== giftToRemove);
+        const quantities = { ...settings.targetGiftQuantities };
+        delete quantities[giftToRemove];
 
         const res = await fetch('/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...settings, targetGifts: updatedGifts })
+            body: JSON.stringify({ ...settings, targetGifts: updatedGifts, targetGiftQuantities: quantities })
         });
         if (res.ok) {
             console.log('Successfully removed target gift:', giftToRemove);
@@ -2953,32 +2956,37 @@ async function addTargetGift() {
     try {
         const value = availableGiftSelect.value.trim();
         if (!value) return;
+        if (!targetGiftQuantity.reportValidity()) return;
+        const quantity = Number(targetGiftQuantity.value);
+        if (!Number.isSafeInteger(quantity) || quantity < 1) {
+            alert('Informe uma quantidade inteira maior ou igual a 1.');
+            return;
+        }
         console.log('Adding target gift:', value);
 
         const response = await fetch('/api/settings');
         const settings = await response.json();
         const gifts = settings.targetGifts || [];
-        if (gifts.includes(value)) {
-            console.log('Gift already exists in targets:', value);
-            return;
-        }
-
-        const updatedGifts = [...gifts, value];
+        const updatedGifts = gifts.includes(value) ? gifts : [...gifts, value];
+        const quantities = { ...settings.targetGiftQuantities, [value]: quantity };
         const res = await fetch('/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...settings, targetGifts: updatedGifts })
+            body: JSON.stringify({ ...settings, targetGifts: updatedGifts, targetGiftQuantities: quantities })
         });
         if (res.ok) {
             console.log('Successfully added target gift:', value);
             availableGiftSelect.value = '';
+            targetGiftQuantity.value = '1';
             // renderTargetGifts() is triggered by the SSE 'settings-update' event
             // sent by the server after the POST, avoiding a race that duplicates tags.
         } else {
             console.error('Failed to add target gift:', await res.text());
+            alert('Não foi possível salvar o presente alvo. Tente novamente.');
         }
     } catch (e) {
         console.error('Erro ao adicionar presente alvo:', e);
+        alert('Não foi possível salvar o presente alvo. Tente novamente.');
     } finally {
         isAddingTargetGift = false;
     }

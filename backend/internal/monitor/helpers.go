@@ -129,6 +129,20 @@ func (m *Monitor) detectKeyword(comment string) string {
 }
 
 func (m *Monitor) isTargetGift(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, target := range m.settings.TargetGifts {
+		if matchesTargetGift(name, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesTargetGift(name, target string) bool {
+	if strings.TrimSpace(target) == "" {
+		return false
+	}
 	lower := strings.ToLower(name)
 	compact := strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
@@ -137,18 +151,16 @@ func (m *Monitor) isTargetGift(name string) bool {
 		return -1
 	}, lower)
 
-	for _, target := range m.settings.TargetGifts {
-		tLower := strings.ToLower(target)
-		tCompact := strings.Map(func(r rune) rune {
-			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-				return r
-			}
-			return -1
-		}, tLower)
-
-		if strings.Contains(lower, tLower) || strings.Contains(compact, tCompact) {
-			return true
+	tLower := strings.ToLower(target)
+	tCompact := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			return r
 		}
+		return -1
+	}, tLower)
+
+	if strings.Contains(lower, tLower) || (tCompact != "" && strings.Contains(compact, tCompact)) {
+		return true
 	}
 	return false
 }

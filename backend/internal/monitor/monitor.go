@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"os/exec"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -72,9 +73,10 @@ type GiftPayload struct {
 }
 
 type Settings struct {
-	ModerationEnabled bool     `json:"moderationEnabled"`
-	LogLevel          string   `json:"logLevel"`
-	TargetGifts       []string `json:"targetGifts"`
+	ModerationEnabled    bool           `json:"moderationEnabled"`
+	LogLevel             string         `json:"logLevel"`
+	TargetGifts          []string       `json:"targetGifts"`
+	TargetGiftQuantities map[string]int `json:"targetGiftQuantities,omitempty"`
 }
 
 type State struct {
@@ -139,7 +141,8 @@ type Monitor struct {
 
 	// giftStreaks rastreia streaks (combos) de presente aguardando liquidação;
 	// ver handleGiftReceived/settleGiftStreak.
-	giftStreaks map[string]*giftStreak
+	giftStreaks        map[string]*giftStreak
+	targetGiftProgress map[targetGiftProgressKey]int
 }
 
 func New() (*Monitor, error) {
@@ -186,6 +189,11 @@ func (m *Monitor) SetSettings(s Settings) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	fmt.Printf("[Monitor] Updating settings: %+v\n", s)
+	for key := range m.targetGiftProgress {
+		if !slices.Contains(s.TargetGifts, key.target) || targetGiftQuantity(s, key.target) != targetGiftQuantity(m.settings, key.target) {
+			delete(m.targetGiftProgress, key)
+		}
+	}
 	m.settings = s
 }
 
@@ -200,7 +208,7 @@ func (m *Monitor) SetRepo(repo model.Repository) {
 func (m *Monitor) SetCurrentLive(username string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.currentUsername = username
+	m.setCurrentLiveLocked(username)
 }
 
 func (m *Monitor) StartMonitoring(ctx context.Context, username string) error {
@@ -220,7 +228,7 @@ func (m *Monitor) StartMonitoring(ctx context.Context, username string) error {
 	m.startSupervisor(ctx)
 
 	m.mu.Lock()
-	m.currentUsername = username
+	m.setCurrentLiveLocked(username)
 	m.chatBuffer = nil
 	m.questionBuffer = nil
 	m.pinnedUsers = make(map[string]bool)
