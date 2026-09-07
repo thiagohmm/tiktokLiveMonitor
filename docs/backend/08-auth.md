@@ -149,6 +149,31 @@ LoginSession          // access_token, refresh_token, expires_in, token_type
 
 ---
 
+## `internal/mail` — E-mail de boas-vindas (cadastro público)
+
+> Diretório: `backend/internal/mail/` (pacote `mail`; SMTP via stdlib — sem dependências novas).
+
+Após `POST /api/auth/signup` com sucesso (201), o view dispara
+`queueWelcomeEmail` em uma goroutine — **best-effort**: falha de SMTP só loga
+e o cadastro continua retornando 201. Sem `SMTP_HOST`/`MAIL_FROM` o mailer
+fica desabilitado e nada é enviado (sem erro). Criação por admin
+(`/api/admin/users`) **não** envia e-mail.
+
+| Item | Descrição |
+|---|---|
+| `Config` | `Host`, `Port`, `Username`, `Password`, `From`, `Subject`, `PixKey`, `PaymentLink`, `Price`, `TLSMode`, `InsecureSkipVerify`. |
+| `LoadConfigFromEnv()` | Lê `SMTP_*`/`MAIL_*`/`PAYMENT_*`. Defaults: `Port=587`, `TLSMode="starttls"`, `Price="20,00"`, assunto e `From` fixos. |
+| `Mailer.Enabled()` | `Host != "" && From != ""`. |
+| `SendWelcome(to, displayName)` | Monta assunto + corpo e envia via SMTP (`starttls`/`implicit`/`none`; `PlainAuth` quando `SMTP_USERNAME` preenchido). |
+| `buildWelcomeBody(cfg, displayName)` | Corpo fixo em texto puro; linha `Pagamento:` com prioridade `PAYMENT_LINK` > `PAYMENT_PIX_KEY` > placeholder (com log de warning). |
+| `buildMessage(from, to, subject, body)` | Mensagem RFC 822: headers `From`/`To`/`Subject` (UTF-8 via MIME B-encoding)/`Date`/`MIME-Version: 1.0`/`Content-Type: text/plain; charset=UTF-8`/`Content-Transfer-Encoding: quoted-printable`, corpo com quebras CRLF. |
+
+Env (ver `.env.example`): `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`,
+`SMTP_PASSWORD`, `SMTP_TLS_MODE`, `SMTP_INSECURE_SKIP_VERIFY`, `MAIL_FROM`,
+`MAIL_SUBJECT`, `PAYMENT_PIX_KEY`, `PAYMENT_LINK`, `PAYMENT_PRICE`.
+
+---
+
 ## Fluxos (resumo)
 
 **Login**: View → `ClientIP` → `lockout.Status` (429 se bloqueado) →
@@ -159,6 +184,11 @@ LoginSession          // access_token, refresh_token, expires_in, token_type
 **Requisições protegidas**: `auth.Middleware` valida o JWT localmente (HS256 +
 iss/aud + exp + assinatura) e injeta o `User`. Endpoints `/api/admin/*` ainda
 exigem `Role == "admin"` via `RequireAdmin`.
+
+**Cadastro público**: `POST /api/auth/signup` → lockout por IP →
+`admin.SignUpPending` (usuário inativo/pendente) → `queueWelcomeEmail`
+(goroutine; envia e-mail transacional via `mail.Mailer` se configurado) →
+201 `{pending: true}`.
 
 ## Diagramas relacionados
 - `diagrams/03-autenticacao.puml`.

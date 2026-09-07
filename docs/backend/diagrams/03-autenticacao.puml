@@ -11,6 +11,7 @@ participant "auth\nLoginLockout" as LOCK
 participant "auth.Config\n(JWT)" as JWT
 participant "auth\nAdminClient" as ADMIN
 participant "Supabase\nAuth/PostgREST" as SUPA
+participant "mail\nMailer (SMTP)" as MAIL
 
 == GET /api/auth/config (público) ==
 CLIENT -> VIEW : GET config
@@ -75,6 +76,7 @@ alt e-mail duplicado
     VIEW --> CLIENT : 409 ErrDuplicateSignup
 else ok
     VIEW --> CLIENT : 201 { pending: true }
+    VIEW -> MAIL : SendWelcome (goroutine, best-effort)\nfalha só loga
 end
 deactivate VIEW
 

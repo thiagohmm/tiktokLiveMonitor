@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/auth"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/mail"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 	"log"
 	"net/http"
@@ -29,6 +30,7 @@ type HTTPServer struct {
 	lockout       *auth.LoginLockout
 	proxyTrust    auth.ProxyTrust
 	theme         auth.ThemeColors
+	mailer        *mail.Mailer
 	corsOrigins   []string
 }
 
@@ -51,6 +53,7 @@ func New(cfg Config, ctrl *controller.AppController) *HTTPServer {
 		lockout:       auth.NewLoginLockout(auth.LoadLockoutConfigFromEnv()),
 		proxyTrust:    auth.LoadProxyTrustFromEnv(),
 		theme:         auth.LoadThemeFromEnv(),
+		mailer:        mail.NewMailer(mail.LoadConfigFromEnv()),
 		corsOrigins:   LoadCORSOriginsFromEnv(),
 	}
 }

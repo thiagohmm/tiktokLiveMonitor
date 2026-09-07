@@ -3,6 +3,7 @@ package view
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -190,11 +191,31 @@ func (s *HTTPServer) handleAuthSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Best-effort: falha no envio só loga; o cadastro já foi concluído.
+	s.queueWelcomeEmail(body.Email, body.DisplayName)
+
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, map[string]any{
 		"pending": true,
 		"message": "Cadastro recebido. Após a confirmação do pagamento, o administrador libera o acesso.",
 	})
+}
+
+// queueWelcomeEmail dispara o e-mail de boas-vindas em uma goroutine.
+// Sem mailer configurado (SMTP_HOST/MAIL_FROM) nada acontece.
+func (s *HTTPServer) queueWelcomeEmail(email, displayName string) {
+	if s.mailer == nil || !s.mailer.Enabled() {
+		return
+	}
+	to := strings.TrimSpace(strings.ToLower(email))
+	if to == "" {
+		return
+	}
+	go func() {
+		if err := s.mailer.SendWelcome(to, displayName); err != nil {
+			log.Printf("[View] welcome email: %v", err)
+		}
+	}()
 }
 
 func (s *HTTPServer) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
