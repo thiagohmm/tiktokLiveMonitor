@@ -9,9 +9,12 @@ package mail
 import (
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/smtp"
 	"os"
 	"strconv"
@@ -32,6 +35,7 @@ type Config struct {
 	Price              string
 	TLSMode            string // "starttls" | "implicit" | "none"
 	InsecureSkipVerify bool
+	ResendAPIKey       string
 }
 
 // Defaults aplicados quando as envs estão ausentes.
@@ -80,6 +84,7 @@ func LoadConfigFromEnv() Config {
 		Price:              price,
 		TLSMode:            tlsMode,
 		InsecureSkipVerify: os.Getenv("SMTP_INSECURE_SKIP_VERIFY") == "1",
+		ResendAPIKey:       strings.TrimSpace(os.Getenv("RESEND_API_KEY")),
 	}
 }
 
@@ -95,7 +100,7 @@ func NewMailer(cfg Config) *Mailer {
 
 // Enabled reports whether the mailer is configured (host e from definidos).
 func (m *Mailer) Enabled() bool {
-	return m.cfg.Host != "" && m.cfg.From != ""
+	return m.cfg.From != "" && (m.cfg.ResendAPIKey != "" || m.cfg.Host != "")
 }
 
 // SendWelcome envia o e-mail de boas-vindas do cadastro para `to`.
@@ -108,8 +113,47 @@ func (m *Mailer) SendWelcome(to, displayName string) error {
 		log.Printf("[Mail] PAYMENT_LINK e PAYMENT_PIX_KEY vazios; e-mail de boas-vindas usará placeholder de pagamento")
 	}
 	body := buildWelcomeBody(m.cfg, displayName)
+	if m.cfg.ResendAPIKey != "" {
+		return m.sendResend(to, body)
+	}
 	msg := buildMessage(m.cfg.From, to, m.cfg.Subject, body)
 	return m.send(to, msg)
+}
+
+type resendEmailRequest struct {
+	From    string   `json:"from"`
+	To      []string `json:"to"`
+	Subject string   `json:"subject"`
+	Text    string   `json:"text"`
+}
+
+// sendResend envia o e-mail pela API HTTPS do Resend.
+func (m *Mailer) sendResend(to, body string) error {
+	payload, err := json.Marshal(resendEmailRequest{
+		From: m.cfg.From, To: []string{to}, Subject: m.cfg.Subject, Text: body,
+	})
+	if err != nil {
+		return fmt.Errorf("montar requisição Resend: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, "https://api.resend.com/emails", strings.NewReader(string(payload)))
+	if err != nil {
+		return fmt.Errorf("criar requisição Resend: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+m.cfg.ResendAPIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("conectar à API Resend: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("API Resend retornou HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(detail)))
+	}
+	return nil
 }
 
 // send roda a conversa SMTP: dial → (TLS) → auth → MAIL/RCPT/DATA.

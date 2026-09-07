@@ -161,14 +161,14 @@ fica desabilitado e nada é enviado (sem erro). Criação por admin
 
 | Item | Descrição |
 |---|---|
-| `Config` | `Host`, `Port`, `Username`, `Password`, `From`, `Subject`, `PixKey`, `PaymentLink`, `Price`, `TLSMode`, `InsecureSkipVerify`. |
+| `Config` | `Host`, `Port`, `Username`, `Password`, `From`, `Subject`, `PixKey`, `PaymentLink`, `Price`, `TLSMode`, `InsecureSkipVerify`, `ResendAPIKey`. |
 | `LoadConfigFromEnv()` | Lê `SMTP_*`/`MAIL_*`/`PAYMENT_*`. Defaults: `Port=587`, `TLSMode="starttls"`, `Price="20,00"`, assunto e `From` fixos. |
 | `Mailer.Enabled()` | `Host != "" && From != ""`. |
-| `SendWelcome(to, displayName)` | Monta assunto + corpo e envia via SMTP (`starttls`/`implicit`/`none`; `PlainAuth` quando `SMTP_USERNAME` preenchido). |
+| `SendWelcome(to, displayName)` | Monta assunto + corpo e envia via Resend HTTPS quando `RESEND_API_KEY` está definido; caso contrário usa SMTP (`starttls`/`implicit`/`none`). |
 | `buildWelcomeBody(cfg, displayName)` | Corpo fixo em texto puro; linha `Pagamento:` com prioridade `PAYMENT_LINK` > `PAYMENT_PIX_KEY` > placeholder (com log de warning). |
 | `buildMessage(from, to, subject, body)` | Mensagem RFC 822: headers `From`/`To`/`Subject` (UTF-8 via MIME B-encoding)/`Date`/`MIME-Version: 1.0`/`Content-Type: text/plain; charset=UTF-8`/`Content-Transfer-Encoding: quoted-printable`, corpo com quebras CRLF. |
 
-Env (ver `.env.example`): `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`,
+Env (ver `.env.example`): `RESEND_API_KEY`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`,
 `SMTP_PASSWORD`, `SMTP_TLS_MODE`, `SMTP_INSECURE_SKIP_VERIFY`, `MAIL_FROM`,
 `MAIL_SUBJECT`, `PAYMENT_PIX_KEY`, `PAYMENT_LINK`, `PAYMENT_PRICE`.
 
