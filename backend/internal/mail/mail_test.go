@@ -72,6 +72,23 @@ func TestBuildWelcomeBody(t *testing.T) {
 	}
 }
 
+func TestBuildResetBodyContainsLink(t *testing.T) {
+	link := "https://project-ref.supabase.co/auth/v1/verify?token=abc123&type=recovery"
+	body := buildResetBody(link)
+	if !strings.Contains(body, link) {
+		t.Fatalf("corpo não contém o link de redefinição\n--- corpo ---\n%s", body)
+	}
+	for _, want := range []string{
+		"redefinição de senha",
+		"uso único",
+		"Atenciosamente,\nEquipe TikTok Live Monitor",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("corpo não contém %q\n--- corpo ---\n%s", want, body)
+		}
+	}
+}
+
 func TestBuildMessage(t *testing.T) {
 	cfg := Config{
 		PaymentLink: "https://pay.exemplo/abc",

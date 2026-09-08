@@ -14,6 +14,11 @@ import (
 // account creation per client IP (independent from login attempts).
 const SignupLockoutIdentity = "*signup*"
 
+// RecoverLockoutIdentity is the lockout key used to rate-limit public
+// password-recovery requests per client IP (independent from login and
+// signup attempts). It prevents abuse of e-mail sending.
+const RecoverLockoutIdentity = "*recover*"
+
 // LockoutConfig controls brute-force protection on the login endpoint.
 type LockoutConfig struct {
 	MaxAttempts int

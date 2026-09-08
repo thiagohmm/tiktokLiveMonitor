@@ -18,6 +18,8 @@ export default defineRailway(() => {
       DATABASE_URL: preserve(),
       DB_MAX_CONNS: preserve(),
       HOST: preserve(),
+      MAIL_RESET_SUBJECT: preserve(),
+      SITE_URL: preserve(),
       SUPABASE_ANON_KEY: preserve(),
       SUPABASE_SERVICE_ROLE_KEY: preserve(),
       SUPABASE_URL: preserve(),

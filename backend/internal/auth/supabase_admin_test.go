@@ -10,10 +10,11 @@ import (
 )
 
 type mockSupabase struct {
-	t            *testing.T
-	users        []map[string]any
-	profiles     []map[string]any
-	lastUserBody map[string]any
+	t                    *testing.T
+	users                []map[string]any
+	profiles             []map[string]any
+	lastUserBody         map[string]any
+	lastGenerateLinkBody map[string]any
 }
 
 func (m *mockSupabase) handler() http.Handler {
@@ -53,6 +54,16 @@ func (m *mockSupabase) handler() http.Handler {
 				"updated_at":              now,
 			})
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": id})
+		case r.Method == http.MethodPost && r.URL.Path == "/auth/v1/admin/generate_link":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			m.lastGenerateLinkBody = body
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"action_link": "https://project-ref.supabase.co/auth/v1/verify?token=rec-token&type=recovery",
+			})
 		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/rest/v1/profiles"):
 			var patch map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&patch)
@@ -137,6 +148,57 @@ func TestSignUpPendingIgnoresAdminFieldsInJSON(t *testing.T) {
 	meta, _ := mock.lastUserBody["app_metadata"].(map[string]any)
 	if meta["role"] != "subscriber" || meta["active"] != false {
 		t.Fatalf("metadata inesperada: %+v", meta)
+	}
+}
+
+func TestGenerateRecoveryLinkSendsRecoveryPayloadAndExtractsActionLink(t *testing.T) {
+	client, mock := newTestAdmin(t)
+
+	link, err := client.GenerateRecoveryLink(" Cliente@Example.com ", "https://tlm.example.com/reset-password.html")
+	if err != nil {
+		t.Fatalf("GenerateRecoveryLink: %v", err)
+	}
+	want := "https://project-ref.supabase.co/auth/v1/verify?token=rec-token&type=recovery"
+	if link != want {
+		t.Fatalf("link=%q, want %q", link, want)
+	}
+
+	body := mock.lastGenerateLinkBody
+	if body == nil {
+		t.Fatal("generate_link não chamado")
+	}
+	if body["type"] != "recovery" {
+		t.Fatalf("type=%v, want recovery", body["type"])
+	}
+	if body["email"] != "cliente@example.com" {
+		t.Fatalf("email=%v, want normalizado (trim + lowercase)", body["email"])
+	}
+	opts, _ := body["options"].(map[string]any)
+	if opts["redirect_to"] != "https://tlm.example.com/reset-password.html" {
+		t.Fatalf("redirect_to=%v", opts["redirect_to"])
+	}
+}
+
+func TestGenerateRecoveryLinkValidatesInput(t *testing.T) {
+	client, _ := newTestAdmin(t)
+	if _, err := client.GenerateRecoveryLink("", "https://tlm.example.com/reset-password.html"); err == nil {
+		t.Fatal("want error para email vazio")
+	}
+	if _, err := client.GenerateRecoveryLink("a@b.com", ""); err == nil {
+		t.Fatal("want error para redirect_to vazio")
+	}
+}
+
+func TestGenerateRecoveryLinkSurfacesSupabaseError(t *testing.T) {
+	// Usuário inexistente: o erro sobe para o handler, que decide não vazar.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(map[string]string{"msg": "User not found"})
+	}))
+	t.Cleanup(server.Close)
+	client := NewAdminClient(Config{Enabled: true, SupabaseURL: server.URL, ServiceRoleKey: "service-role"})
+	if _, err := client.GenerateRecoveryLink("ninguem@example.com", "https://tlm.example.com/reset-password.html"); err == nil {
+		t.Fatal("want error quando o usuário não existe")
 	}
 }
 

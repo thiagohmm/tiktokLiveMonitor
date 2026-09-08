@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -162,6 +163,232 @@ func TestHandleAdminUsersHidesAuthenticatedAdminEvenWhenProfileRoleIsStale(t *te
 	}
 	if len(payload.Users) != 1 || payload.Users[0].ID != "subscriber-1" {
 		t.Fatalf("users=%+v, want only subscriber-1", payload.Users)
+	}
+}
+
+// recoverTestCalls registra as chamadas que o handler fez ao mock do Supabase.
+type recoverTestCalls struct {
+	mu             sync.Mutex
+	generateLink   []map[string]any
+	passwordPuts   []map[string]any
+	passwordPutHdr []http.Header
+}
+
+func (c *recoverTestCalls) recordGenerateLink(body map[string]any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.generateLink = append(c.generateLink, body)
+}
+
+func (c *recoverTestCalls) recordPasswordPut(h http.Header, body map[string]any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.passwordPuts = append(c.passwordPuts, body)
+	c.passwordPutHdr = append(c.passwordPutHdr, h.Clone())
+}
+
+// recoverTestServer monta um HTTPServer com um mock do Supabase que atende
+// POST /auth/v1/admin/generate_link (recovery) e PUT /auth/v1/user.
+// knownEmails lista os e-mails que o generate_link aceita; os demais
+// recebem 422, como o Supabase real para usuário inexistente.
+func recoverTestServer(t *testing.T, knownEmails ...string) (*HTTPServer, *recoverTestCalls) {
+	t.Helper()
+	known := make(map[string]bool, len(knownEmails))
+	for _, e := range knownEmails {
+		known[e] = true
+	}
+	calls := &recoverTestCalls{}
+	supabase := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/auth/v1/admin/generate_link":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			calls.recordGenerateLink(body)
+			email, _ := body["email"].(string)
+			if !known[email] {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_ = json.NewEncoder(w).Encode(map[string]string{"msg": "User not found"})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"action_link": "https://project-ref.supabase.co/auth/v1/verify?token=rec-token&type=recovery",
+			})
+		case r.Method == http.MethodPut && r.URL.Path == "/auth/v1/user":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			calls.recordPasswordPut(r.Header, body)
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "u1", "email": "cliente@example.com"})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(supabase.Close)
+
+	cfg := auth.Config{
+		Enabled:        true,
+		SupabaseURL:    supabase.URL,
+		ServiceRoleKey: "service-role",
+		SupabaseAnon:   "anon",
+		SiteURL:        "https://tlm.example.com",
+	}
+	srv := &HTTPServer{
+		auth:    cfg,
+		admin:   auth.NewAdminClient(cfg),
+		lockout: auth.NewLoginLockout(auth.LockoutConfig{MaxAttempts: 3, Lockout: time.Minute}),
+	}
+	return srv, calls
+}
+
+func TestHandleAuthRecoverAlwaysRespondsGenericOK(t *testing.T) {
+	srv, calls := recoverTestServer(t, "cliente@example.com")
+
+	// E-mail cadastrado e inexistente devem devolver exatamente a mesma
+	// resposta genérica (anti-enumeração).
+	for _, email := range []string{"cliente@example.com", "desconhecido@example.com"} {
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/recover", strings.NewReader(
+			`{"email":"`+email+`"}`))
+		req.RemoteAddr = "203.0.113.7:1234"
+		rec := httptest.NewRecorder()
+		srv.handleAuthRecover(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status=%d body=%s", email, rec.Code, rec.Body.String())
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("%s: json: %v", email, err)
+		}
+		msg, _ := payload["message"].(string)
+		if !strings.Contains(msg, "Se este e-mail estiver cadastrado") {
+			t.Fatalf("%s: mensagem não é genérica: %q", email, msg)
+		}
+	}
+
+	// O body enviado ao Supabase deve pedir recovery com redirect para o
+	// reset-password.html do SITE_URL.
+	if len(calls.generateLink) != 2 {
+		t.Fatalf("generate_link chamado %d vezes, want 2", len(calls.generateLink))
+	}
+	for i, body := range calls.generateLink {
+		if body["type"] != "recovery" {
+			t.Fatalf("chamada %d: type=%v, want recovery", i+1, body["type"])
+		}
+		opts, _ := body["options"].(map[string]any)
+		if opts["redirect_to"] != "https://tlm.example.com/reset-password.html" {
+			t.Fatalf("chamada %d: redirect_to=%v", i+1, opts["redirect_to"])
+		}
+	}
+}
+
+func TestHandleAuthRecoverRateLimitsPerIP(t *testing.T) {
+	srv, _ := recoverTestServer(t, "cliente@example.com")
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/recover", strings.NewReader(
+			`{"email":"cliente@example.com"}`))
+		req.RemoteAddr = "203.0.113.10:1234"
+		rec := httptest.NewRecorder()
+		srv.handleAuthRecover(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("attempt %d status=%d body=%s", i+1, rec.Code, rec.Body.String())
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/recover", strings.NewReader(
+		`{"email":"cliente@example.com"}`))
+	req.RemoteAddr = "203.0.113.10:1234"
+	rec := httptest.NewRecorder()
+	srv.handleAuthRecover(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status=%d, want 429 after recover cap", rec.Code)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if payload["locked"] != true {
+		t.Fatalf("locked=%v, want true", payload["locked"])
+	}
+	if retry, ok := payload["retryAfterSec"].(float64); !ok || retry <= 0 {
+		t.Fatalf("retryAfterSec=%v, want > 0", payload["retryAfterSec"])
+	}
+}
+
+func TestHandleAuthResetPasswordRejectsShortPassword(t *testing.T) {
+	srv, calls := recoverTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/reset-password", strings.NewReader(
+		`{"token":"rec-token","password":"curta"}`))
+	rec := httptest.NewRecorder()
+	srv.handleAuthResetPassword(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "senha deve ter pelo menos 8 caracteres") {
+		t.Fatalf("body=%s", rec.Body.String())
+	}
+	if len(calls.passwordPuts) != 0 {
+		t.Fatalf("PUT /auth/v1/user chamado com senha curta: %+v", calls.passwordPuts)
+	}
+}
+
+func TestHandleAuthResetPasswordSuccessCallsSupabaseUserPut(t *testing.T) {
+	srv, calls := recoverTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/reset-password", strings.NewReader(
+		`{"token":"rec-token","password":"novaSenha123"}`))
+	rec := httptest.NewRecorder()
+	srv.handleAuthResetPassword(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]bool
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if !payload["success"] {
+		t.Fatalf("success=%v, want true", payload["success"])
+	}
+	if len(calls.passwordPuts) != 1 {
+		t.Fatalf("PUT /auth/v1/user chamado %d vezes, want 1", len(calls.passwordPuts))
+	}
+	if calls.passwordPuts[0]["password"] != "novaSenha123" {
+		t.Fatalf("password=%v, want novaSenha123", calls.passwordPuts[0]["password"])
+	}
+	hdr := calls.passwordPutHdr[0]
+	if hdr.Get("apikey") != "anon" {
+		t.Fatalf("apikey=%q, want anon", hdr.Get("apikey"))
+	}
+	if hdr.Get("Authorization") != "Bearer rec-token" {
+		t.Fatalf("Authorization=%q, want Bearer rec-token", hdr.Get("Authorization"))
+	}
+}
+
+func TestHandleAuthResetPasswordInvalidTokenReturnsGenericError(t *testing.T) {
+	// Mock que rejeita o PUT (token inválido/expirado/usado) com o detalhe
+	// que o Supabase real devolveria — ele não pode vazar para o cliente.
+	supabase := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid login or password"})
+	}))
+	t.Cleanup(supabase.Close)
+
+	cfg := auth.Config{Enabled: true, SupabaseURL: supabase.URL, SupabaseAnon: "anon"}
+	srv := &HTTPServer{auth: cfg}
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/reset-password", strings.NewReader(
+		`{"token":"token-ja-usado","password":"novaSenha123"}`))
+	rec := httptest.NewRecorder()
+	srv.handleAuthResetPassword(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "link inválido ou expirado") {
+		t.Fatalf("body=%s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "Invalid login") {
+		t.Fatalf("detalhe do Supabase vazou para o cliente: %s", rec.Body.String())
 	}
 }
 

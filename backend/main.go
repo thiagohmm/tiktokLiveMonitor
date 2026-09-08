@@ -42,6 +42,9 @@ func main() {
 
 	// Controller layer: orchestrate services
 	ctrl := controller.NewAppController(mon, repo)
+	monitorManager := monitor.NewManager(repo, 10)
+	monitorManager.SetSettings(ctrl.GetSettings())
+	ctrl.SetMonitorManager(monitorManager)
 	ctrl.SetMessageCache(msgCache)
 
 	// View layer: HTTP API server (SSE + REST). O frontend é servido

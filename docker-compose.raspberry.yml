@@ -66,6 +66,9 @@ services:
       AUTH_THEME_PINK: ${AUTH_THEME_PINK:-#fe2c55}
       AUTH_THEME_CYAN: ${AUTH_THEME_CYAN:-#25f4ee}
       AUTH_THEME_BG: ${AUTH_THEME_BG:-#0b0d12}
+      # Origem pública do frontend (redirect_to do link de redefinição de senha).
+      SITE_URL: ${SITE_URL:-}
+      MAIL_RESET_SUBJECT: ${MAIL_RESET_SUBJECT:-}
     depends_on:
       postgres:
         condition: service_healthy

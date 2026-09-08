@@ -87,6 +87,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 
 	// API endpoints.
 	mux.HandleFunc("/api/state", s.handleState)
+	mux.HandleFunc("/api/lives", s.handleLives)
 	mux.HandleFunc("/api/settings", s.handleSettings)
 	mux.HandleFunc("/api/history", s.handleHistory)
 	// Subárvore: DELETE /api/history/{id} (patterns sem barra só fazem match exato).
@@ -111,6 +112,8 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/auth/config", s.handleAuthConfig)
 	mux.HandleFunc("/api/auth/login", s.handleAuthLogin)
 	mux.HandleFunc("/api/auth/signup", s.handleAuthSignup)
+	mux.HandleFunc("/api/auth/recover", s.handleAuthRecover)
+	mux.HandleFunc("/api/auth/reset-password", s.handleAuthResetPassword)
 	mux.HandleFunc("/api/auth/logout", s.handleAuthLogout)
 	mux.HandleFunc("/api/auth/me", s.handleAuthMe)
 	mux.HandleFunc("/api/admin/users", s.handleAdminUsers)
@@ -134,8 +137,8 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	handler = limitBody(handler)
 	handler = securityHeaders(handler)
 
-	// Setup monitor event handler via controller.
-	s.controller.GetMonitor().OnEvent(func(eventType string, data monitor.EventData) {
+	// Setup one event handler for the legacy monitor and all concurrent lives.
+	eventHandler := func(eventType string, data monitor.EventData) {
 		if eventType == monitor.EventAnyGift {
 			go s.controller.HandleGiftEvent(data)
 		}
@@ -161,7 +164,11 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 			}
 		}
 		s.broadcastSSE(eventType, data)
-	})
+	}
+	s.controller.GetMonitor().OnEvent(eventHandler)
+	if manager := s.controller.GetMonitorManager(); manager != nil {
+		manager.OnEvent(eventHandler)
+	}
 
 	// Goal progress updates (fired by the controller after gift events).
 	s.controller.SetGoalCallback(func(update controller.GoalUpdate) {

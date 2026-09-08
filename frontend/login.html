@@ -122,6 +122,9 @@
         .attempts.hidden { display: none; }
         .hidden { display: none !important; }
         .hint { font-size: 0.8rem; color: var(--text-muted); margin: -8px 0 14px; }
+        .forgot-row { margin: -8px 0 14px; text-align: right; }
+        .forgot-row a, .back-row a { color: var(--cyan); font-size: 0.85rem; text-decoration: none; }
+        .back-row { margin-top: 14px; }
     </style>
 </head>
 <body>
@@ -141,6 +144,7 @@
             <input id="email" name="email" type="email" autocomplete="username" required>
             <label for="password">Senha</label>
             <input id="password" name="password" type="password" autocomplete="current-password" required>
+            <div class="forgot-row"><a href="#" id="forgotLink">Esqueci minha senha?</a></div>
             <button id="loginBtn" type="submit">Entrar</button>
         </form>
 
@@ -156,9 +160,13 @@
             <textarea id="signupNotes" name="notes" placeholder="PIX, nome no comprovante ou outra referência para o administrador aprovar."></textarea>
             <button id="signupBtn" type="submit">Enviar cadastro</button>
         </form>
+        <form id="recoverForm" class="hidden">
+            <label for="recoverEmail">E-mail</label>
+            <input id="recoverEmail" name="email" type="email" autocomplete="email" required>
+            <button id="recoverBtn" type="submit">Enviar link de redefinição</button>
+            <div class="back-row"><a href="#" id="backToLoginLink">&larr; Voltar para o login</a></div>
+        </form>
     </div>
-
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="/config.js"></script>
     <script src="/auth.js"></script>
     <script>
@@ -169,8 +177,10 @@
         const attemptsInfo = document.getElementById('attemptsInfo');
         const loginBtn = document.getElementById('loginBtn');
         const signupBtn = document.getElementById('signupBtn');
+        const recoverBtn = document.getElementById('recoverBtn');
         const emailInput = document.getElementById('email');
         const passwordInput = document.getElementById('password');
+        const recoverForm = document.getElementById('recoverForm');
         const panelHint = document.getElementById('panelHint');
 
         let lockoutTimer = null;
@@ -208,6 +218,7 @@
         function setFormLocked(locked) {
             loginBtn.disabled = locked;
             passwordInput.disabled = locked;
+            recoverBtn.disabled = locked;
         }
 
         function clearLockoutTimer() {
@@ -237,6 +248,7 @@
                     signupBtn.disabled = false;
                     return;
                 }
+
                 remaining -= 1;
             }
 
@@ -251,7 +263,9 @@
             });
             loginForm.classList.toggle('hidden', tab !== 'login');
             signupForm.classList.toggle('hidden', tab !== 'signup');
+            recoverForm.classList.add('hidden');
             hideError();
+            hideSuccess();
             hideAttempts();
             if (tab === 'login') {
                 panelHint.textContent = 'Entre com o e-mail e a senha da sua assinatura.';
@@ -260,8 +274,30 @@
             }
         }
 
+        function showRecoverPanel() {
+            currentTab = 'recover';
+            document.querySelectorAll('.tab').forEach(button => button.classList.remove('active'));
+            loginForm.classList.add('hidden');
+            signupForm.classList.add('hidden');
+            recoverForm.classList.remove('hidden');
+            hideError();
+            hideSuccess();
+            hideAttempts();
+            panelHint.textContent = 'Informe o e-mail da sua conta e enviaremos um link para redefinir a senha.';
+        }
+
         document.querySelectorAll('.tab').forEach(button => {
             button.addEventListener('click', () => switchTab(button.dataset.tab));
+        });
+
+        document.getElementById('forgotLink').addEventListener('click', (event) => {
+            event.preventDefault();
+            showRecoverPanel();
+        });
+
+        document.getElementById('backToLoginLink').addEventListener('click', (event) => {
+            event.preventDefault();
+            switchTab('login');
         });
 
         (async function init() {
@@ -322,6 +358,27 @@
             } finally {
                 if (!lockoutTimer) {
                     signupBtn.disabled = false;
+                }
+            }
+        });
+        recoverForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            hideError();
+            hideSuccess();
+            recoverBtn.disabled = true;
+            try {
+                const result = await window.TLMAuth.requestPasswordReset(document.getElementById('recoverEmail').value);
+                recoverForm.reset();
+                showSuccess(result.message || 'Se este e-mail estiver cadastrado, enviaremos um link de redefinição.');
+            } catch (error) {
+                if (error.locked && error.retryAfterSec) {
+                    startLockoutCountdown(error.retryAfterSec);
+                } else {
+                    showError(error.message || 'Não foi possível solicitar a redefinição de senha.');
+                }
+            } finally {
+                if (!lockoutTimer) {
+                    recoverBtn.disabled = false;
                 }
             }
         });

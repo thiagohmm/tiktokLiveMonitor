@@ -31,7 +31,7 @@ Navegador
    │  https://tiktok-live-monitor-two.vercel.app
    ▼
 Vercel — arquivos estáticos de frontend/dist/ (index.html, login.html,
-         admin.html, JS, vendor)
+         reset-password.html, admin.html, JS, vendor)
    │  rewrites do vercel.json: /api/:path* e /events
    ▼
 Railway — serviço "backend" (API Go, SSE + REST)
@@ -60,7 +60,9 @@ proxy para o backend no Railway. Por isso o frontend não precisa de CORS.
 - Variáveis de ambiente ficam **no painel do Railway** (não no repositório):
   `DATABASE_URL` (pooler do Supabase), `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
   `SUPABASE_SERVICE_ROLE_KEY`, `AUTH_ENABLED=1`,
-  `CORS_ALLOWED_ORIGINS=https://tiktok-live-monitor-two.vercel.app` etc. No
+  `CORS_ALLOWED_ORIGINS=https://tiktok-live-monitor-two.vercel.app`,
+  `SITE_URL=https://tiktok-live-monitor-two.vercel.app` (redirect_to do link
+  de redefinição de senha) etc. No
   `railway.ts` essas variáveis usam `preserve()` para o deploy não sobrescrevê-las.
 - A API escuta na porta fornecida pelo Railway (variável `PORT`, ver
   `backend/main.go`).
@@ -97,6 +99,12 @@ proxy para o backend no Railway. Por isso o frontend não precisa de CORS.
 - O backend valida os tokens consultando a API Auth do Supabase
   (`SUPABASE_JWT_SECRET` vazio). A `SUPABASE_SERVICE_ROLE_KEY` é usada
   somente pelo backend (admin); nunca vai para o navegador/Vercel.
+- Redefinição de senha: em Authentication > URL Configuration > Redirect
+  URLs, a allowlist precisa conter
+  `https://tiktok-live-monitor-two.vercel.app/reset-password.html` (e as
+  origens de preview/localhost). O backend gera o link com `generate_link`
+  (service role) e o envia por e-mail; o token trafega no hash da URL e é
+  de uso único.
 
 ## Ciclo de publicação de uma nova versão
 

@@ -38,6 +38,7 @@ type Config struct {
 	ServiceRoleKey string
 	JWTAudience    string
 	JWTIssuer      string
+	SiteURL        string
 }
 
 // LoadConfigFromEnv builds auth settings from environment variables.
@@ -60,6 +61,7 @@ func LoadConfigFromEnv() Config {
 	if issuer == "" && supabaseURL != "" {
 		issuer = supabaseURL + "/auth/v1"
 	}
+	siteURL := strings.TrimRight(strings.TrimSpace(os.Getenv("SITE_URL")), "/")
 
 	return Config{
 		Enabled:        enabled,
@@ -69,6 +71,7 @@ func LoadConfigFromEnv() Config {
 		ServiceRoleKey: strings.TrimSpace(os.Getenv("SUPABASE_SERVICE_ROLE_KEY")),
 		JWTAudience:    audience,
 		JWTIssuer:      issuer,
+		SiteURL:        siteURL,
 	}
 }
 
@@ -77,7 +80,8 @@ func LoadConfigFromEnv() Config {
 // readiness são acessíveis sem token; todo o resto (/api/* e /events) exige
 // autenticação. Os arquivos da UI não são mais servidos pelo backend.
 func PublicPath(path string) bool {
-	if path == "/api/auth/config" || path == "/api/auth/login" || path == "/api/auth/signup" || path == "/api/readiness" {
+	if path == "/api/auth/config" || path == "/api/auth/login" || path == "/api/auth/signup" ||
+		path == "/api/auth/recover" || path == "/api/auth/reset-password" || path == "/api/readiness" {
 		return true
 	}
 	if path == "/events" || strings.HasPrefix(path, "/api/") {

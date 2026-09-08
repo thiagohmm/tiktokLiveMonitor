@@ -211,6 +211,39 @@
         return data;
     }
 
+    async function requestPasswordReset(email) {
+        const response = await nativeFetch('/api/auth/recover', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: String(email || '').trim() }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const err = new Error(payload.error || 'Não foi possível solicitar a redefinição de senha.');
+            err.locked = !!payload.locked;
+            err.retryAfterSec = payload.retryAfterSec || 0;
+            throw err;
+        }
+        return payload;
+    }
+
+    async function resetPassword(token, password) {
+        const response = await nativeFetch('/api/auth/reset-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                token: String(token || ''),
+                password: String(password || ''),
+            }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            // O backend já responde com mensagem genérica (link inválido ou expirado).
+            throw new Error(payload.error || 'Não foi possível redefinir a senha.');
+        }
+        return payload;
+    }
+
     async function signIn(email, password) {
         const response = await nativeFetch('/api/auth/login', {
             method: 'POST',
@@ -312,6 +345,8 @@
         refreshMe,
         requireAdmin,
         requireSession,
+        requestPasswordReset,
+        resetPassword,
         signIn,
         signOut,
         signUp,

@@ -1,5 +1,6 @@
 // Package mail implementa o envio transacional de e-mail (SMTP via stdlib)
-// usado no e-mail de boas-vindas do cadastro público.
+// usado no e-mail de boas-vindas do cadastro público e no link de
+// redefinição de senha.
 //
 // O mailer é best-effort: sem SMTP_HOST/MAIL_FROM ele fica desabilitado e
 // nenhum e-mail é enviado. Falhas de envio são logadas pelo chamador e
@@ -30,6 +31,7 @@ type Config struct {
 	Password           string
 	From               string
 	Subject            string
+	ResetSubject       string
 	PixKey             string
 	PaymentLink        string
 	Price              string
@@ -40,12 +42,13 @@ type Config struct {
 
 // Defaults aplicados quando as envs estão ausentes.
 const (
-	defaultPort     = 587
-	defaultTLSMode  = "starttls"
-	defaultPrice    = "20,00"
-	defaultSubject  = "Liberação do acesso ao TikTok Live Monitor"
-	defaultFrom     = "Equipe TikTok Live Monitor <no-reply@tiktoklivemonitor.com>"
-	placeholderLine = "Pagamento: [inserir chave Pix ou link de pagamento]"
+	defaultPort         = 587
+	defaultTLSMode      = "starttls"
+	defaultPrice        = "20,00"
+	defaultSubject      = "Liberação do acesso ao TikTok Live Monitor"
+	defaultResetSubject = "Redefinição de senha — TikTok Live Monitor"
+	defaultFrom         = "Equipe TikTok Live Monitor <no-reply@tiktoklivemonitor.com>"
+	placeholderLine     = "Pagamento: [inserir chave Pix ou link de pagamento]"
 )
 
 // LoadConfigFromEnv reads the SMTP_* and PAYMENT_* env vars.
@@ -68,6 +71,10 @@ func LoadConfigFromEnv() Config {
 	if subject == "" {
 		subject = defaultSubject
 	}
+	resetSubject := strings.TrimSpace(os.Getenv("MAIL_RESET_SUBJECT"))
+	if resetSubject == "" {
+		resetSubject = defaultResetSubject
+	}
 	from := strings.TrimSpace(os.Getenv("MAIL_FROM"))
 	if from == "" {
 		from = defaultFrom
@@ -79,6 +86,7 @@ func LoadConfigFromEnv() Config {
 		Password:           os.Getenv("SMTP_PASSWORD"),
 		From:               from,
 		Subject:            subject,
+		ResetSubject:       resetSubject,
 		PixKey:             strings.TrimSpace(os.Getenv("PAYMENT_PIX_KEY")),
 		PaymentLink:        strings.TrimSpace(os.Getenv("PAYMENT_LINK")),
 		Price:              price,
@@ -114,9 +122,26 @@ func (m *Mailer) SendWelcome(to, displayName string) error {
 	}
 	body := buildWelcomeBody(m.cfg, displayName)
 	if m.cfg.ResendAPIKey != "" {
-		return m.sendResend(to, body)
+		return m.sendResend(to, m.cfg.Subject, body)
 	}
 	msg := buildMessage(m.cfg.From, to, m.cfg.Subject, body)
+	return m.send(to, msg)
+}
+
+// SendPasswordReset envia o e-mail com o link de redefinição de senha para
+// `to`. Retorna erro se o mailer estiver desabilitado ou se o envio falhar.
+func (m *Mailer) SendPasswordReset(to, link string) error {
+	if !m.Enabled() {
+		return fmt.Errorf("mailer desabilitado (defina SMTP_HOST e MAIL_FROM)")
+	}
+	if strings.TrimSpace(link) == "" {
+		return fmt.Errorf("link de redefinição vazio")
+	}
+	body := buildResetBody(link)
+	if m.cfg.ResendAPIKey != "" {
+		return m.sendResend(to, m.cfg.ResetSubject, body)
+	}
+	msg := buildMessage(m.cfg.From, to, m.cfg.ResetSubject, body)
 	return m.send(to, msg)
 }
 
@@ -128,9 +153,9 @@ type resendEmailRequest struct {
 }
 
 // sendResend envia o e-mail pela API HTTPS do Resend.
-func (m *Mailer) sendResend(to, body string) error {
+func (m *Mailer) sendResend(to, subject, body string) error {
 	payload, err := json.Marshal(resendEmailRequest{
-		From: m.cfg.From, To: []string{to}, Subject: m.cfg.Subject, Text: body,
+		From: m.cfg.From, To: []string{to}, Subject: subject, Text: body,
 	})
 	if err != nil {
 		return fmt.Errorf("montar requisição Resend: %w", err)
@@ -261,6 +286,23 @@ func buildWelcomeBody(cfg Config, displayName string) string {
 		cfg.Price,
 		paymentLine(cfg),
 	)
+}
+
+// buildResetBody renderiza o corpo do e-mail de redefinição de senha
+// (texto puro, espelhando o tom do e-mail de boas-vindas).
+func buildResetBody(link string) string {
+	return "Olá! Tudo bem?\n" +
+		"\n" +
+		"Recebemos uma solicitação de redefinição de senha para a sua conta no TikTok Live Monitor.\n" +
+		"\n" +
+		"Clique no link abaixo para escolher uma nova senha:\n" +
+		"\n" +
+		link + "\n" +
+		"\n" +
+		"O link é de uso único e expira em breve. Se você não solicitou essa redefinição, ignore este e-mail.\n" +
+		"\n" +
+		"Atenciosamente,\n" +
+		"Equipe TikTok Live Monitor"
 }
 
 // encodeSubjectHeader codifica o header Subject em UTF-8 (MIME B-encoding)

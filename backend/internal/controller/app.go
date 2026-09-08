@@ -28,16 +28,22 @@ type MessageCache interface {
 
 // AppController orchestrates all application services.
 type AppController struct {
-	monitor     *monitor.Monitor
-	repo        model.Repository
-	msgCache    MessageCache
-	reportGen   *report.Generator
-	ranker      *ranking.Ranker
-	monCancel   context.CancelFunc
-	monCancelMu sync.Mutex
-	flagSeen    map[string]struct{}
-	flagSeenMu  sync.Mutex
-	goals       goalState
+	monitor        *monitor.Monitor
+	monitorManager *monitor.Manager
+	repo           model.Repository
+	msgCache       MessageCache
+	reportGen      *report.Generator
+	ranker         *ranking.Ranker
+	monCancel      context.CancelFunc
+	monCancelMu    sync.Mutex
+	flagSeen       map[string]struct{}
+	flagSeenMu     sync.Mutex
+	goals          goalState
+}
+
+// SetMonitorManager enables concurrent monitoring of independent lives.
+func (c *AppController) SetMonitorManager(manager *monitor.Manager) {
+	c.monitorManager = manager
 }
 
 // NewAppController creates a new application controller.
@@ -73,6 +79,9 @@ func NewAppController(
 
 // StartMonitoring starts monitoring the given username.
 func (c *AppController) StartMonitoring(ctx context.Context, username string) error {
+	if c.monitorManager != nil {
+		return c.monitorManager.StartMonitoring(ctx, username)
+	}
 	c.monCancelMu.Lock()
 	monCtx, cancel := context.WithCancel(context.Background())
 	c.monCancel = cancel
@@ -83,6 +92,10 @@ func (c *AppController) StartMonitoring(ctx context.Context, username string) er
 
 // StopMonitoring stops the current monitoring session.
 func (c *AppController) StopMonitoring() {
+	if c.monitorManager != nil {
+		c.monitorManager.StopMonitoring("")
+		return
+	}
 	c.monCancelMu.Lock()
 	defer c.monCancelMu.Unlock()
 	if c.monCancel != nil {
@@ -91,20 +104,51 @@ func (c *AppController) StopMonitoring() {
 	c.monitor.StopMonitoring()
 }
 
+// StopMonitoringLive stops only the requested live.
+func (c *AppController) StopMonitoringLive(username string) {
+	if c.monitorManager != nil {
+		c.monitorManager.StopMonitoring(username)
+		return
+	}
+	c.StopMonitoring()
+}
+
+// GetLiveStates returns the state of every concurrently monitored live.
+func (c *AppController) GetLiveStates() []monitor.LiveState {
+	if c.monitorManager == nil {
+		state := c.monitor.GetState()
+		if state.Username == "" {
+			return []monitor.LiveState{}
+		}
+		return []monitor.LiveState{{Live: state.Username, State: state}}
+	}
+	return c.monitorManager.States()
+}
+
 // GetState returns the current monitor state.
 func (c *AppController) GetState() monitor.State {
+	if c.monitorManager != nil {
+		return c.monitorManager.CurrentState()
+	}
 	return c.monitor.GetState()
 }
 
 // GetSettings returns the current monitor settings.
 func (c *AppController) GetSettings() monitor.Settings {
+	if c.monitorManager != nil {
+		return c.monitorManager.GetSettings()
+	}
 	return c.monitor.GetSettings()
 }
 
 // SetSettings updates the monitor settings and persists them so the
 // configuration (including target gifts) survives app restarts.
 func (c *AppController) SetSettings(settings monitor.Settings) {
-	c.monitor.SetSettings(settings)
+	if c.monitorManager != nil {
+		c.monitorManager.SetSettings(settings)
+	} else {
+		c.monitor.SetSettings(settings)
+	}
 	if data, err := json.Marshal(settings); err == nil {
 		if err := c.repo.SetSetting(settingsKey, string(data)); err != nil {
 			log.Printf("[Controller] Failed to persist settings: %v", err)
@@ -114,6 +158,10 @@ func (c *AppController) SetSettings(settings monitor.Settings) {
 
 // FetchAvailableGifts fetches the available gifts from TikTok.
 func (c *AppController) FetchAvailableGifts() ([]string, error) {
+	if c.monitorManager != nil {
+		state := c.monitorManager.CurrentState()
+		return c.monitorManager.FetchAvailableGifts(state.Username)
+	}
 	gifts, err := c.monitor.FetchAvailableGifts()
 	if err != nil {
 		return nil, err
@@ -160,7 +208,7 @@ func (c *AppController) ReportExternalFlag(data monitor.EventData) {
 	}
 	c.flagSeenMu.Unlock()
 
-	state := c.monitor.GetState()
+	liveName := c.eventLiveName(data)
 	c.monitor.Emit(monitor.EventFlaggedMessage, monitor.EventData{
 		"uniqueId":  uniqueID,
 		"nickname":  nickname,
@@ -169,7 +217,7 @@ func (c *AppController) ReportExternalFlag(data monitor.EventData) {
 		"category":  category,
 		"timestamp": eventString(data, "timestamp"),
 	})
-	if err := c.repo.LogAnomaly(state.Username, comment, true, category, uniqueID); err != nil {
+	if err := c.repo.LogAnomaly(liveName, comment, true, category, uniqueID); err != nil {
 		log.Printf("[Controller] Error logging external flag: %v", err)
 	}
 }
@@ -231,8 +279,7 @@ func (c *AppController) ClearGifts() (int64, error) {
 
 // RecordTargetGiftReceived stores a pending target gift history entry and returns its id.
 func (c *AppController) RecordTargetGiftReceived(data monitor.EventData) (int64, error) {
-	state := c.monitor.GetState()
-	liveName := state.Username
+	liveName := c.eventLiveName(data)
 	uniqueID := eventString(data, "uniqueId", "userId")
 	nickname := eventString(data, "nickname")
 	giftName := resolveGiftName(data)
@@ -263,17 +310,16 @@ func (c *AppController) AnswerTargetGift(id int64, responseType string) error {
 
 // GetRecentTargetGiftHistory returns recent target gift history for the current live.
 func (c *AppController) GetRecentTargetGiftHistory(limit int) ([]model.TargetGiftHistory, error) {
-	state := c.monitor.GetState()
-	return c.repo.GetRecentTargetGiftHistory(state.Username, limit)
+	return c.repo.GetRecentTargetGiftHistory(c.GetState().Username, limit)
 }
 
 // GetPendingTargetGiftHistory returns unanswered target gifts for the current live.
 func (c *AppController) GetPendingTargetGiftHistory(limit int) ([]model.TargetGiftHistory, error) {
-	state := c.monitor.GetState()
-	if strings.TrimSpace(state.Username) == "" {
+	liveName := c.GetState().Username
+	if strings.TrimSpace(liveName) == "" {
 		return []model.TargetGiftHistory{}, nil
 	}
-	return c.repo.GetPendingTargetGiftHistory(state.Username, limit)
+	return c.repo.GetPendingTargetGiftHistory(liveName, limit)
 }
 
 // RecordPinnedComment stores a pinned comment from a live event.
@@ -284,7 +330,7 @@ func (c *AppController) RecordPinnedComment(data monitor.EventData) (int64, erro
 		}
 	}()
 
-	state := c.monitor.GetState()
+	liveName := c.eventLiveName(data)
 	uniqueID := eventString(data, "uniqueId", "userId")
 	nickname := eventString(data, "nickname")
 	comment := eventString(data, "comment")
@@ -303,7 +349,7 @@ func (c *AppController) RecordPinnedComment(data monitor.EventData) (int64, erro
 			at = time.Unix(ts, 0)
 		}
 	}
-	return c.repo.AddPinnedComment(state.Username, uniqueID, nickname, comment, pinID, eventBoolPtr(data, "isFollower"), at)
+	return c.repo.AddPinnedComment(liveName, uniqueID, nickname, comment, pinID, eventBoolPtr(data, "isFollower"), at)
 }
 
 // GetRecentPinnedComments returns recent pinned comments for the current live.
@@ -465,11 +511,11 @@ func (c *AppController) HandleGiftEvent(data monitor.EventData) {
 		repeatCount = 1
 	}
 	giftType := eventInt(data, "giftType", 0)
-	state := c.monitor.GetState()
-	if _, err := c.repo.AddGift(state.Username, uniqueID, nickname, giftName, repeatCount, giftType); err != nil {
+	liveName := c.eventLiveName(data)
+	if _, err := c.repo.AddGift(liveName, uniqueID, nickname, giftName, repeatCount, giftType); err != nil {
 		log.Printf("[Controller] Error storing gift: %v", err)
 	}
-	c.checkGoalProgress()
+	c.checkGoalProgress(liveName)
 }
 
 // HandleChatMessageEvent processes a chat message event and stores it.
@@ -492,7 +538,7 @@ func (c *AppController) HandleChatMessageEvent(data monitor.EventData) {
 	if comment == "" {
 		return
 	}
-	liveName := c.monitor.GetState().Username
+	liveName := c.eventLiveName(data)
 	if c.msgCache != nil {
 		c.msgCache.Add(liveName, uniqueID, nickname, comment)
 		return
@@ -518,7 +564,7 @@ func (c *AppController) HandleShareEvent(data monitor.EventData) {
 	if nickname == "" {
 		nickname = uniqueID
 	}
-	liveName := c.monitor.GetState().Username
+	liveName := c.eventLiveName(data)
 	if err := c.repo.AddShare(liveName, uniqueID, nickname); err != nil {
 		log.Printf("[Controller] Error storing share: %v", err)
 	}
@@ -544,7 +590,7 @@ func (c *AppController) HandleLikeEvent(data monitor.EventData) {
 	if likeCount < 1 {
 		likeCount = 1
 	}
-	liveName := c.monitor.GetState().Username
+	liveName := c.eventLiveName(data)
 	if err := c.repo.AddLike(liveName, uniqueID, nickname, likeCount); err != nil {
 		log.Printf("[Controller] Error storing like: %v", err)
 	}
@@ -563,13 +609,26 @@ func (c *AppController) GetMonitor() *monitor.Monitor {
 	return c.monitor
 }
 
+// GetMonitorManager returns the concurrent monitor manager, when configured.
+func (c *AppController) GetMonitorManager() *monitor.Manager { return c.monitorManager }
+
 // SetMessageCache enables write-behind caching for chat messages.
 func (c *AppController) SetMessageCache(mc MessageCache) {
 	c.msgCache = mc
 }
 
+func (c *AppController) eventLiveName(data monitor.EventData) string {
+	if liveName := eventString(data, "liveName"); liveName != "" {
+		return liveName
+	}
+	return c.GetState().Username
+}
+
 // Stop shuts down the bridge child process.
 func (c *AppController) Stop() {
+	if c.monitorManager != nil {
+		c.monitorManager.Close()
+	}
 	if c.monitor != nil {
 		c.monitor.Close()
 	}

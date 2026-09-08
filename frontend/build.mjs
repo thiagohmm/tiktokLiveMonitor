@@ -11,7 +11,7 @@ const dist = path.join(root, 'dist');
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 
-for (const entry of ['index.html', 'admin.html', 'login.html', 'auth.js', 'renderer.js', 'admin.js', 'vendor']) {
+for (const entry of ['index.html', 'admin.html', 'login.html', 'reset-password.html', 'auth.js', 'renderer.js', 'admin.js', 'vendor']) {
   cpSync(path.join(root, entry), path.join(dist, entry), { recursive: true });
 }
 

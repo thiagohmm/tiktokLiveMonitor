@@ -52,10 +52,18 @@ Outra origem exige CORS liberado no backend:
 4. Execute os dois `UPDATE` do final da migração, trocando o e-mail, para
    promover esse usuário nas claims e no perfil.
 5. Preencha no `.env`:
-   `SUPABASE_URL`, `SUPABASE_ANON_KEY` e `SUPABASE_SERVICE_ROLE_KEY`.
+   `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` e
+   `SITE_URL` (origem pública do frontend, ex.: `https://SEU_APP.vercel.app`;
+   usada no `redirect_to` do link de redefinição de senha — sem ela o
+   `POST /api/auth/recover` responde 503).
    `SUPABASE_JWT_SECRET` é opcional: quando vazio, o backend valida os tokens
    pela API Auth do Supabase; quando preenchido, usa validação HS256 local.
-6. Recrie apenas o backend: `docker compose up -d --force-recreate backend`.
+6. Para a redefinição de senha ("Esqueci minha senha?"): em Authentication >
+   URL Configuration > Redirect URLs, adicione
+   `https://SEU_APP.vercel.app/reset-password.html` (e as origens de
+   preview/localhost que você usar). Sem essa allowlist, o link do e-mail
+   não redireciona de volta para o app.
+7. Recrie apenas o backend: `docker compose up -d --force-recreate backend`.
 
 Novos clientes se cadastram em `/login.html` (Criar conta) e ficam em
 **Aguardando pagamento**. Depois da confirmação do pagamento, o administrador
@@ -63,6 +71,11 @@ abre `/admin.html` e usa **Aprovar pagamento**. A conta só passa a entrar no
 monitor depois dessa aprovação. Suspensão e validade da assinatura também são
 controladas nessa tela. O backend só atende os endpoints `/api/admin/*` para
 uma sessão ativa com papel `admin`.
+
+Quem esqueceu a senha usa o link "Esqueci minha senha?" em `/login.html`:
+o backend gera o link de recuperação via Supabase (`generate_link`), envia por
+e-mail (Resend/SMTP) e aplica a nova senha em `PUT /auth/v1/user`.
+O e-mail é sempre o mesmo para e-mail cadastrado ou não (anti-enumeração).
 
 Nunca envie `SUPABASE_SERVICE_ROLE_KEY` ao navegador, à Vercel como variável
 pública ou ao repositório. Ela é usada somente pelo backend Go.

@@ -25,6 +25,14 @@ func (s *HTTPServer) handleState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, state)
 }
 
+func (s *HTTPServer) handleLives(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, map[string]interface{}{"lives": s.controller.GetLiveStates()})
+}
+
 func (s *HTTPServer) handleSettings(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		writeJSON(w, s.controller.GetSettings())
@@ -103,7 +111,7 @@ func (s *HTTPServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) handleDisconnect(w http.ResponseWriter, r *http.Request) {
-	s.controller.StopMonitoring()
+	s.controller.StopMonitoringLive(r.URL.Query().Get("username"))
 	writeJSON(w, map[string]bool{"success": true})
 }
 

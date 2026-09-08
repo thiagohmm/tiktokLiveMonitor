@@ -406,3 +406,35 @@ func (a *AdminClient) GetProfileByID(id string) (*SubscriberProfile, error) {
 	}
 	return nil, fmt.Errorf("perfil não encontrado")
 }
+
+// GenerateRecoveryLink asks Supabase Auth to generate a recovery link for
+// the given e-mail. The returned action_link is sent to the user; clicking
+// it verifies the token and redirects to redirectTo with the access token.
+// Errors (e.g. user does not exist) are returned to the caller, which must
+// not leak them to the client (anti-enumeration).
+func (a *AdminClient) GenerateRecoveryLink(email, redirectTo string) (string, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	if email == "" {
+		return "", fmt.Errorf("email é obrigatório")
+	}
+	if redirectTo == "" {
+		return "", fmt.Errorf("redirect_to é obrigatório")
+	}
+
+	var resp struct {
+		ActionLink string `json:"action_link"`
+	}
+	if err := a.request(http.MethodPost, "/auth/v1/admin/generate_link", map[string]any{
+		"type":  "recovery",
+		"email": email,
+		"options": map[string]any{
+			"redirect_to": redirectTo,
+		},
+	}, &resp); err != nil {
+		return "", err
+	}
+	if resp.ActionLink == "" {
+		return "", fmt.Errorf("supabase não retornou action_link")
+	}
+	return resp.ActionLink, nil
+}

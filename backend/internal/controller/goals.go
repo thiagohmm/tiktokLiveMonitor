@@ -20,10 +20,10 @@ type GoalProgress struct {
 // GoalUpdate is emitted through the goal callback when progress changes:
 // crossed milestones and/or completion of the active goal.
 type GoalUpdate struct {
-	Progress               GoalProgress          `json:"progress"`
-	UnlockedMilestones     []model.GoalMilestone `json:"unlockedMilestones,omitempty"`
+	Progress                GoalProgress          `json:"progress"`
+	UnlockedMilestones      []model.GoalMilestone `json:"unlockedMilestones,omitempty"`
 	NewlyUnlockedMilestones []model.GoalMilestone `json:"newlyUnlockedMilestones,omitempty"`
-	Completed              bool                  `json:"completed"`
+	Completed               bool                  `json:"completed"`
 }
 
 // GoalsState is the full view of goals for the current live. Multiple goals
@@ -183,14 +183,19 @@ func (c *AppController) GetGoalsState() (GoalsState, error) {
 // checkGoalProgress recomputes the live's units and, for every active goal,
 // unlocks crossed milestones and completes the goal when its target is met.
 // It is called at the end of HandleGiftEvent.
-func (c *AppController) checkGoalProgress() {
+func (c *AppController) checkGoalProgress(liveNames ...string) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			log.Printf("[Controller] panic checking goal progress: %v", rec)
 		}
 	}()
 
-	liveName := c.monitor.GetState().Username
+	liveName := ""
+	if len(liveNames) > 0 {
+		liveName = liveNames[0]
+	} else {
+		liveName = c.monitor.GetState().Username
+	}
 	if liveName == "" {
 		return
 	}

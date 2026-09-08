@@ -19,6 +19,11 @@ var ErrInvalidCredentials = errors.New("email ou senha inválidos")
 // ErrAuthUnavailable indica falha de rede/servidor ao contatar o Supabase.
 var ErrAuthUnavailable = errors.New("serviço de autenticação indisponível, tente novamente")
 
+// ErrInvalidResetLink é a mensagem genérica devolvida quando o token de
+// recuperação é inválido, expirado ou já utilizado (anti-enumeração: o
+// detalhe do Supabase não é repassado ao cliente).
+var ErrInvalidResetLink = errors.New("link inválido ou expirado")
+
 type LoginSession struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
@@ -118,6 +123,54 @@ func (c Config) SignOutGlobal(accessToken string) error {
 			msg = "falha ao encerrar sessão"
 		}
 		return fmt.Errorf("%s", msg)
+	}
+	return nil
+}
+
+// UpdatePassword applies a new password using the access token issued by the
+// recovery link flow. It calls the Supabase user endpoint with the anon API
+// key and the user's bearer token. Any non-2xx response (token inválido,
+// expirado ou já utilizado) vira ErrInvalidResetLink — mensagem genérica
+// para não vazar o motivo exato ao cliente.
+func (c Config) UpdatePassword(accessToken, newPassword string) error {
+	accessToken = strings.TrimSpace(accessToken)
+	if accessToken == "" {
+		return ErrInvalidResetLink
+	}
+	if !c.Enabled || c.SupabaseURL == "" || c.SupabaseAnon == "" {
+		return fmt.Errorf("autenticação indisponível")
+	}
+
+	body, err := json.Marshal(map[string]string{"password": newPassword})
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest(
+		http.MethodPut,
+		c.SupabaseURL+"/auth/v1/user",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("apikey", c.SupabaseAnon)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	res, err := client.Do(req)
+	if err != nil {
+		return ErrAuthUnavailable
+	}
+	// Best-effort cleanup; the body read below surfaces any real failure.
+	defer func() { _ = res.Body.Close() }()
+
+	if _, err := io.Copy(io.Discard, res.Body); err != nil {
+		return ErrAuthUnavailable
+	}
+	if res.StatusCode >= 300 {
+		return ErrInvalidResetLink
 	}
 	return nil
 }

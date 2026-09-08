@@ -218,6 +218,122 @@ func (s *HTTPServer) queueWelcomeEmail(email, displayName string) {
 	}()
 }
 
+func (s *HTTPServer) handleAuthRecover(w http.ResponseWriter, r *http.Request) {
+	if !s.auth.Enabled {
+		writeError(w, http.StatusBadRequest, "autenticação desativada")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.admin == nil {
+		writeError(w, http.StatusServiceUnavailable, "redefinição de senha indisponível")
+		return
+	}
+
+	ip := auth.ClientIP(r, s.proxyTrust)
+	status := s.lockout.Status(auth.RecoverLockoutIdentity, ip)
+	if status.Locked {
+		w.WriteHeader(http.StatusTooManyRequests)
+		writeJSON(w, map[string]any{
+			"error":         "muitas solicitações de redefinição. tente novamente mais tarde",
+			"locked":        true,
+			"retryAfterSec": status.RetryAfterSec,
+		})
+		return
+	}
+
+	var body struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.lockout.RecordFailure(auth.RecoverLockoutIdentity, ip)
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	email := strings.TrimSpace(strings.ToLower(body.Email))
+	if email == "" {
+		s.lockout.RecordFailure(auth.RecoverLockoutIdentity, ip)
+		writeError(w, http.StatusBadRequest, "email é obrigatório")
+		return
+	}
+	if s.auth.SiteURL == "" {
+		// Falha de configuração: resposta explícita, sem vazar dados de usuário.
+		log.Printf("[View] recover: SITE_URL não configurado")
+		writeError(w, http.StatusServiceUnavailable, "redefinição de senha indisponível no momento")
+		return
+	}
+
+	redirectTo := s.auth.SiteURL + "/reset-password.html"
+	link, err := s.admin.GenerateRecoveryLink(email, redirectTo)
+	// Toda solicitação conta contra o rate-limit por IP (o e-mail pode não
+	// existir; não dá para distinguir sem vazar enumeração).
+	s.lockout.RecordFailure(auth.RecoverLockoutIdentity, ip)
+	if err != nil {
+		// Anti-enumeração: o motivo (ex.: e-mail não cadastrado) vai só para o log.
+		log.Printf("[View] recover: %v", err)
+	} else {
+		s.queuePasswordResetEmail(email, link)
+	}
+
+	writeJSON(w, map[string]any{
+		"success": true,
+		"message": "Se este e-mail estiver cadastrado, enviaremos um link de redefinição.",
+	})
+}
+
+// queuePasswordResetEmail dispara o e-mail com o link de redefinição em uma
+// goroutine. Best-effort: falha só loga; sem mailer configurado o link não
+// é enviado (o usuário pode repetir a solicitação depois).
+func (s *HTTPServer) queuePasswordResetEmail(email, link string) {
+	if s.mailer == nil || !s.mailer.Enabled() {
+		log.Printf("[View] password reset email: mailer desabilitado, link não enviado")
+		return
+	}
+	to := strings.TrimSpace(strings.ToLower(email))
+	if to == "" {
+		return
+	}
+	go func() {
+		if err := s.mailer.SendPasswordReset(to, link); err != nil {
+			log.Printf("[View] password reset email: %v", err)
+		}
+	}()
+}
+
+func (s *HTTPServer) handleAuthResetPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var body struct {
+		Token    string `json:"token"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+
+	password := strings.TrimSpace(body.Password)
+	if len(password) < 8 {
+		writeError(w, http.StatusBadRequest, "senha deve ter pelo menos 8 caracteres")
+		return
+	}
+
+	if err := s.auth.UpdatePassword(body.Token, password); err != nil {
+		// Erro real vai só para o log; o cliente recebe mensagem genérica
+		// (token inválido/expirado/usado não é discriminado).
+		log.Printf("[View] reset-password: %v", err)
+		writeError(w, http.StatusBadRequest, "link inválido ou expirado")
+		return
+	}
+
+	writeJSON(w, map[string]bool{"success": true})
+}
+
 func (s *HTTPServer) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
