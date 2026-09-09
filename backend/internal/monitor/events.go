@@ -180,6 +180,9 @@ func (m *Monitor) handleTargetGift(data EventData) {
 		return
 	}
 	data["isRed"] = isPinned
+	// "Fura fila" por tipo de presente: entradas criadas para este evento
+	// já nascem com is_priority=TRUE (priority_at = received_at).
+	data["isPriority"] = m.targetGiftPriority(giftName)
 
 	m.emit(EventGiftUser, data)
 

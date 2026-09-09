@@ -300,12 +300,43 @@ func (c *AppController) RecordTargetGiftReceived(data monitor.EventData) (int64,
 		}
 	}
 
-	return c.repo.AddTargetGiftHistory(liveName, uniqueID, nickname, giftName, receivedAt)
+	id, err := c.repo.AddTargetGiftHistory(liveName, uniqueID, nickname, giftName, receivedAt, eventBool(data, "isPriority"))
+	if err == nil {
+		data["receivedAt"] = receivedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return id, err
+}
+
+// eventBool reads a boolean flag from event data, tolerating JSON numbers.
+func eventBool(data monitor.EventData, key string) bool {
+	switch v := data[key].(type) {
+	case bool:
+		return v
+	case float64:
+		return v != 0
+	case int:
+		return v != 0
+	default:
+		return false
+	}
 }
 
 // AnswerTargetGift marks a target gift history entry as answered.
 func (c *AppController) AnswerTargetGift(id int64, responseType string) error {
 	return c.repo.MarkTargetGiftAnswered(id, responseType, time.Now())
+}
+
+// SetTargetGiftPriority promotes (priority=true) or demotes (priority=false)
+// a pending target gift in the queue.
+func (c *AppController) SetTargetGiftPriority(id int64, priority bool) (*time.Time, error) {
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	if err := c.repo.SetTargetGiftPriority(id, priority, at); err != nil {
+		return nil, err
+	}
+	if !priority {
+		return nil, nil
+	}
+	return &at, nil
 }
 
 // GetRecentTargetGiftHistory returns recent target gift history for the current live.

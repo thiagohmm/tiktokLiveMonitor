@@ -100,6 +100,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/available-gifts", s.handleAvailableGifts)
 	mux.HandleFunc("/api/target-gift-history", s.handleTargetGiftHistory)
 	mux.HandleFunc("/api/target-gift-history/answer", s.handleTargetGiftHistoryAnswer)
+	mux.HandleFunc("/api/target-gift-history/priority", s.handleTargetGiftHistoryPriority)
 	mux.HandleFunc("/api/pinned-comments", s.handlePinnedComments)
 	mux.HandleFunc("/api/ranking", s.handleRanking)
 	mux.HandleFunc("/api/report", s.handleReport)

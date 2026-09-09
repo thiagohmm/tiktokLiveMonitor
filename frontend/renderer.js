@@ -1032,6 +1032,51 @@ async function markTargetGiftAnswered(historyId, responseType) {
     }
 }
 
+function findTargetGiftRowByHistoryId(historyId) {
+    const id = String(historyId);
+    return Array.from(userTableBody.querySelectorAll('.user-row')).find(row => row.dataset.historyId === id) || null;
+}
+
+// Uma alteração por entrada; a ordem só muda após confirmação do servidor.
+async function markTargetGiftPriority(historyId, priority) {
+    const id = Number(historyId);
+    if (!Number.isFinite(id) || id <= 0) {
+        return;
+    }
+    const row = findTargetGiftRowByHistoryId(id);
+    if (!row || row.dataset.priorityPending === 'true') {
+        return;
+    }
+
+    row.dataset.priorityPending = 'true';
+    reorderGiftQueue();
+
+    try {
+        const response = await fetch('/api/target-gift-history/priority', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, priority })
+        });
+        if (!response.ok) {
+            throw new Error(`status ${response.status}`);
+        }
+        const result = await response.json();
+        row.dataset.priority = result.isPriority === true ? 'true' : 'false';
+        if (result.priorityAt) {
+            row.dataset.priorityAt = result.priorityAt;
+        } else {
+            delete row.dataset.priorityAt;
+        }
+    } catch (error) {
+        console.error('[Frontend] Falha ao atualizar fura fila do presente alvo:', error);
+        // A conexão pode cair após o commit. Reconsulta o estado persistido.
+        await loadPendingTargetGifts();
+    } finally {
+        delete row.dataset.priorityPending;
+        reorderGiftQueue();
+    }
+}
+
 async function loadTargetGiftHistoryFromApi() {
     try {
         const response = await fetch('/api/target-gift-history?limit=50');
@@ -1066,6 +1111,13 @@ async function renderGiftHistory() {
         const gift = document.createElement('span');
         gift.textContent = item.giftName || 'Presente Alvo';
         row.appendChild(gift);
+
+        if (item.isPriority) {
+            const priorityBadge = document.createElement('span');
+            priorityBadge.className = 'priority-badge';
+            priorityBadge.textContent = '⚡ Fura fila';
+            row.appendChild(priorityBadge);
+        }
 
         const meta = document.createElement('div');
         meta.className = 'modal-item-meta';
@@ -1751,6 +1803,78 @@ function applyReconnectingState(retries, nextRetryInMs) {
     disconnectBtn.disabled = false;
 }
 
+// Fila de presentes alvos (FIFO com "fura fila"): mesma ordenação da API
+// (is_priority DESC, COALESCE(priority_at, received_at) ASC, received_at ASC, id ASC).
+function giftQueueSortKey(row) {
+    const priority = row.dataset.priority === 'true' ? 1 : 0;
+    const receivedAt = Number(row.dataset.receivedAt || row.dataset.addedAt) || 0;
+    let priorityAt = 0;
+    if (row.dataset.priorityAt) {
+        const parsed = new Date(row.dataset.priorityAt).getTime();
+        priorityAt = Number.isFinite(parsed) ? parsed : receivedAt;
+    }
+    return {
+        priority,
+        coalesced: row.dataset.priorityAt ? priorityAt : receivedAt,
+        receivedAt,
+        historyId: Number(row.dataset.historyId) || 0
+    };
+}
+
+function compareGiftQueueRows(a, b) {
+    const ka = giftQueueSortKey(a);
+    const kb = giftQueueSortKey(b);
+    if (ka.priority !== kb.priority) {
+        return kb.priority - ka.priority;
+    }
+    if (ka.coalesced !== kb.coalesced) {
+        return ka.coalesced - kb.coalesced;
+    }
+    if (ka.receivedAt !== kb.receivedAt) {
+        return ka.receivedAt - kb.receivedAt;
+    }
+    return ka.historyId - kb.historyId;
+}
+
+// Reconstrói as tags "Fura fila" e "Próximo" conforme o estado da fila.
+function updateQueueCell(row) {
+    const cell = row.querySelector('.queue-cell');
+    if (!cell) {
+        return;
+    }
+
+    cell.querySelectorAll('.priority-badge, .queue-head-chip').forEach(el => el.remove());
+
+    if (row.dataset.priority === 'true') {
+        const badge = document.createElement('span');
+        badge.className = 'priority-badge';
+        badge.textContent = '⚡ Fura fila';
+        cell.appendChild(badge);
+    }
+
+    if (row.classList.contains('queue-head')) {
+        const chip = document.createElement('span');
+        chip.className = 'queue-head-chip';
+        chip.textContent = 'Próximo';
+        cell.appendChild(chip);
+    }
+}
+
+// Ordena todos os .user-row da fila e re-aplica na tabela; destaca a primeira
+// linha ("próximo a responder") com a classe queue-head.
+function reorderGiftQueue() {
+    const rows = Array.from(userTableBody.querySelectorAll('.user-row'));
+    if (!rows.length) {
+        return;
+    }
+    rows.sort(compareGiftQueueRows);
+    rows.forEach(row => userTableBody.appendChild(row));
+    rows.forEach((row, index) => {
+        row.classList.toggle('queue-head', index === 0);
+    });
+    rows.forEach(updateQueueCell);
+}
+
 function addUserToList(user, options = {}) {
     rememberLiveUser(user);
     if (!options.fromHistory) {
@@ -1764,16 +1888,29 @@ function addUserToList(user, options = {}) {
             return row.dataset.historyId === historyId;
         });
         if (existingByHistory) {
+            // Restauração: o banco é a fonte de verdade — re-sincroniza os
+            // flags da fila (ex.: POST persistiu no servidor mas o cliente
+            // tratou como falha e reverteu localmente).
+            if (options.fromHistory) {
+                existingByHistory.dataset.priority = user.isPriority === true ? 'true' : 'false';
+                if (user.priorityAt) {
+                    existingByHistory.dataset.priorityAt = String(user.priorityAt);
+                } else {
+                    delete existingByHistory.dataset.priorityAt;
+                }
+            }
             applyTargetGiftReceivedAt(existingByHistory, user.receivedAt, options.fromHistory);
             startAutoRemoveTimer(user.uniqueId, user.giftName, existingByHistory, {
                 refreshStart: !options.fromHistory
             });
+            reorderGiftQueue();
             return;
         }
     }
 
-    const existingRow = Array.from(userTableBody.querySelectorAll('.user-row')).find(row => {
-        return String(row.getAttribute('data-id')).toLowerCase() === String(user.uniqueId).toLowerCase() &&
+    const existingRow = !historyId && Array.from(userTableBody.querySelectorAll('.user-row')).find(row => {
+        return !row.dataset.historyId &&
+            String(row.getAttribute('data-id')).toLowerCase() === String(user.uniqueId).toLowerCase() &&
             row.querySelector('.gift-name-cell').innerText === user.giftName;
     });
 
@@ -1787,7 +1924,15 @@ function addUserToList(user, options = {}) {
         if (historyId) {
             existingRow.dataset.historyId = historyId;
         }
-        userTableBody.prepend(existingRow);
+        // Mantém o merge atual; sincroniza o estado da fila com a entrada
+        // (fura fila por tipo chega com isPriority no evento SSE; sem
+        // priorityAt, a ordenação usa received_at, que é o priority_at no banco).
+        existingRow.dataset.priority = user.isPriority === true ? 'true' : 'false';
+        if (user.priorityAt) {
+            existingRow.dataset.priorityAt = String(user.priorityAt);
+        } else {
+            delete existingRow.dataset.priorityAt;
+        }
         if (user.isRed) {
             existingRow.classList.add('red');
         }
@@ -1795,6 +1940,7 @@ function addUserToList(user, options = {}) {
         startAutoRemoveTimer(user.uniqueId, user.giftName, existingRow, {
             refreshStart: !options.fromHistory
         });
+        reorderGiftQueue();
         return;
     }
 
@@ -1803,6 +1949,12 @@ function addUserToList(user, options = {}) {
     tr.setAttribute('data-id', user.uniqueId);
     if (historyId) {
         tr.dataset.historyId = historyId;
+    }
+    if (user.isPriority === true) {
+        tr.dataset.priority = 'true';
+    }
+    if (user.priorityAt) {
+        tr.dataset.priorityAt = String(user.priorityAt);
     }
 
     if (user.isRed) {
@@ -1834,6 +1986,11 @@ function addUserToList(user, options = {}) {
     giftTd.textContent = user.giftName;
     tr.appendChild(giftTd);
 
+    const queueTd = document.createElement('td');
+    queueTd.setAttribute('data-label', 'Fila');
+    queueTd.className = 'queue-cell';
+    tr.appendChild(queueTd);
+
     const actionTd = document.createElement('td');
     actionTd.setAttribute('data-label', 'Ação');
     const actionBtn = document.createElement('button');
@@ -1848,25 +2005,29 @@ function addUserToList(user, options = {}) {
     tr.appendChild(actionTd);
 
     applyTargetGiftReceivedAt(tr, user.receivedAt, options.fromHistory);
-    userTableBody.prepend(tr);
+    userTableBody.appendChild(tr);
     startAutoRemoveTimer(user.uniqueId, user.giftName, tr, {
         refreshStart: !options.fromHistory
     });
+    reorderGiftQueue();
 }
 
 function applyTargetGiftReceivedAt(element, receivedAt, fromHistory) {
-    if (!fromHistory || !receivedAt || element.dataset.addedAt) {
+    if (!receivedAt) {
         return;
     }
     const ts = new Date(receivedAt).getTime();
     if (Number.isFinite(ts)) {
-        element.dataset.addedAt = String(ts);
+        element.dataset.receivedAt = String(ts);
+        if (fromHistory && !element.dataset.addedAt) {
+            element.dataset.addedAt = String(ts);
+        }
     }
 }
 
 function startAutoRemoveTimer(uniqueId, giftName, element, options = {}) {
     const refreshStart = options.refreshStart !== false;
-    const timerKey = `${uniqueId}-${giftName}`;
+    const timerKey = element.dataset.historyId ? `history:${element.dataset.historyId}` : `${uniqueId}-${giftName}`;
 
     if (autoRemoveTimers[timerKey]) {
         clearTimeout(autoRemoveTimers[timerKey]);
@@ -1883,6 +2044,7 @@ function startAutoRemoveTimer(uniqueId, giftName, element, options = {}) {
     if (remainingMs <= 0) {
         markTargetGiftAnswered(element.dataset.historyId, 'automatic');
         element.remove();
+        reorderGiftQueue();
         if (activeModalType === 'target-gifts') {
             renderGiftHistory();
         }
@@ -1893,6 +2055,7 @@ function startAutoRemoveTimer(uniqueId, giftName, element, options = {}) {
         markTargetGiftAnswered(element.dataset.historyId, 'automatic');
         element.remove();
         delete autoRemoveTimers[timerKey];
+        reorderGiftQueue();
         if (activeModalType === 'target-gifts') {
             renderGiftHistory();
         }
@@ -2321,16 +2484,16 @@ function markUserRed(uniqueId) {
 }
 
 function removeUser(uniqueId, giftName, button) {
-    const timerKey = `${uniqueId}-${giftName}`;
-    if (autoRemoveTimers[timerKey]) {
-        clearTimeout(autoRemoveTimers[timerKey]);
-        delete autoRemoveTimers[timerKey];
-    }
-
     const tr = button.closest('.user-row');
     if (tr) {
+        const timerKey = tr.dataset.historyId ? `history:${tr.dataset.historyId}` : `${uniqueId}-${giftName}`;
+        if (autoRemoveTimers[timerKey]) {
+            clearTimeout(autoRemoveTimers[timerKey]);
+            delete autoRemoveTimers[timerKey];
+        }
         markTargetGiftAnswered(tr.dataset.historyId, 'manual');
         tr.remove();
+        reorderGiftQueue();
         if (activeModalType === 'target-gifts') {
             renderGiftHistory();
         }
@@ -2747,9 +2910,14 @@ function renderTargetGifts() {
         .then(r => r.json())
         .then(settings => {
             const gifts = settings.targetGifts || [];
+            const priorities = settings.targetGiftPriorities || {};
             gifts.forEach(giftName => {
                 const span = document.createElement('span');
                 span.className = 'target-gift-chip';
+                if (priorities[giftName]) {
+                    span.classList.add('priority');
+                }
+                span.title = 'Clique para alternar fura fila (⚡ entra no topo da fila)';
                 const label = document.createElement('span');
                 label.textContent = `${giftName} × ${settings.targetGiftQuantities?.[giftName] || 1}`;
                 span.appendChild(label);
@@ -2757,8 +2925,12 @@ function renderTargetGifts() {
                 btn.type = 'button';
                 btn.textContent = '×';
                 btn.setAttribute('aria-label', `Remover ${giftName}`);
-                btn.addEventListener('click', () => removeTargetGift(giftName));
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    removeTargetGift(giftName);
+                });
                 span.appendChild(btn);
+                span.addEventListener('click', () => toggleTargetGiftPriority(giftName));
                 targetGiftsList.appendChild(span);
             });
             updateAllGiftsVisibility();
@@ -2775,11 +2947,13 @@ async function removeTargetGift(giftToRemove) {
         const updatedGifts = gifts.filter(g => g !== giftToRemove);
         const quantities = { ...settings.targetGiftQuantities };
         delete quantities[giftToRemove];
+        const priorities = { ...(settings.targetGiftPriorities || {}) };
+        delete priorities[giftToRemove];
 
         const res = await fetch('/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...settings, targetGifts: updatedGifts, targetGiftQuantities: quantities })
+            body: JSON.stringify({ ...settings, targetGifts: updatedGifts, targetGiftQuantities: quantities, targetGiftPriorities: priorities })
         });
         if (res.ok) {
             console.log('Successfully removed target gift:', giftToRemove);
@@ -2789,6 +2963,32 @@ async function removeTargetGift(giftToRemove) {
         }
     } catch (e) {
         console.error('Erro ao remover presente alvo:', e);
+    }
+}
+
+// Fura fila por tipo de presente: alterna o flag nas settings (chip vermelho).
+// Presentes deste tipo que chegarem na live já entram no topo da fila.
+async function toggleTargetGiftPriority(giftName) {
+    try {
+        const response = await fetch('/api/settings');
+        const settings = await response.json();
+        const priorities = { ...(settings.targetGiftPriorities || {}) };
+        if (priorities[giftName]) {
+            delete priorities[giftName];
+        } else {
+            priorities[giftName] = true;
+        }
+        const res = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...settings, targetGiftPriorities: priorities })
+        });
+        if (!res.ok) {
+            console.error('Failed to toggle target gift priority:', await res.text());
+        }
+        // renderTargetGifts() is triggered by the SSE 'settings-update' event.
+    } catch (e) {
+        console.error('Erro ao alternar fura fila do presente alvo:', e);
     }
 }
 
@@ -2906,15 +3106,20 @@ async function loadPendingTargetGifts() {
         if (!Array.isArray(items)) {
             return;
         }
-        items.slice().reverse().forEach(item => {
+        // A API já devolve em ordem de fila (fura fila primeiro, depois FIFO
+        // por recebido) — renderiza na ordem recebida.
+        items.forEach(item => {
             addUserToList({
                 uniqueId: item.uniqueId,
                 nickname: item.nickname,
                 giftName: item.giftName,
                 historyId: item.id,
-                receivedAt: item.receivedAt
+                receivedAt: item.receivedAt,
+                isPriority: item.isPriority,
+                priorityAt: item.priorityAt
             }, { fromHistory: true });
         });
+        reorderGiftQueue();
         console.log(`[Frontend] loadPendingTargetGifts: ${items.length} pendentes restaurados.`);
     } catch (e) {
         console.error('[Frontend] loadPendingTargetGifts: erro:', e);

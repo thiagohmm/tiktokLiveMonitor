@@ -23,7 +23,7 @@ func TestManagerNormalizesAndListsLives(t *testing.T) {
 
 func TestManagerRejectsEmptyUsername(t *testing.T) {
 	manager := NewManager(nil, 10)
-	if err := manager.StartMonitoring(nil, "   "); err == nil {
+	if err := manager.StartMonitoring(t.Context(), "   "); err == nil {
 		t.Fatal("expected empty username to be rejected")
 	}
 }

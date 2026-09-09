@@ -205,7 +205,8 @@
         /* Tabelas com larguras de coluna fixas para alinhar cabeçalho e dados ao rolar */
         .tbl-users th:nth-child(1) { width: 210px; }
         .tbl-users th:nth-child(2) { width: 1fr; }
-        .tbl-users th:nth-child(3) { width: 150px; }
+        .tbl-users th:nth-child(3) { width: 170px; }
+        .tbl-users th:nth-child(4) { width: 150px; }
         .tbl-comments th:nth-child(1) { width: 190px; }
         .tbl-comments th:nth-child(2) { width: 1fr; }
         .tbl-correlation th:nth-child(1) { width: 160px; }
@@ -264,6 +265,45 @@
             box-shadow: 0 4px 14px rgba(34, 197, 94, 0.3);
             font-size: 0.8em;
             padding: 6px 12px;
+        }
+        /* Fila de presentes alvos: badge e destaque do próximo a responder */
+        .queue-cell {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .priority-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-size: 0.72em;
+            font-weight: 700;
+            color: var(--pink-soft);
+            background: rgba(254, 44, 85, 0.14);
+            border: 1px solid rgba(254, 44, 85, 0.35);
+            white-space: nowrap;
+        }
+        .queue-head-chip {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-size: 0.72em;
+            font-weight: 700;
+            color: var(--cyan);
+            background: rgba(37, 244, 238, 0.12);
+            border: 1px solid rgba(37, 244, 238, 0.35);
+            white-space: nowrap;
+        }
+        .user-row.queue-head {
+            background: rgba(37, 244, 238, 0.05);
+            box-shadow: inset 3px 0 0 var(--cyan);
+        }
+        .user-row.queue-head:hover {
+            background: rgba(37, 244, 238, 0.09);
         }
         .section-title {
             display: flex;
@@ -345,6 +385,16 @@
             border: 1px solid rgba(37, 244, 238, 0.25);
             color: var(--text);
             font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s ease, border-color 0.15s ease;
+        }
+        .target-gift-chip.priority {
+            background: rgba(229, 72, 77, 0.16);
+            border-color: rgba(229, 72, 77, 0.55);
+            color: #ff8589;
+        }
+        .target-gift-chip.priority button:hover {
+            color: #ff8589;
         }
         .target-gift-chip button {
             background: none;
@@ -358,6 +408,9 @@
         }
         .target-gift-chip button:hover {
             color: var(--pink);
+        }
+        .target-gift-chip.priority button:hover {
+            color: #ff8589;
         }
         .report-box {
             background: rgba(37, 244, 238, 0.04);
@@ -1384,6 +1437,7 @@
                     <tr>
                         <th>Usuário</th>
                         <th>Presente</th>
+                        <th>Fila</th>
                         <th>Ação</th>
                     </tr>
                 </thead>
@@ -1391,50 +1445,6 @@
                     <!-- Usuários filtrados aparecerão aqui -->
                 </tbody>
             </table>
-        </div>
-
-        <div class="section-title">
-            <div class="section-title-label">
-                <h3>Metas da Live</h3>
-            </div>
-            <div class="section-title-actions">
-                <button id="goalSaveBtn" class="small-btn" type="button">Salvar</button>
-                <button id="goalResetBtn" class="small-btn" type="button">Limpar</button>
-            </div>
-        </div>
-        <div class="goal-card">
-            <div class="goal-form-row">
-                <input type="text" id="goalTitleInput" placeholder="Título da meta">
-                <select id="goalGiftSelect" class="setup-select">
-                    <option value="">Todos os presentes</option>
-                </select>
-                <input type="number" id="goalTargetInput" min="1" placeholder="Meta em unidades">
-            </div>
-            <div id="goalMilestonesForm">
-                <div class="goal-milestone-row">
-                    <input type="number" class="goal-ms-units" min="1" placeholder="Unidades">
-                    <select class="goal-ms-reward setup-select small">
-                        <option value="">Recompensa</option>
-                    </select>
-                </div>
-                <div class="goal-milestone-row">
-                    <input type="number" class="goal-ms-units" min="1" placeholder="Unidades">
-                    <select class="goal-ms-reward setup-select small">
-                        <option value="">Recompensa</option>
-                    </select>
-                </div>
-                <div class="goal-milestone-row">
-                    <input type="number" class="goal-ms-units" min="1" placeholder="Unidades">
-                    <select class="goal-ms-reward setup-select small">
-                        <option value="">Recompensa</option>
-                    </select>
-                </div>
-            </div>
-            <div id="goalActivesList"></div>
-            <div id="goalHistoryWrap" hidden>
-                <div class="goal-section-label">Histórico</div>
-                <div id="goalHistoryList"></div>
-            </div>
         </div>
 
         <div class="section-title">
@@ -1501,6 +1511,50 @@
                     <!-- Todos os presentes aparecerão aqui -->
                 </tbody>
             </table>
+        </div>
+
+        <div class="section-title">
+            <div class="section-title-label">
+                <h3>Metas da Live</h3>
+            </div>
+            <div class="section-title-actions">
+                <button id="goalSaveBtn" class="small-btn" type="button">Salvar</button>
+                <button id="goalResetBtn" class="small-btn" type="button">Limpar</button>
+            </div>
+        </div>
+        <div class="goal-card">
+            <div class="goal-form-row">
+                <input type="text" id="goalTitleInput" placeholder="Título da meta">
+                <select id="goalGiftSelect" class="setup-select">
+                    <option value="">Todos os presentes</option>
+                </select>
+                <input type="number" id="goalTargetInput" min="1" placeholder="Meta em unidades">
+            </div>
+            <div id="goalMilestonesForm">
+                <div class="goal-milestone-row">
+                    <input type="number" class="goal-ms-units" min="1" placeholder="Unidades">
+                    <select class="goal-ms-reward setup-select small">
+                        <option value="">Recompensa</option>
+                    </select>
+                </div>
+                <div class="goal-milestone-row">
+                    <input type="number" class="goal-ms-units" min="1" placeholder="Unidades">
+                    <select class="goal-ms-reward setup-select small">
+                        <option value="">Recompensa</option>
+                    </select>
+                </div>
+                <div class="goal-milestone-row">
+                    <input type="number" class="goal-ms-units" min="1" placeholder="Unidades">
+                    <select class="goal-ms-reward setup-select small">
+                        <option value="">Recompensa</option>
+                    </select>
+                </div>
+            </div>
+            <div id="goalActivesList"></div>
+            <div id="goalHistoryWrap" hidden>
+                <div class="goal-section-label">Histórico</div>
+                <div id="goalHistoryList"></div>
+            </div>
         </div>
 
         <!-- Ranking Inteligente da Live -->

@@ -122,7 +122,9 @@ func (db *DB) migratePostgres() error {
 			gift_name TEXT NOT NULL,
 			received_at TIMESTAMPTZ NOT NULL,
 			answered_at TIMESTAMPTZ,
-			response_type TEXT
+			response_type TEXT,
+			is_priority BOOLEAN NOT NULL DEFAULT FALSE,
+			priority_at TIMESTAMPTZ
 		)`,
 		`CREATE TABLE IF NOT EXISTS gift_goals (
 			id BIGSERIAL PRIMARY KEY,
@@ -154,6 +156,10 @@ func (db *DB) migratePostgres() error {
 			WHERE pin_id IS NOT NULL AND pin_id != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_user_messages_dedup
 			ON user_messages(LOWER("uniqueId"), LOWER(message))`,
+		// Fila de presentes alvos: prioridade ("fura fila") + momento da
+		// promoção. Idempotente; espelha supabase/migrations/003.
+		`ALTER TABLE target_gift_history ADD COLUMN IF NOT EXISTS is_priority BOOLEAN NOT NULL DEFAULT FALSE`,
+		`ALTER TABLE target_gift_history ADD COLUMN IF NOT EXISTS priority_at TIMESTAMPTZ`,
 		// RLS (default deny) nas tabelas operacionais: o frontend nunca as
 		// consulta diretamente (todo dado passa pela API Go) e o backend
 		// conecta como superusuário/BYPASSRLS (pooler Supabase = postgres),

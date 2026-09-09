@@ -8,6 +8,7 @@ package view
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/auth"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
@@ -261,6 +262,41 @@ func (s *HTTPServer) handleTargetGiftHistoryAnswer(w http.ResponseWriter, r *htt
 		return
 	}
 	writeJSON(w, map[string]bool{"success": true})
+}
+
+func (s *HTTPServer) handleTargetGiftHistoryPriority(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		ID       int64 `json:"id"`
+		Priority *bool `json:"priority"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if body.ID <= 0 {
+		writeError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	if body.Priority == nil {
+		writeError(w, http.StatusBadRequest, "priority is required")
+		return
+	}
+	priorityAt, err := s.controller.SetTargetGiftPriority(body.ID, *body.Priority)
+	if err != nil {
+		if errors.Is(err, model.ErrInvalidID) {
+			writeError(w, http.StatusNotFound, "target gift not found or already answered")
+			return
+		}
+		writeInternalError(w, r, err)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"success": true, "id": body.ID, "isPriority": *body.Priority, "priorityAt": priorityAt,
+	})
 }
 
 func (s *HTTPServer) handlePinnedComments(w http.ResponseWriter, r *http.Request) {

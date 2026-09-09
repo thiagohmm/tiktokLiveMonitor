@@ -61,8 +61,12 @@ type GiftRepository interface {
 
 // TargetGiftHistoryRepository tracks target gift receive/answer history.
 type TargetGiftHistoryRepository interface {
-	AddTargetGiftHistory(liveName, uniqueID, nickname, giftName string, receivedAt time.Time) (int64, error)
+	AddTargetGiftHistory(liveName, uniqueID, nickname, giftName string, receivedAt time.Time, priority bool) (int64, error)
 	MarkTargetGiftAnswered(id int64, responseType string, answeredAt time.Time) error
+	// SetTargetGiftPriority promotes (priority=true) or demotes (priority=false)
+	// a pending entry in the gift queue. Promotion stamps `at` as the
+	// promotion moment (FIFO among jumpers); demotion clears it.
+	SetTargetGiftPriority(id int64, priority bool, at time.Time) error
 	GetRecentTargetGiftHistory(liveName string, limit int) ([]TargetGiftHistory, error)
 	GetPendingTargetGiftHistory(liveName string, limit int) ([]TargetGiftHistory, error)
 }

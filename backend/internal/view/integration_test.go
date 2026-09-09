@@ -507,11 +507,11 @@ func TestHandleTargetGiftHistoryPending(t *testing.T) {
 	srv, db, _, mon := setupTestServer(t)
 	mon.SetCurrentLive("live1")
 
-	pendingID, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", time.Now())
+	pendingID, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", time.Now(), false)
 	if err != nil {
 		t.Fatalf("add pending: %v", err)
 	}
-	answeredID, err := db.AddTargetGiftHistory("live1", "user2", "User Two", "Dino", time.Now())
+	answeredID, err := db.AddTargetGiftHistory("live1", "user2", "User Two", "Dino", time.Now(), false)
 	if err != nil {
 		t.Fatalf("add answered: %v", err)
 	}
@@ -531,6 +531,107 @@ func TestHandleTargetGiftHistoryPending(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].ID != pendingID {
 		t.Fatalf("expected only pending id %d, got %+v", pendingID, items)
+	}
+}
+
+func TestHandleTargetGiftHistoryPriority(t *testing.T) {
+	srv, db, _, mon := setupTestServer(t)
+	mon.SetCurrentLive("live1")
+
+	id, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", time.Now(), false)
+	if err != nil {
+		t.Fatalf("add pending: %v", err)
+	}
+
+	post := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/target-gift-history/priority", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		srv.handleTargetGiftHistoryPriority(rec, req)
+		return rec
+	}
+
+	// Validações de entrada.
+	if rec := post(`{"id": 123"`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid body: expected 400, got %d", rec.Code)
+	}
+	if rec := post(`{"id": ` + strconv.FormatInt(id, 10) + `}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing priority: expected 400, got %d", rec.Code)
+	}
+	if rec := post(`{"id": 0, "priority": true}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("zero id: expected 400, got %d", rec.Code)
+	}
+	if rec := post(`{"id": -1, "priority": true}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("negative id: expected 400, got %d", rec.Code)
+	}
+	if rec := post(`{"id": ` + strconv.FormatInt(id, 10) + `, "priority": "true"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("non-boolean priority: expected 400, got %d", rec.Code)
+	}
+
+	// Promover um presente pendente.
+	rec := post(`{"id": ` + strconv.FormatInt(id, 10) + `, "priority": true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("promote: expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var result struct {
+		Success    bool       `json:"success"`
+		IsPriority bool       `json:"isPriority"`
+		PriorityAt *time.Time `json:"priorityAt"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil || !result.Success || !result.IsPriority || result.PriorityAt == nil {
+		t.Fatalf("expected success=true, got %s", rec.Body.String())
+	}
+
+	// Flag persistida (sobrevive a re-query / reconexão).
+	items, err := db.GetPendingTargetGiftHistory("live1", 50)
+	if err != nil {
+		t.Fatalf("pending: %v", err)
+	}
+	if len(items) != 1 || !items[0].IsPriority || items[0].PriorityAt == nil {
+		t.Fatalf("expected priority flag persisted, got %+v", items)
+	}
+	persistedAt, err := time.Parse(time.RFC3339Nano, *items[0].PriorityAt)
+	if err != nil || !persistedAt.Equal(*result.PriorityAt) {
+		t.Fatalf("API stamp %v differs from persisted stamp %v: %v", result.PriorityAt, items[0].PriorityAt, err)
+	}
+
+	// Despromover.
+	rec = post(`{"id": ` + strconv.FormatInt(id, 10) + `, "priority": false}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("demote: expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil || !result.Success || result.IsPriority || result.PriorityAt != nil {
+		t.Fatalf("expected demotion with null priorityAt, got %s", rec.Body.String())
+	}
+	items, err = db.GetPendingTargetGiftHistory("live1", 50)
+	if err != nil {
+		t.Fatalf("pending: %v", err)
+	}
+	if len(items) != 1 || items[0].IsPriority || items[0].PriorityAt != nil {
+		t.Fatalf("expected priority cleared, got %+v", items)
+	}
+
+	// Linha inexistente → 404 (promote e demote).
+	if rec := post(`{"id": 999999, "priority": true}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("missing id promote: expected 404, got %d", rec.Code)
+	}
+	if rec := post(`{"id": 999999, "priority": false}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("missing id demote: expected 404, got %d", rec.Code)
+	}
+
+	// Linha já respondida não pode ser promovida → 404.
+	if err := db.MarkTargetGiftAnswered(id, model.TargetGiftResponseManual, time.Now()); err != nil {
+		t.Fatalf("mark answered: %v", err)
+	}
+	if rec := post(`{"id": ` + strconv.FormatInt(id, 10) + `, "priority": true}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("answered row: expected 404, got %d", rec.Code)
+	}
+
+	// Método não permitido.
+	req := httptest.NewRequest(http.MethodGet, "/api/target-gift-history/priority", nil)
+	rec = httptest.NewRecorder()
+	srv.handleTargetGiftHistoryPriority(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET: expected 405, got %d", rec.Code)
 	}
 }
 

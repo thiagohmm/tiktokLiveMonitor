@@ -155,3 +155,31 @@ func TestTargetGiftTimeoutDoesNotCountLateFinalTwice(t *testing.T) {
 		t.Fatal("timeout lost accumulated gift")
 	}
 }
+
+func TestTargetGiftPriorityFlag(t *testing.T) {
+	m, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.SetSettings(Settings{
+		TargetGifts:          []string{"Rosa", "Dino"},
+		TargetGiftPriorities: map[string]bool{"Rosa": true},
+	})
+	collector := &giftCollector{}
+	m.OnEvent(collector.handler)
+
+	m.handleTargetGift(EventData{"uniqueId": "ana", "giftName": "Rosa", "repeatCount": 1, "repeatEnd": true})
+	m.handleTargetGift(EventData{"uniqueId": "bia", "giftName": "Dino", "repeatCount": 1, "repeatEnd": true})
+
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if len(collector.target) != 2 {
+		t.Fatalf("expected 2 target events, got %d", len(collector.target))
+	}
+	if got := collector.target[0]["isPriority"]; got != true {
+		t.Fatalf("Rosa (fura fila): isPriority = %v, want true", got)
+	}
+	if got := collector.target[1]["isPriority"]; got != false {
+		t.Fatalf("Dino (normal): isPriority = %v, want false", got)
+	}
+}

@@ -77,6 +77,9 @@ type Settings struct {
 	LogLevel             string         `json:"logLevel"`
 	TargetGifts          []string       `json:"targetGifts"`
 	TargetGiftQuantities map[string]int `json:"targetGiftQuantities,omitempty"`
+	// TargetGiftPriorities marks gift types that jump the queue ("fura fila"):
+	// entries created for them start with is_priority=TRUE.
+	TargetGiftPriorities map[string]bool `json:"targetGiftPriorities,omitempty"`
 }
 
 type State struct {
@@ -156,9 +159,10 @@ func New() (*Monitor, error) {
 		reconnectKick: make(chan struct{}, 1),
 		giftStreaks:   make(map[string]*giftStreak),
 		settings: Settings{
-			ModerationEnabled: true,
-			LogLevel:          "info",
-			TargetGifts:       []string{},
+			ModerationEnabled:    true,
+			LogLevel:             "info",
+			TargetGifts:          []string{},
+			TargetGiftPriorities: map[string]bool{},
 		},
 	}, nil
 }

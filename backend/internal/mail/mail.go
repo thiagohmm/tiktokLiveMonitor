@@ -173,7 +173,8 @@ func (m *Mailer) sendResend(to, subject, body string) error {
 	if err != nil {
 		return fmt.Errorf("conectar à API Resend: %w", err)
 	}
-	defer resp.Body.Close()
+	// O status HTTP já determina o resultado; o fechamento apenas libera o recurso.
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("API Resend retornou HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(detail)))
@@ -203,13 +204,15 @@ func (m *Mailer) send(to string, msg []byte) error {
 	if err != nil {
 		return fmt.Errorf("conectar ao SMTP %s: %w", addr, err)
 	}
-	defer conn.Close()
+	// Quit/Client.Close também fecham a conexão; este é o fallback de limpeza.
+	defer func() { _ = conn.Close() }()
 
 	c, err := smtp.NewClient(conn, m.cfg.Host)
 	if err != nil {
 		return fmt.Errorf("smtp.NewClient: %w", err)
 	}
-	defer c.Close()
+	// Quit pode ter fechado o cliente; preservar o erro da operação principal.
+	defer func() { _ = c.Close() }()
 
 	if m.cfg.TLSMode == "starttls" {
 		if err := c.StartTLS(&tls.Config{
@@ -237,7 +240,7 @@ func (m *Mailer) send(to string, msg []byte) error {
 		return fmt.Errorf("DATA: %w", err)
 	}
 	if _, err := w.Write(msg); err != nil {
-		w.Close()
+		_ = w.Close() // Preservar a falha original de escrita.
 		return fmt.Errorf("escrever corpo: %w", err)
 	}
 	if err := w.Close(); err != nil {
@@ -331,7 +334,7 @@ func qpEncodeLine(line string) string {
 	for i := 0; i < len(line); i++ {
 		c := line[i]
 		if c == '=' || c < 0x20 || c > 0x7e {
-			b.WriteString(fmt.Sprintf("=%02X", c))
+			_, _ = fmt.Fprintf(&b, "=%02X", c) // strings.Builder não retorna erro de escrita.
 		} else {
 			b.WriteByte(c)
 		}

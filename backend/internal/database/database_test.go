@@ -579,10 +579,10 @@ func TestDeleteSessionData(t *testing.T) {
 	if _, err := db.AddPinnedComment("live2", "user2", "User Two", "fixado live2", "pin-2", nil, time.Now()); err != nil {
 		t.Fatalf("add pinned live2: %v", err)
 	}
-	if _, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", time.Now()); err != nil {
+	if _, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", time.Now(), false); err != nil {
 		t.Fatalf("add target gift live1: %v", err)
 	}
-	if _, err := db.AddTargetGiftHistory("live2", "user2", "User Two", "Dino", time.Now()); err != nil {
+	if _, err := db.AddTargetGiftHistory("live2", "user2", "User Two", "Dino", time.Now(), false); err != nil {
 		t.Fatalf("add target gift live2: %v", err)
 	}
 
@@ -687,7 +687,7 @@ func TestTargetGiftHistoryFlow(t *testing.T) {
 	db := openTestDB(t)
 	receivedAt := time.Date(2026, 8, 17, 15, 30, 0, 0, time.UTC)
 
-	id, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", receivedAt)
+	id, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", receivedAt, false)
 	if err != nil {
 		t.Fatalf("add history: %v", err)
 	}
@@ -746,7 +746,7 @@ func TestMarkTargetGiftAnsweredInvalid(t *testing.T) {
 	if err := db.MarkTargetGiftAnswered(0, model.TargetGiftResponseManual, time.Now()); err == nil {
 		t.Fatal("expected error for invalid id")
 	}
-	id, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", time.Now())
+	id, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", time.Now(), false)
 	if err != nil {
 		t.Fatalf("add history: %v", err)
 	}
@@ -759,18 +759,18 @@ func TestGetPendingTargetGiftHistory(t *testing.T) {
 	db := openTestDB(t)
 	now := time.Now()
 
-	pendingID, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", now)
+	pendingID, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", now, false)
 	if err != nil {
 		t.Fatalf("add pending: %v", err)
 	}
-	answeredID, err := db.AddTargetGiftHistory("live1", "user2", "User Two", "Dino", now.Add(time.Second))
+	answeredID, err := db.AddTargetGiftHistory("live1", "user2", "User Two", "Dino", now.Add(time.Second), false)
 	if err != nil {
 		t.Fatalf("add answered: %v", err)
 	}
 	if err := db.MarkTargetGiftAnswered(answeredID, model.TargetGiftResponseManual, now.Add(2*time.Second)); err != nil {
 		t.Fatalf("mark answered: %v", err)
 	}
-	if _, err := db.AddTargetGiftHistory("live2", "user3", "User Three", "Rosa", now); err != nil {
+	if _, err := db.AddTargetGiftHistory("live2", "user3", "User Three", "Rosa", now, false); err != nil {
 		t.Fatalf("add other live: %v", err)
 	}
 
@@ -806,6 +806,181 @@ func TestGetPendingTargetGiftHistory(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestTargetGiftPriorityToggle(t *testing.T) {
+	db := openTestDB(t)
+	now := time.Now()
+
+	id, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", now, false)
+	if err != nil {
+		t.Fatalf("add history: %v", err)
+	}
+
+	// Invalid ids.
+	if err := db.SetTargetGiftPriority(0, true, now); err == nil {
+		t.Fatal("expected error for invalid id")
+	}
+	if err := db.SetTargetGiftPriority(999999, true, now); err == nil {
+		t.Fatal("expected error for unknown id")
+	}
+
+	// Promote: flag + stamp persist across re-queries.
+	if err := db.SetTargetGiftPriority(id, true, now.Add(time.Second)); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	items, err := db.GetPendingTargetGiftHistory("live1", 10)
+	if err != nil {
+		t.Fatalf("get pending: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if !items[0].IsPriority || items[0].PriorityAt == nil {
+		t.Fatalf("expected promoted item, got %+v", items[0])
+	}
+
+	// Demote: flag and stamp cleared.
+	if err := db.SetTargetGiftPriority(id, false, now.Add(2*time.Second)); err != nil {
+		t.Fatalf("demote: %v", err)
+	}
+	items, err = db.GetPendingTargetGiftHistory("live1", 10)
+	if err != nil {
+		t.Fatalf("get pending after demote: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].IsPriority || items[0].PriorityAt != nil {
+		t.Fatalf("expected demoted item, got %+v", items[0])
+	}
+}
+
+func TestTargetGiftPriorityQueueOrder(t *testing.T) {
+	db := openTestDB(t)
+	now := time.Now()
+
+	// A(t1) e B(t2) normais; C(t3) normal.
+	idA, err := db.AddTargetGiftHistory("live1", "userA", "User A", "Rosa", now, false)
+	if err != nil {
+		t.Fatalf("add A: %v", err)
+	}
+	idB, err := db.AddTargetGiftHistory("live1", "userB", "User B", "Dino", now.Add(time.Second), false)
+	if err != nil {
+		t.Fatalf("add B: %v", err)
+	}
+	idC, err := db.AddTargetGiftHistory("live1", "userC", "User C", "Lion", now.Add(2*time.Second), false)
+	if err != nil {
+		t.Fatalf("add C: %v", err)
+	}
+
+	queueIDs := func() []int64 {
+		t.Helper()
+		items, err := db.GetPendingTargetGiftHistory("live1", 10)
+		if err != nil {
+			t.Fatalf("get pending: %v", err)
+		}
+		ids := make([]int64, 0, len(items))
+		for _, item := range items {
+			ids = append(ids, item.ID)
+		}
+		return ids
+	}
+
+	want := func(ids ...int64) {
+		t.Helper()
+		got := queueIDs()
+		if len(got) != len(ids) {
+			t.Fatalf("expected %v, got %v", ids, got)
+		}
+		for i := range ids {
+			if got[i] != ids[i] {
+				t.Fatalf("expected %v, got %v", ids, got)
+			}
+		}
+	}
+
+	// Fila normal: FIFO por received_at.
+	want(idA, idB, idC)
+
+	// Promover C: vai para o topo (único fura fila).
+	if err := db.SetTargetGiftPriority(idC, true, now.Add(3*time.Second)); err != nil {
+		t.Fatalf("promote C: %v", err)
+	}
+	want(idC, idA, idB)
+
+	// Promover A depois: fura fila, mas fica ABAIXO de C (FIFO entre fura fila).
+	if err := db.SetTargetGiftPriority(idA, true, now.Add(4*time.Second)); err != nil {
+		t.Fatalf("promote A: %v", err)
+	}
+	want(idC, idA, idB)
+
+	// Despromover C: volta para a posição normal por received_at (fim da fila).
+	if err := db.SetTargetGiftPriority(idC, false, now.Add(5*time.Second)); err != nil {
+		t.Fatalf("demote C: %v", err)
+	}
+	want(idA, idB, idC)
+}
+
+func TestTargetGiftPriorityAnsweredRejected(t *testing.T) {
+	db := openTestDB(t)
+	now := time.Now()
+
+	id, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", now, false)
+	if err != nil {
+		t.Fatalf("add history: %v", err)
+	}
+	if err := db.MarkTargetGiftAnswered(id, model.TargetGiftResponseManual, now.Add(time.Second)); err != nil {
+		t.Fatalf("mark answered: %v", err)
+	}
+
+	// Presente já respondido não pode furar fila.
+	if err := db.SetTargetGiftPriority(id, true, now.Add(2*time.Second)); err == nil {
+		t.Fatal("expected error promoting answered entry")
+	}
+
+	items, err := db.GetPendingTargetGiftHistory("live1", 10)
+	if err != nil {
+		t.Fatalf("get pending: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected empty queue, got %+v", items)
+	}
+}
+
+// TestTargetGiftHistoryInsertPriority covers the "fura fila por tipo de
+// presente" path: entries created with priority=true join the queue head
+// already promoted (priority_at = received_at).
+func TestTargetGiftHistoryInsertPriority(t *testing.T) {
+	db := openTestDB(t)
+	now := time.Now()
+
+	normalID, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", now.Add(time.Second), false)
+	if err != nil {
+		t.Fatalf("add normal: %v", err)
+	}
+	priorityID, err := db.AddTargetGiftHistory("live1", "user2", "User Two", "Dino", now, true)
+	if err != nil {
+		t.Fatalf("add priority: %v", err)
+	}
+
+	items, err := db.GetPendingTargetGiftHistory("live1", 10)
+	if err != nil {
+		t.Fatalf("get pending: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %+v", items)
+	}
+	// O prioritário (recebido antes) fica à frente do normal.
+	if items[0].ID != priorityID || items[1].ID != normalID {
+		t.Fatalf("expected [priority, normal], got %+v", items)
+	}
+	if !items[0].IsPriority || items[0].PriorityAt == nil {
+		t.Fatalf("expected priority stamp, got %+v", items[0])
+	}
+	if items[1].IsPriority || items[1].PriorityAt != nil {
+		t.Fatalf("expected normal entry, got %+v", items[1])
 	}
 }
 

@@ -15,6 +15,24 @@ func targetGiftQuantity(settings Settings, target string) int {
 	return 1
 }
 
+// targetGiftPriority reports whether the gift matches a target that was
+// marked as "fura fila" in the settings.
+func targetGiftPriority(settings Settings, giftName string) bool {
+	for _, target := range settings.TargetGifts {
+		if matchesTargetGift(giftName, target) && settings.TargetGiftPriorities[target] {
+			return true
+		}
+	}
+	return false
+}
+
+// targetGiftPriority is the locked view of the settings helper above.
+func (m *Monitor) targetGiftPriority(giftName string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return targetGiftPriority(m.settings, giftName)
+}
+
 // setCurrentLiveLocked preserves progress on reconnects to the same live.
 func (m *Monitor) setCurrentLiveLocked(username string) {
 	if normalizeID(m.currentUsername) != normalizeID(username) {

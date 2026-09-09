@@ -42,6 +42,8 @@ const (
 )
 
 // TargetGiftHistory tracks when a target gift was received and answered.
+// IsPriority marks the gift as "fura fila" (queue jumper); PriorityAt is the
+// promotion moment and orders jumpers FIFO among themselves.
 type TargetGiftHistory struct {
 	ID           int64   `json:"id"`
 	LiveName     string  `json:"liveName"`
@@ -51,6 +53,8 @@ type TargetGiftHistory struct {
 	ReceivedAt   string  `json:"receivedAt"`
 	AnsweredAt   *string `json:"answeredAt,omitempty"`
 	ResponseType *string `json:"responseType,omitempty"`
+	IsPriority   bool    `json:"isPriority"`
+	PriorityAt   *string `json:"priorityAt,omitempty"`
 }
 
 // Gift goal status values.
