@@ -5,6 +5,7 @@
   "description": "UI do TikTok Live Monitor (estática, consumida via /api e /events do backend)",
   "scripts": {
     "dev": "node server.js",
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "test": "node --test *.test.mjs"
   }
 }

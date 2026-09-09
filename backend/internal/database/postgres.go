@@ -154,6 +154,21 @@ func (db *DB) migratePostgres() error {
 			WHERE pin_id IS NOT NULL AND pin_id != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_user_messages_dedup
 			ON user_messages(LOWER("uniqueId"), LOWER(message))`,
+		// RLS (default deny) nas tabelas operacionais: o frontend nunca as
+		// consulta diretamente (todo dado passa pela API Go) e o backend
+		// conecta como superusuário/BYPASSRLS (pooler Supabase = postgres),
+		// que ignora RLS. Idempotente; espelha supabase/migrations/002.
+		`ALTER TABLE false_positives      ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE anomaly_logs         ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE gifts                ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE shares               ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE likes                ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE room_like_totals     ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE user_messages        ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE target_gift_history  ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE gift_goals           ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE pinned_comments      ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE settings             ENABLE ROW LEVEL SECURITY`,
 	}
 
 	for _, s := range stmts {

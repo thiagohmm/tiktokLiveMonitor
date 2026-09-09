@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"math/rand/v2"
@@ -96,14 +97,15 @@ func (m *Monitor) startBridge() error {
 		}
 	}()
 
+	ended := make(chan struct{})
 	m.mu.Lock()
 	m.cmd = cmd
 	m.stdin = stdin
 	m.stdout = stdout
-	m.bridgeEnded = make(chan struct{})
+	m.bridgeEnded = ended
 	m.mu.Unlock()
 
-	go m.readBridge()
+	go m.readBridge(stdout, ended)
 
 	return nil
 }
@@ -318,15 +320,10 @@ func dataToEvent(raw interface{}) EventData {
 	}
 }
 
-func (m *Monitor) readBridge() {
-	m.mu.Lock()
-	ended := m.bridgeEnded
-	m.mu.Unlock()
-	if ended != nil {
-		defer close(ended)
-	}
+func (m *Monitor) readBridge(stdout io.Reader, ended chan struct{}) {
+	defer close(ended)
 
-	scanner := bufio.NewScanner(m.stdout)
+	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()

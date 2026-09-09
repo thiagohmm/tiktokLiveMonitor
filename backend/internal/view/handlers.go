@@ -116,6 +116,10 @@ func (s *HTTPServer) handleDisconnect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) handleClearHistory(w http.ResponseWriter, r *http.Request) {
+	// Destrutivo: qualquer assinante não pode zerar o histórico de moderação.
+	if _, ok := auth.RequireAdmin(w, r, s.auth); !ok {
+		return
+	}
 	deleted, err := s.controller.ClearHistory()
 	if err != nil {
 		writeInternalError(w, r, err)
@@ -169,6 +173,10 @@ func (s *HTTPServer) handleGifts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodDelete {
+		// Destrutivo: apenas admin pode apagar todos os presentes.
+		if _, ok := auth.RequireAdmin(w, r, s.auth); !ok {
+			return
+		}
 		affected, err := s.controller.ClearGifts()
 		if err != nil {
 			writeInternalError(w, r, err)

@@ -177,7 +177,7 @@ func (c *AppController) FetchAvailableGifts() ([]string, error) {
 // ReportExternalFlag ingests a moderation flag and surfaces it through the
 // existing flagged-message pipeline (UI + anomaly log). Plumbing only.
 func (c *AppController) ReportExternalFlag(data monitor.EventData) {
-	settings := c.monitor.GetSettings()
+	settings := c.GetSettings()
 	if !settings.ModerationEnabled {
 		return
 	}
@@ -354,7 +354,7 @@ func (c *AppController) RecordPinnedComment(data monitor.EventData) (int64, erro
 
 // GetRecentPinnedComments returns recent pinned comments for the current live.
 func (c *AppController) GetRecentPinnedComments(limit int) ([]model.PinnedComment, error) {
-	state := c.monitor.GetState()
+	state := c.GetState()
 	return c.repo.GetRecentPinnedComments(state.Username, limit)
 }
 

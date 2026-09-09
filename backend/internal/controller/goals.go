@@ -60,7 +60,7 @@ func (c *AppController) SetGoalCallback(fn func(GoalUpdate)) {
 // the live's units and completed when its own target is met.
 // An empty giftName counts all gifts; otherwise only that gift counts.
 func (c *AppController) CreateGoal(title, giftName string, targetUnits int, milestones []model.GoalMilestone) (model.GiftGoal, error) {
-	state := c.monitor.GetState()
+	state := c.GetState()
 	liveName := state.Username
 	if liveName == "" {
 		return model.GiftGoal{}, fmt.Errorf("no live is being monitored")
@@ -133,7 +133,7 @@ func (c *AppController) CompleteGoal(id int64) error {
 // activeGoalByID returns the current live's active goal with the given id,
 // or nil when there is no such active goal.
 func (c *AppController) activeGoalByID(id int64) (*model.GiftGoal, error) {
-	liveName := c.monitor.GetState().Username
+	liveName := c.GetState().Username
 	goals, err := c.repo.GetGiftGoals(liveName)
 	if err != nil {
 		return nil, err
@@ -149,7 +149,7 @@ func (c *AppController) activeGoalByID(id int64) (*model.GiftGoal, error) {
 // GetGoalsState returns the current live's active goals (each with progress),
 // its goal history, and the legacy Active alias (first active goal).
 func (c *AppController) GetGoalsState() (GoalsState, error) {
-	liveName := c.monitor.GetState().Username
+	liveName := c.GetState().Username
 	out := GoalsState{LiveName: liveName, Actives: []GoalProgress{}, History: []model.GiftGoal{}}
 	if liveName == "" {
 		return out, nil
@@ -194,7 +194,7 @@ func (c *AppController) checkGoalProgress(liveNames ...string) {
 	if len(liveNames) > 0 {
 		liveName = liveNames[0]
 	} else {
-		liveName = c.monitor.GetState().Username
+		liveName = c.GetState().Username
 	}
 	if liveName == "" {
 		return
