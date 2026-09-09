@@ -15,6 +15,9 @@ func (m *Monitor) handleBridgeEvent(eventType string, data EventData) {
 		m.connected = success
 		if success {
 			m.reconnectAttempts = 0
+			m.reconnectNotBefore = time.Time{}
+		} else if retryMs, ok := data["retryAfterMs"].(float64); ok && retryMs > 0 && retryMs <= float64((365*24*time.Hour)/time.Millisecond) {
+			m.reconnectNotBefore = time.Now().Add(time.Duration(retryMs) * time.Millisecond)
 		}
 		stopped := m.userStopped
 		m.mu.Unlock()

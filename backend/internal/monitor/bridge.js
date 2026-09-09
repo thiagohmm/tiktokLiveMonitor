@@ -68,6 +68,7 @@ function send(type, data) {
 
 const { resolveIsFollower } = require('./follower');
 const { translateGiftName } = require('./gifts');
+const { connectionFailure } = require('./connection-error');
 
 function getUser(data) {
     const user = data.user || data.member || data.sender || data.author || data.owner || {};
@@ -562,10 +563,7 @@ async function doConnect(username) {
     try {
         await connection.connect();
     } catch (err) {
-        send('connection-status', {
-            success: false,
-            error: `Falha ao conectar: ${err.message}`
-        });
+        send('connection-status', connectionFailure(err));
         connection = null;
     }
 }

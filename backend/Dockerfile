@@ -46,6 +46,7 @@ WORKDIR /app
 COPY --from=builder /tiktok-live-monitor /app/tiktok-live-monitor
 COPY internal/monitor/ ./internal/monitor/
 COPY package.json package-lock.json ./
+COPY patches/ ./patches/
 
 RUN mkdir -p data \
     && npm ci --omit=dev

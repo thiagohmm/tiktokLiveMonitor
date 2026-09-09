@@ -245,6 +245,7 @@ func (m *Monitor) runSupervisor(ctx context.Context, stopCh, done chan struct{})
 		m.reconnectAttempts++
 		attempt := m.reconnectAttempts
 		username := m.currentUsername
+		retryWait := time.Until(m.reconnectNotBefore)
 		m.mu.Unlock()
 
 		if stopped || username == "" {
@@ -252,6 +253,9 @@ func (m *Monitor) runSupervisor(ctx context.Context, stopCh, done chan struct{})
 		}
 
 		delay := backoffDelay(attempt)
+		if retryWait > delay {
+			delay = retryWait
+		}
 		log.Printf("[Monitor] Reconnecting to %s (attempt %d, next in %s)", username, attempt, delay)
 		m.emit(EventConnectionStatus, EventData{
 			"success":       false,

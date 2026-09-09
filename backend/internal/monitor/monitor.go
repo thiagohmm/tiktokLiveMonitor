@@ -131,13 +131,14 @@ type Monitor struct {
 	giftsCh         chan []string
 	availableGifts  []string
 
-	bridgeEnded       chan struct{}
-	reconnectKick     chan struct{}
-	reconnectAttempts int
-	userStopped       bool
-	supCancel         context.CancelFunc
-	supDone           chan struct{}
-	supStopCh         chan struct{}
+	bridgeEnded        chan struct{}
+	reconnectKick      chan struct{}
+	reconnectAttempts  int
+	reconnectNotBefore time.Time
+	userStopped        bool
+	supCancel          context.CancelFunc
+	supDone            chan struct{}
+	supStopCh          chan struct{}
 
 	// giftStreaks rastreia streaks (combos) de presente aguardando liquidação;
 	// ver handleGiftReceived/settleGiftStreak.

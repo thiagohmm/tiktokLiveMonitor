@@ -1,0 +1,13 @@
+diff --git a/node_modules/tiktok-live-connector/dist/lib-QI8aOkkz.js b/node_modules/tiktok-live-connector/dist/lib-QI8aOkkz.js
+index 4eea561..4729a13 100644
+--- a/node_modules/tiktok-live-connector/dist/lib-QI8aOkkz.js
++++ b/node_modules/tiktok-live-connector/dist/lib-QI8aOkkz.js
+@@ -913,7 +913,7 @@ const fetchSignedWebSocketFromEulerRoute = createRoute("fetchSignedWebSocketFrom
+ 	}
+ 	if (response.status === 429) {
+ 		const data = JSON.parse(Buffer.from(response.data).toString("utf-8"));
+-		throw new SignatureRateLimitError(process.env.SIGN_SERVER_MESSAGE_DISABLED ? null : data?.message, `${data?.limit_label ? `(${data.limit_label}) ` : ""}Too many connections started, try again later.`, response.data);
++		throw new SignatureRateLimitError(process.env.SIGN_SERVER_MESSAGE_DISABLED ? null : data?.message, `${data?.limit_label ? `(${data.limit_label}) ` : ""}Too many connections started, try again later.`, response);
+ 	}
+ 	if (response.status === 402) {
+ 		const data = JSON.parse(Buffer.from(response.data).toString("utf-8"));
