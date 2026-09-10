@@ -680,6 +680,7 @@ const GIFT_TRANSLATIONS = {
     "zeus": "Zeus"
 };
 
+// Traduz o nome de um presente para PT-BR usando o dicionário GIFT_TRANSLATIONS.
 function translateGiftName(name) {
     if (typeof name !== 'string') return name;
     const trimmed = name.trim();
@@ -687,6 +688,7 @@ function translateGiftName(name) {
     return GIFT_TRANSLATIONS[trimmed.toLowerCase()] || trimmed;
 }
 
+// Garante que a biblioteca Chart.js esteja carregada, injetando o script do vendor se necessário.
 function ensureBrowserChart() {
     if (typeof window.Chart !== 'undefined') {
         return Promise.resolve();
@@ -799,6 +801,7 @@ let isAddingTargetGift = false;
 const LIVE_USERS_MAX = 200;
 let renderListenModalTimeout = null;
 
+// Agenda a renderização do modal de escuta com debounce de 150ms para evitar re-render a cada mensagem.
 function throttledRenderListenModal() {
     if (renderListenModalTimeout) {
         clearTimeout(renderListenModalTimeout);
@@ -809,10 +812,12 @@ function throttledRenderListenModal() {
     }, 150);
 }
 
+// Normaliza um identificador de usuário (@, espaços, maiúsculas) para comparação.
 function normalizeListenUser(value) {
     return String(value || '').trim().replace(/^@+/, '').toLowerCase();
 }
 
+// Converte valores heterogêneos de "segue/não segue" em true, false ou null.
 function normalizeFollowerFlag(value) {
     if (value === true || value === 1 || value === '1' || value === 'true') {
         return true;
@@ -823,6 +828,7 @@ function normalizeFollowerFlag(value) {
     return null;
 }
 
+// Combina o status de seguidor anterior com o novo, preservando true quando já confirmado.
 function mergeFollowerStatus(previous, next) {
     const incoming = normalizeFollowerFlag(next);
     const current = normalizeFollowerFlag(previous);
@@ -838,6 +844,7 @@ function mergeFollowerStatus(previous, next) {
     return incoming;
 }
 
+// Retorna o status de seguidor a exibir, priorizando o cache local de usuários da live.
 function followerStatusForDisplay(data) {
     const key = normalizeListenUser((data && (data.uniqueId || data.nickname)) || '');
     const stored = key ? liveUsers.get(key) : null;
@@ -847,6 +854,7 @@ function followerStatusForDisplay(data) {
     return normalizeFollowerFlag(data && data.isFollower);
 }
 
+// Cria ou substitui o badge de seguidor de uma célula de usuário.
 function ensureFollowerBadge(userTd, data) {
     if (!userTd) {
         return;
@@ -863,6 +871,7 @@ function ensureFollowerBadge(userTd, data) {
     userTd.appendChild(badge);
 }
 
+// Guarda/atualiza um usuário visto na live no cache em memória (limite de 200).
 function rememberLiveUser(data) {
     if (!data) {
         return;
@@ -897,6 +906,7 @@ function rememberLiveUser(data) {
     }
 }
 
+// Filtra e ordena os usuários da live para o seletor de escuta (máx. 50).
 function getLiveUserMatches(query) {
     const normalizedQuery = normalizeListenUser(query);
     return Array.from(liveUsers.values())
@@ -912,12 +922,14 @@ function getLiveUserMatches(query) {
         .slice(0, 50);
 }
 
+// Limita um array de histórico a 15 itens.
 function trimHistory(items) {
     if (items.length > 15) {
         items.length = 15;
     }
 }
 
+// Adiciona uma mensagem de estado vazio ao elemento informado.
 function appendEmptyState(parent) {
     const p = document.createElement('p');
     p.className = 'modal-empty';
@@ -925,6 +937,7 @@ function appendEmptyState(parent) {
     parent.appendChild(p);
 }
 
+// Cria a lista de itens de um modal, usando renderItem para cada linha.
 function createModalList(items, renderItem) {
     const list = document.createElement('div');
     list.className = 'modal-list';
@@ -944,6 +957,7 @@ function createModalList(items, renderItem) {
     return list;
 }
 
+// Renderiza nome, @handle e badge de seguidor em uma linha de modal.
 function renderUserLine(row, nickname, uniqueId, isFollower) {
     const strong = document.createElement('strong');
     strong.className = 'user-name';
@@ -962,6 +976,7 @@ function renderUserLine(row, nickname, uniqueId, isFollower) {
     }
 }
 
+// Cria o badge "Segue"/"Não Segue" conforme o status.
 function createFollowerBadge(isFollower) {
     const flag = normalizeFollowerFlag(isFollower);
     if (flag === true) {
@@ -979,6 +994,7 @@ function createFollowerBadge(isFollower) {
     return null;
 }
 
+// Formata uma data/hora no fuso de São Paulo (pt-BR).
 function formatSaoPauloDateTime(value) {
     if (value == null || value === '') {
         return '—';
@@ -999,6 +1015,7 @@ function formatSaoPauloDateTime(value) {
     }).format(date);
 }
 
+// Rótulo textual do status de resposta de um presente alvo.
 function targetGiftResponseLabel(responseType) {
     if (responseType === 'manual') {
         return 'Respondido manualmente';
@@ -1009,6 +1026,7 @@ function targetGiftResponseLabel(responseType) {
     return 'Pendente';
 }
 
+// Classe CSS correspondente ao status de resposta do presente alvo.
 function targetGiftResponseClass(responseType) {
     if (responseType === 'manual' || responseType === 'automatic') {
         return responseType;
@@ -1016,6 +1034,7 @@ function targetGiftResponseClass(responseType) {
     return 'pending';
 }
 
+// Registra no backend que um presente alvo foi respondido (manual/automático).
 async function markTargetGiftAnswered(historyId, responseType) {
     const id = Number(historyId);
     if (!Number.isFinite(id) || id <= 0) {
@@ -1032,12 +1051,14 @@ async function markTargetGiftAnswered(historyId, responseType) {
     }
 }
 
+// Encontra a linha da fila pelo id do histórico de presente alvo.
 function findTargetGiftRowByHistoryId(historyId) {
     const id = String(historyId);
     return Array.from(userTableBody.querySelectorAll('.user-row')).find(row => row.dataset.historyId === id) || null;
 }
 
 // Uma alteração por entrada; a ordem só muda após confirmação do servidor.
+// Alterna o "fura fila" de uma entrada e reordena a fila local após confirmação do servidor.
 async function markTargetGiftPriority(historyId, priority) {
     const id = Number(historyId);
     if (!Number.isFinite(id) || id <= 0) {
@@ -1077,6 +1098,7 @@ async function markTargetGiftPriority(historyId, priority) {
     }
 }
 
+// Busca o histórico de presentes alvo na API.
 async function loadTargetGiftHistoryFromApi() {
     try {
         const response = await fetch('/api/target-gift-history?limit=50');
@@ -1091,6 +1113,7 @@ async function loadTargetGiftHistoryFromApi() {
     }
 }
 
+// Renderiza o modal com o histórico de presentes alvo.
 async function renderGiftHistory() {
     historyModalTitle.textContent = 'Histórico de Presentes Alvos';
     historyModalBody.replaceChildren();
@@ -1138,6 +1161,7 @@ async function renderGiftHistory() {
     }));
 }
 
+// Renderiza o modal com o histórico de comentários fixados.
 async function renderPinnedCommentHistory() {
     historyModalTitle.textContent = 'Histórico de Comentários Fixados';
     historyModalBody.replaceChildren();
@@ -1168,6 +1192,7 @@ async function renderPinnedCommentHistory() {
     }));
 }
 
+// Define o usuário em escuta, limpando as mensagens se o usuário mudar.
 function setListenedUser(value) {
     const nextUserId = normalizeListenUser(value);
     if (nextUserId !== listenedUserId) {
@@ -1176,6 +1201,7 @@ function setListenedUser(value) {
     listenedUserId = nextUserId;
 }
 
+// Renderiza o painel de sugestões de usuários vistos na live.
 function renderLiveUserSelector(input) {
     const wrapper = document.createElement('div');
     wrapper.className = 'listen-user-panel';
@@ -1229,6 +1255,7 @@ function renderLiveUserSelector(input) {
     return wrapper;
 }
 
+// Renderiza o modal de escuta (formulário, sugestões e mensagens).
 function renderListenModal(options = {}) {
     historyModalTitle.textContent = 'Escuta';
     historyModalBody.replaceChildren();
@@ -1274,6 +1301,7 @@ function renderListenModal(options = {}) {
     }
 }
 
+// Redesenha o modal ativo conforme o tipo.
 function renderActiveModal() {
     if (activeModalType === 'target-gifts') {
         renderGiftHistory();
@@ -1284,6 +1312,7 @@ function renderActiveModal() {
     }
 }
 
+// Abre o modal de histórico do tipo informado.
 function openHistoryModal(type) {
     activeModalType = type;
     if (type === 'listen') {
@@ -1294,6 +1323,7 @@ function openHistoryModal(type) {
     historyModalBackdrop.setAttribute('aria-hidden', 'false');
 }
 
+// Fecha o modal de perfil e limpa seu conteúdo.
 function closeProfileModal() {
     if (!profileModalBackdrop) return;
     profileModalBackdrop.classList.remove('is-open');
@@ -1301,12 +1331,14 @@ function closeProfileModal() {
     profileModalBody.innerHTML = '';
 }
 
+// Fecha o modal de histórico e limpa o tipo ativo.
 function closeHistoryModal() {
     historyModalBackdrop.classList.remove('is-open');
     historyModalBackdrop.setAttribute('aria-hidden', 'true');
     activeModalType = null;
 }
 
+// Busca e exibe o perfil de um usuário pelo uniqueId.
 async function openProfile(uniqueId) {
     if (!profileModalBackdrop || !profileModalBody) return;
     profileModalBody.innerHTML = '<p style="color:var(--text-muted)">Carregando perfil...</p>';
@@ -1322,6 +1354,7 @@ async function openProfile(uniqueId) {
     }
 }
 
+// Monta o conteúdo do perfil (estatísticas, vidas, alertas e mensagens).
 function renderProfile(profile) {
     if (!profileModalBody) return;
     profileModalBody.innerHTML = '';
@@ -1420,6 +1453,7 @@ function renderProfile(profile) {
     }
 }
 
+// Atualiza o modal de presentes alvo quando um novo é recebido.
 function addTargetGiftToHistory(user) {
     // Persistido no backend; o modal carrega de /api/target-gift-history.
     if (activeModalType === 'target-gifts') {
@@ -1427,12 +1461,14 @@ function addTargetGiftToHistory(user) {
     }
 }
 
+// Atualiza o modal de comentários fixados quando um novo chega.
 function addPinnedCommentToHistory() {
     if (activeModalType === 'pinned-comments') {
         renderPinnedCommentHistory();
     }
 }
 
+// Adiciona ao histórico uma mensagem do usuário em escuta.
 function handleListenedMessage(data) {
     if (!listenedUserId || !data) {
         return;
@@ -1454,12 +1490,14 @@ function handleListenedMessage(data) {
     }
 }
 
+// Conta e processa uma nova mensagem de chat recebida.
 function handleNewChatMessage(data) {
     rememberLiveUser(data);
     messageCount++;
     handleListenedMessage(data);
 }
 
+// Limpa todos os históricos e o cache de usuários da live.
 function clearHistories() {
     targetGiftHistory = [];
     pinnedCommentHistory = [];
@@ -1486,6 +1524,7 @@ function infractionCategoryLabel(category) {
     return map[key] || key;
 }
 
+// Cria o gráfico de mensagens/presentes por segundo com Chart.js.
 function createChart(ChartLib) {
     const ctx = chartCanvas.getContext('2d');
     return new ChartLib(ctx, {
@@ -1577,6 +1616,7 @@ if (refreshRankingBtn) {
     refreshRankingBtn.addEventListener('click', () => loadRanking());
 }
 
+// Aplica e persiste o modo do ranking (engajamento ou TikTok) e recarrega.
 function applyRankingMode(mode, reload = true) {
     rankingMode = mode === 'tiktok' ? 'tiktok' : 'engagement';
     try {
@@ -1668,6 +1708,7 @@ document.addEventListener('keydown', event => {
 
 const EXPIRATION_STORAGE_KEY = 'targetExpirationMinutes';
 
+// Carrega o tempo de expiração dos presentes alvo salvo no localStorage.
 function loadTargetExpirationMinutes() {
     if (!targetExpirationMinutesInput) {
         return;
@@ -1682,6 +1723,7 @@ function loadTargetExpirationMinutes() {
     }
 }
 
+// Persiste no localStorage o tempo de expiração atual.
 function persistTargetExpirationMinutes() {
     if (!targetExpirationMinutesInput) {
         return;
@@ -1695,6 +1737,7 @@ function persistTargetExpirationMinutes() {
     }
 }
 
+// Valida e aplica a mudança do tempo de expiração, reiniciando os timers.
 function onExpirationMinutesChanged(shouldPersist) {
     const minutes = Number(targetExpirationMinutesInput?.value);
     if (!Number.isFinite(minutes) || minutes <= 0) {
@@ -1712,6 +1755,7 @@ if (targetExpirationMinutesInput) {
     targetExpirationMinutesInput.addEventListener('change', () => onExpirationMinutesChanged(true));
 }
 
+// Atualiza o texto e a cor de estado do indicador de conexão.
 function setStatus(text, state) {
     statusDiv.innerText = text;
     statusDiv.classList.remove('connected', 'connecting', 'reconnecting', 'error');
@@ -1720,12 +1764,14 @@ function setStatus(text, state) {
     }
 }
 
+// Coloca a interface no estado "conectando".
 function setConnectingState() {
     connectBtn.disabled = true;
     disconnectBtn.disabled = true;
     setStatus('Conectando...', 'connecting');
 }
 
+// Coloca a interface no estado "conectado" com o nome do usuário.
 function applyConnectedState(username) {
     setStatus(`Conectado a: ${username}`, 'connected');
     connectBtn.style.display = 'none';
@@ -1735,6 +1781,7 @@ function applyConnectedState(username) {
     usernameInput.disabled = true;
 }
 
+// Coloca a interface no estado desconectado/erro e limpa as tabelas.
 function applyDisconnectedState(error) {
     const isUserDisconnect = error === 'Desconectado pelo usuário' || error === 'Servidor encerrado';
     setStatus(isUserDisconnect ? 'Desconectado' : `Erro: ${error}`, isUserDisconnect ? '' : 'error');
@@ -1746,6 +1793,7 @@ function applyDisconnectedState(error) {
     clearTables();
 }
 
+// Limpa as tabelas, timers e históricos da interface.
 function clearTables() {
     userTableBody.innerHTML = '';
     allGiftsTableBody.innerHTML = '';
@@ -1772,6 +1820,7 @@ function clearTables() {
     resetGoalDisplay();
 }
 
+// Trata eventos de status de conexão (conectado, reconectando ou erro).
 function handleConnectionStatus(data) {
     console.log('[Frontend] handleConnectionStatus chamado:', data);
     if (data.success) {
@@ -1794,6 +1843,7 @@ function handleConnectionStatus(data) {
     applyDisconnectedState(data.error || 'Falha ao conectar.');
 }
 
+// Exibe o estado de reconexão automática mantendo as tabelas.
 function applyReconnectingState(retries, nextRetryInMs) {
     const secs = Math.max(0, Math.round((nextRetryInMs || 0) / 1000));
     setStatus(`Reconectando (tentativa ${retries}, em ${secs}s)...`, 'reconnecting');
@@ -1821,6 +1871,7 @@ function giftQueueSortKey(row) {
     };
 }
 
+// Compara duas linhas da fila de presentes seguindo a ordenação da API.
 function compareGiftQueueRows(a, b) {
     const ka = giftQueueSortKey(a);
     const kb = giftQueueSortKey(b);
@@ -1875,6 +1926,7 @@ function reorderGiftQueue() {
     rows.forEach(updateQueueCell);
 }
 
+// Adiciona ou atualiza um presente alvo na fila exibida na tabela.
 function addUserToList(user, options = {}) {
     rememberLiveUser(user);
     if (!options.fromHistory) {
@@ -2012,6 +2064,7 @@ function addUserToList(user, options = {}) {
     reorderGiftQueue();
 }
 
+// Grava o horário de recebimento do presente nos data-attributes da linha.
 function applyTargetGiftReceivedAt(element, receivedAt, fromHistory) {
     if (!receivedAt) {
         return;
@@ -2025,6 +2078,7 @@ function applyTargetGiftReceivedAt(element, receivedAt, fromHistory) {
     }
 }
 
+// Agenda a remoção automática de um presente alvo ao expirar o prazo.
 function startAutoRemoveTimer(uniqueId, giftName, element, options = {}) {
     const refreshStart = options.refreshStart !== false;
     const timerKey = element.dataset.historyId ? `history:${element.dataset.historyId}` : `${uniqueId}-${giftName}`;
@@ -2062,15 +2116,18 @@ function startAutoRemoveTimer(uniqueId, giftName, element, options = {}) {
     }, remainingMs);
 }
 
+// Retorna o tempo de expiração configurado em minutos (padrão 4).
 function getTargetExpirationMinutes() {
     const minutes = Number(targetExpirationMinutesInput?.value);
     return Number.isFinite(minutes) && minutes > 0 ? Math.floor(minutes) : 4;
 }
 
+// Retorna o tempo de expiração em milissegundos.
 function getTargetExpirationMs() {
     return getTargetExpirationMinutes() * 60 * 1000;
 }
 
+// Reprograma os timers de todos os presentes alvo com o prazo atual.
 function resetTargetGiftTimers() {
     Array.from(userTableBody.querySelectorAll('.user-row')).forEach(row => {
         const uniqueId = row.getAttribute('data-id');
@@ -2082,18 +2139,22 @@ function resetTargetGiftTimers() {
     });
 }
 
+// Normaliza o id de usuário para comparação na tabela de presentes.
 function normalizeUserIdForGift(uniqueId) {
     return String(uniqueId || '').toLowerCase();
 }
 
+// Lê e normaliza o nome do presente de uma linha da tabela.
 function normalizedGiftNameInTable(row) {
     return (row.querySelector('.gift-name-cell')?.innerText || '').trim().toLowerCase();
 }
 
+// Normaliza o nome do presente vindo do payload.
 function normalizedGiftNameFromPayload(gift) {
     return String(gift.giftName || '').trim().toLowerCase();
 }
 
+// Localiza na tabela "todos os presentes" a linha de um presente (por id ou nome).
 function findAllGiftsRowForGift(gift) {
     const uid = normalizeUserIdForGift(gift.uniqueId);
     const giftId = gift.giftId != null && gift.giftId !== '' ? String(gift.giftId) : '';
@@ -2110,6 +2171,7 @@ function findAllGiftsRowForGift(gift) {
     });
 }
 
+// Lê a quantidade exibida na célula de contagem de uma linha.
 function getGiftCountFromTableRow(row) {
     const cell = row.querySelector('.gift-count-cell');
     if (!cell) {
@@ -2119,11 +2181,13 @@ function getGiftCountFromTableRow(row) {
     return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
+// Indica se um combo de presentes ainda está em andamento.
 function isGiftStreakInProgress(gift) {
     const v = gift ? gift.repeatEnd : undefined;
     return v === false || v === 0 || v === 'false' || v === '0';
 }
 
+// Lê a quantidade já confirmada (sem o combo em andamento) de uma linha.
 function committedGiftCountFromRow(row) {
     const raw = row.getAttribute('data-committed');
     if (raw == null || raw === '') {
@@ -2133,18 +2197,21 @@ function committedGiftCountFromRow(row) {
     return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
+// Reordena a tabela de presentes pela quantidade (decrescente).
 function reorderAllGiftsTableByCount() {
     const rows = Array.from(allGiftsTableBody.children);
     rows.sort((a, b) => (Number(b.getAttribute('data-count')) || 0) - (Number(a.getAttribute('data-count')) || 0));
     rows.forEach(row => allGiftsTableBody.appendChild(row));
 }
 
+// Limita o número de linhas da tabela de presentes.
 function trimAllGiftsTable(maxRows) {
     while (allGiftsTableBody.children.length > maxRows) {
         allGiftsTableBody.lastElementChild.remove();
     }
 }
 
+// Filtra as linhas da tabela de presentes pelo texto buscado.
 function applyGiftFilter() {
     if (!giftSearchInput) return;
     const filterText = giftSearchInput.value.trim().toLowerCase();
@@ -2164,6 +2231,7 @@ if (giftSearchInput) {
     giftSearchInput.addEventListener('input', applyGiftFilter);
 }
 
+// Adiciona/incrementa um presente recebido na tabela "todos os presentes".
 function addAllGiftToList(gift) {
     giftCount++;
     rememberLiveUser(gift);
@@ -2248,6 +2316,7 @@ function addAllGiftToList(gift) {
     applyGiftFilter();
 }
 
+// Gera uma chave única para identificar um comentário fixado.
 function pinnedCommentKey(pinnedComment) {
     if (pinnedComment.pinId) {
         return `pin:${pinnedComment.pinId}`;
@@ -2258,6 +2327,7 @@ function pinnedCommentKey(pinnedComment) {
     return `${String(pinnedComment.uniqueId || '').toLowerCase()}|${pinnedComment.comment || ''}|${pinnedComment.timestamp || ''}`;
 }
 
+// Adiciona um comentário fixado à tabela com remoção automática.
 function addPinnedCommentToList(pinnedComment, options = {}) {
     rememberLiveUser(pinnedComment);
     if (!options.fromHistory) {
@@ -2316,6 +2386,7 @@ function addPinnedCommentToList(pinnedComment, options = {}) {
     }
 }
 
+// Adiciona uma mensagem sinalizada (infração) à tabela de alertas.
 function addFlaggedMessageToList(data) {
     if (!correlationMessagesTableBody) {
         return;
@@ -2392,6 +2463,7 @@ function addFlaggedMessageToList(data) {
     }
 }
 
+// Trata menção a palavra-chave: marca o usuário e fixa o comentário.
 function handleKeywordMention(data) {
     if (!data) {
         return;
@@ -2410,6 +2482,7 @@ function handleKeywordMention(data) {
     });
 }
 
+// Adiciona/atualiza uma correlação entre presente e pergunta.
 function addCorrelationMessageToList(data) {
     if (!correlationMessagesTableBody) {
         return;
@@ -2471,6 +2544,7 @@ function addCorrelationMessageToList(data) {
     }
 }
 
+// Destaca em vermelho as linhas de um usuário (presentes alvo e recebidos).
 function markUserRed(uniqueId) {
     const targetId = String(uniqueId).toLowerCase();
     const targetRows = document.querySelectorAll('.user-row, .gift-row[data-target-gift="true"]');
@@ -2483,6 +2557,7 @@ function markUserRed(uniqueId) {
     });
 }
 
+// Remove manualmente um presente alvo da fila, marcando-o como respondido.
 function removeUser(uniqueId, giftName, button) {
     const tr = button.closest('.user-row');
     if (tr) {
@@ -2500,6 +2575,7 @@ function removeUser(uniqueId, giftName, button) {
     }
 }
 
+// Carrega o estado inicial (conexão, presentes, pendentes, ranking e metas).
 async function loadInitialState() {
     try {
         const response = await fetch('/api/state');
@@ -2525,6 +2601,7 @@ async function loadInitialState() {
     }
 }
 
+// Assina todos os eventos SSE do servidor e liga seus handlers.
 function setupEventStream() {
     const eventSource = window.TLMAuth
         ? window.TLMAuth.createEventStream()
@@ -2666,6 +2743,7 @@ function setupEventStream() {
 }
 
 // --- Ranking Inteligente ---
+// Retorna a classe CSS do badge conforme o nível de risco.
 function riskBadgeClass(level) {
     const map = {
         'none': 'risk-none',
@@ -2677,6 +2755,7 @@ function riskBadgeClass(level) {
     return map[level] || 'risk-none';
 }
 
+// Retorna o rótulo traduzido do nível de risco.
 function riskLabel(level) {
     const map = {
         'none': 'Nenhum',
@@ -2688,6 +2767,7 @@ function riskLabel(level) {
     return map[level] || (level || 'Nenhum');
 }
 
+// Busca e renderiza o ranking no modo atual.
 async function loadRanking() {
     if (!rankingTableBody) return;
     try {
@@ -2707,6 +2787,7 @@ const TIKTOK_TIER_ICONS = {
     medal:    { icon: '🏅', cls: 'rank-top-3', label: 'Medalha do Ranking (3º lugar)' }
 };
 
+// Renderiza a tabela de ranking (engajamento ou TikTok).
 function renderRanking(ranking) {
     if (!rankingTableBody) return;
     rankingTableBody.innerHTML = '';
@@ -2837,6 +2918,7 @@ function renderRanking(ranking) {
 }
 
 // --- Relatório Pós-Live ---
+// Solicita e renderiza o relatório pós-live.
 async function loadReport() {
     if (!generateReportBtn) return;
     generateReportBtn.disabled = true;
@@ -2867,6 +2949,7 @@ async function loadReport() {
     }
 }
 
+// Monta o resumo e o texto do relatório pós-live.
 function renderReport(report) {
     if (!reportSummary) return;
     reportSummary.innerHTML = '';
@@ -2887,6 +2970,7 @@ function renderReport(report) {
     reportText.textContent = report.summary || 'Relatório indisponível.';
 }
 
+// Escapa caracteres HTML para inserção segura.
 function escapeHtml(value) {
     return String(value)
         .replace(/&/g, '&')
@@ -2894,6 +2978,7 @@ function escapeHtml(value) {
         .replace(/>/g, '>');
 }
 
+// Garante a visibilidade da seção "todos os presentes".
 function updateAllGiftsVisibility() {
     if (!allGiftsSection || !allGiftsTableContainer) return;
     // Sempre manter a tabela de todos os presentes visível,
@@ -2902,6 +2987,7 @@ function updateAllGiftsVisibility() {
     allGiftsTableContainer.style.display = '';
 }
 
+// Renderiza os chips de presentes alvo e alterna fura fila ao clique.
 function renderTargetGifts() {
     if (!targetGiftsList) return;
     targetGiftsList.innerHTML = '';
@@ -2938,6 +3024,7 @@ function renderTargetGifts() {
         .catch(() => {});
 }
 
+// Remove um presente alvo das configurações.
 async function removeTargetGift(giftToRemove) {
     console.log('Removing target gift:', giftToRemove);
     try {
@@ -2992,6 +3079,7 @@ async function toggleTargetGiftPriority(giftName) {
     }
 }
 
+// Carrega a lista de presentes disponíveis e preenche os selects.
 async function loadAvailableGifts() {
     if (!availableGiftSelect) return;
     try {
@@ -3004,6 +3092,7 @@ async function loadAvailableGifts() {
     }
 }
 
+// Define o valor de um select, criando uma opção dinâmica se necessário.
 function setSelectValue(el, value) {
     const target = value ? String(value) : '';
     el.querySelectorAll('option[data-dynamic]').forEach(o => o.remove());
@@ -3017,6 +3106,7 @@ function setSelectValue(el, value) {
     el.value = target;
 }
 
+// Preenche os selects de presentes (alvo, meta e recompensas) com opções traduzidas.
 function populateAvailableGifts(gifts) {
     if (!Array.isArray(gifts) || gifts.length === 0) {
         return;
@@ -3092,6 +3182,7 @@ async function loadAllGifts() {
     }
 }
 
+// Restaura da API os presentes alvo pendentes na fila.
 async function loadPendingTargetGifts() {
     if (!userTableBody) {
         return;
@@ -3126,6 +3217,7 @@ async function loadPendingTargetGifts() {
     }
 }
 
+// Busca na API os comentários fixados.
 async function loadPinnedCommentsFromApi() {
     try {
         const response = await fetch('/api/pinned-comments?limit=50');
@@ -3140,6 +3232,7 @@ async function loadPinnedCommentsFromApi() {
     }
 }
 
+// Restaura os comentários fixados do banco na tabela.
 async function loadPinnedComments() {
     if (!pinnedCommentsTableBody) {
         return;
@@ -3155,6 +3248,7 @@ async function loadPinnedComments() {
     }
 }
 
+// Adiciona um presente alvo às configurações com a quantidade informada.
 async function addTargetGift() {
     if (isAddingTargetGift) return;
     isAddingTargetGift = true;
@@ -3204,6 +3298,7 @@ addTargetGiftBtn.addEventListener('click', addTargetGift);
 let currentGoalId = 0;
 let goalToastTimer = null;
 
+// Exibe um toast temporário de aviso de meta.
 function showGoalToast(message) {
     let toast = document.getElementById('goalToast');
     if (!toast) {
@@ -3218,11 +3313,13 @@ function showGoalToast(message) {
     goalToastTimer = setTimeout(() => toast.classList.remove('show'), 6000);
 }
 
+// Atualiza os botões do formulário de metas conforme edição/criação.
 function updateGoalButtons() {
     if (goalSaveBtn) goalSaveBtn.textContent = currentGoalId ? 'Atualizar' : 'Salvar';
     if (goalResetBtn) goalResetBtn.hidden = !currentGoalId;
 }
 
+// Monta o texto de progresso (unidades / alvo) de uma meta.
 function goalUnitsText(goal, units) {
     const giftName = (goal && goal.giftName) || '';
     const target = (goal && goal.targetUnits) || 0;
@@ -3231,6 +3328,7 @@ function goalUnitsText(goal, units) {
         : `${units} / ${target} unidades`;
 }
 
+// Cria a linha visual de um marco (milestone) de meta.
 function buildMilestoneRow(m) {
     const row = document.createElement('div');
     row.className = 'goal-milestone' + (m.unlocked ? ' unlocked' : '');
@@ -3247,6 +3345,7 @@ function buildMilestoneRow(m) {
     return row;
 }
 
+// Cria o card visual de uma meta ativa com progresso e marcos.
 function buildGoalCard(progress) {
     const goal = progress.goal;
     const pct = Math.max(0, Math.min(100, progress.percent || 0));
@@ -3301,12 +3400,14 @@ function buildGoalCard(progress) {
     return card;
 }
 
+// Renderiza a lista de metas ativas.
 function renderActivesList(actives) {
     if (!goalActivesList) return;
     goalActivesList.innerHTML = '';
     (actives || []).forEach(progress => goalActivesList.appendChild(buildGoalCard(progress)));
 }
 
+// Atualiza um card de meta existente com o progresso recebido.
 function updateGoalCard(card, progress) {
     const goal = progress.goal;
     const pct = Math.max(0, Math.min(100, progress.percent || 0));
@@ -3320,11 +3421,13 @@ function updateGoalCard(card, progress) {
     ((goal.milestones) || []).forEach(m => card.appendChild(buildMilestoneRow(m)));
 }
 
+// Localiza o card de meta pelo id.
 function findGoalCard(goalId) {
     if (!goalActivesList || !goalId) return null;
     return goalActivesList.querySelector(`.goal-active-card[data-goal-id="${goalId}"]`);
 }
 
+// Preenche o formulário de metas para editar uma meta existente.
 function fillGoalForm(goal) {
     currentGoalId = goal ? goal.id : 0;
     if (goalTitleInput) goalTitleInput.value = goal ? goal.title : '';
@@ -3341,6 +3444,7 @@ function fillGoalForm(goal) {
     updateGoalButtons();
 }
 
+// Limpa o formulário de metas para criação.
 function resetGoalForm() {
     currentGoalId = 0;
     if (goalTitleInput) goalTitleInput.value = '';
@@ -3355,12 +3459,14 @@ function resetGoalForm() {
     updateGoalButtons();
 }
 
+// Reseta o formulário, as metas ativas e o histórico exibidos.
 function resetGoalDisplay() {
     resetGoalForm();
     renderActivesList([]);
     renderGoalHistory([]);
 }
 
+// Coleta e valida os marcos preenchidos no formulário.
 function collectMilestones() {
     return goalMilestoneRows.map(row => {
         const rawUnits = parseInt(row.querySelector('.goal-ms-units').value, 10);
@@ -3372,6 +3478,7 @@ function collectMilestones() {
     }).filter(m => m.atUnits > 0 || m.reward !== '');
 }
 
+// Renderiza o histórico de metas concluídas/canceladas.
 function renderGoalHistory(history) {
     if (!goalHistoryList || !goalHistoryWrap) return;
     goalHistoryList.innerHTML = '';
@@ -3399,6 +3506,7 @@ function renderGoalHistory(history) {
     });
 }
 
+// Busca e renderiza as metas ativas e o histórico.
 async function loadGoals() {
     try {
         const response = await fetch('/api/goals');
@@ -3417,6 +3525,7 @@ async function loadGoals() {
     }
 }
 
+// Valida e salva (cria ou atualiza) uma meta.
 async function saveGoal() {
     const title = goalTitleInput ? goalTitleInput.value.trim() : '';
     const giftName = goalGiftSelect ? goalGiftSelect.value.trim() : '';
@@ -3462,6 +3571,7 @@ async function saveGoal() {
     }
 }
 
+// Cancela uma meta após confirmação.
 async function cancelGoal(goalId) {
     if (!goalId) return;
     if (!confirm('Cancelar a meta?')) return;
@@ -3480,6 +3590,7 @@ async function cancelGoal(goalId) {
     }
 }
 
+// Conclui uma meta manualmente após confirmação.
 async function completeGoal(goalId) {
     if (!goalId) return;
     if (!confirm('Concluir a meta agora?')) return;
@@ -3504,6 +3615,7 @@ updateGoalButtons();
 
 // --- Administração: assinantes ---
 
+// Formata a data de validade de um assinante.
 function formatSubscriberExpiry(value) {
     if (!value) return '—';
     const date = new Date(value);
@@ -3511,6 +3623,7 @@ function formatSubscriberExpiry(value) {
     return date.toLocaleString('pt-BR');
 }
 
+// Renderiza a tabela de assinantes (excluindo admins).
 function renderAdminUsers(users) {
     if (!adminUsersTableBody) return;
     adminUsersTableBody.innerHTML = '';
@@ -3541,6 +3654,7 @@ function renderAdminUsers(users) {
     });
 }
 
+// Busca na API e renderiza a lista de assinantes.
 async function loadAdminUsers() {
     if (!adminUsersTableBody) return;
     try {
@@ -3557,6 +3671,7 @@ async function loadAdminUsers() {
     }
 }
 
+// Cria um novo assinante a partir do formulário.
 async function createAdminUser() {
     const email = document.getElementById('newSubscriberEmail')?.value || '';
     const password = document.getElementById('newSubscriberPassword')?.value || '';
@@ -3588,6 +3703,7 @@ async function createAdminUser() {
     }
 }
 
+// Ativa/suspende um assinante.
 async function toggleAdminUser(user) {
     try {
         const response = await fetch('/api/admin/users/update', {
@@ -3605,6 +3721,7 @@ async function toggleAdminUser(user) {
     }
 }
 
+// Remove um assinante após confirmação.
 async function deleteAdminUser(user) {
     if (!confirm(`Remover o assinante ${user.email}?`)) return;
     try {
@@ -3621,6 +3738,7 @@ async function deleteAdminUser(user) {
     }
 }
 
+// Ajusta a interface conforme sessão e papel (admin) do usuário.
 function setupAuthUI(user) {
     if (window.TLMAuth && window.TLMAuth.getAccessToken()) {
         if (authUserBar) authUserBar.style.display = 'flex';
@@ -3649,6 +3767,7 @@ if (adminPageBtn) {
 
 // --- Administração: lives e horários ---
 
+// Formata data/hora para as tabelas de administração.
 function formatAdminTime(value) {
     if (!value) return '—';
     const date = new Date(value);
@@ -3656,6 +3775,7 @@ function formatAdminTime(value) {
     return date.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
+// Calcula e formata a duração entre início e fim de uma live.
 function formatAdminDuration(startedAt, endedAt) {
     const start = new Date(startedAt).getTime();
     const end = new Date(endedAt).getTime();
@@ -3667,6 +3787,7 @@ function formatAdminDuration(startedAt, endedAt) {
     return `${hours}h ${rest}min`;
 }
 
+// Renderiza a tabela de lives registradas na administração.
 function renderAdminLives(lives) {
     if (!adminLivesTableBody) return;
     adminLivesTableBody.innerHTML = '';
@@ -3692,6 +3813,7 @@ function renderAdminLives(lives) {
     });
 }
 
+// Busca e renderiza as lives da administração conforme o limite.
 async function loadAdminLives() {
     if (!adminLivesTableBody) return;
     try {
@@ -3723,6 +3845,7 @@ if (adminLivesRefreshBtn) {
     });
 }
 
+// Abre o modal de confirmação de exclusão de uma live.
 function openDeleteLiveModal(liveName) {
     deleteLivePending = liveName;
     deleteLiveModalMessage.textContent = `Deletar TODOS os dados da live "${liveName}" do banco? Essa ação não pode ser desfeita.`;
@@ -3730,12 +3853,14 @@ function openDeleteLiveModal(liveName) {
     deleteLiveModalBackdrop.setAttribute('aria-hidden', 'false');
 }
 
+// Fecha o modal de exclusão de live.
 function closeDeleteLiveModal() {
     deleteLivePending = null;
     deleteLiveModalBackdrop.classList.remove('is-open');
     deleteLiveModalBackdrop.setAttribute('aria-hidden', 'true');
 }
 
+// Inicia a exclusão de uma live (abre confirmação).
 function deleteAdminLive(liveName) {
     if (!liveName || liveName === '—') return;
     openDeleteLiveModal(liveName);
@@ -3782,6 +3907,7 @@ if (adminLivesMoreBtn) {
     });
 }
 
+// Inicializa a aplicação (auth, gráfico, estado inicial, SSE e admin).
 async function bootstrap() {
     const user = await window.TLMAuth.requireSession();
     window.fetch = (input, init) => window.TLMAuth.authFetch(input, init);
@@ -3821,6 +3947,7 @@ void bootstrap();
 // ============================================================
 const searchableSelectWidgets = [];
 
+// Transforma todos os <select> da página em comboboxes pesquisáveis.
 function initSearchableSelects() {
     document.querySelectorAll('select').forEach(select => {
         if (select.dataset.ssWrapped) return;
@@ -3855,8 +3982,10 @@ function initSearchableSelects() {
             sync() { if (document.activeElement !== input) syncInput(); }
         };
 
+        // Retorna as linhas de opção visíveis no menu.
         const visibleRows = () => Array.from(menu.querySelectorAll('.ss-option'));
 
+        // Retorna a <option> atualmente selecionada no select original.
         function currentOption() {
             for (const o of select.options) {
                 if (o.value === select.value) return o;
@@ -3865,6 +3994,7 @@ function initSearchableSelects() {
         }
 
         // Mantém o texto do input em sincronia com o valor atual do select.
+        // Sincroniza o texto do input com o valor selecionado no select.
         function syncInput() {
             const chosen = currentOption();
             if (chosen && select.value !== '') {
@@ -3877,6 +4007,7 @@ function initSearchableSelects() {
 
         // Reconstrói a lista, filtrando pelo texto digitado (busca tanto no
         // rótulo quanto no value, ex.: "soccer" acha "Futebol (Soccer)").
+        // Reconstrói a lista de opções filtrando pelo texto digitado.
         function rebuildMenu() {
             menu.innerHTML = '';
             const query = input.value.trim().toLowerCase();
@@ -3908,6 +4039,7 @@ function initSearchableSelects() {
             setActive(query || idx < 0 ? 0 : idx);
         }
 
+        // Define e destaca a opção ativa na navegação por teclado.
         function setActive(i) {
             const rows = visibleRows();
             state.active = rows.length ? Math.min(Math.max(i, 0), rows.length - 1) : -1;
@@ -3916,6 +4048,7 @@ function initSearchableSelects() {
             if (activeRow) activeRow.scrollIntoView({ block: 'nearest' });
         }
 
+        // Abre a lista de opções.
         function openMenu() {
             state.open = true;
             menu.hidden = false;
@@ -3929,12 +4062,14 @@ function initSearchableSelects() {
             input.focus();
         }
 
+        // Fecha a lista de opções e restaura o texto selecionado.
         function closeMenu() {
             state.open = false;
             menu.hidden = true;
             syncInput(); // devolve o texto ao valor selecionado
         }
 
+        // Seleciona uma opção no select original e atualiza o input.
         function choose(value) {
             select.value = value;
             widget.lastValue = value;
