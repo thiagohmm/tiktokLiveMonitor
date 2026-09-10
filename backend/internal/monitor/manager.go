@@ -66,6 +66,11 @@ func (m *Manager) StartMonitoring(ctx context.Context, username string) error {
 	monitor.OnEvent(func(eventType string, data EventData) {
 		payload := cloneEventData(data)
 		payload["liveName"] = username
+		// O id da sessão viaja com o evento: é o que permite gravar cada linha
+		// na live certa e depois apagar só aquela live.
+		if id := monitor.CurrentLiveID(); id != "" {
+			payload["liveId"] = id
+		}
 		m.emit(eventType, payload)
 	})
 	m.monitors[username] = monitor

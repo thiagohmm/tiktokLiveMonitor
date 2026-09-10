@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+
+	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 )
 
 // rebindQuery converts '?' placeholders into PostgreSQL '$n' parameters,
@@ -71,14 +73,15 @@ func (db *DB) insertID(query string, args ...any) (int64, error) {
 	return id, nil
 }
 
-// upsertRoomLikeTotal keeps the highest like total of a live.
-func (db *DB) upsertRoomLikeTotal(liveName string, total int64) error {
+// upsertRoomLikeTotal keeps the highest like total of a session.
+func (db *DB) upsertRoomLikeTotal(ref model.LiveRef, total int64) error {
 	_, err := db.exec(
-		`INSERT INTO room_like_totals (live_name, total, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
-		 ON CONFLICT (live_name) DO UPDATE SET
+		`INSERT INTO room_like_totals (live_id, live_name, total, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+		 ON CONFLICT (live_id) DO UPDATE SET
 			total = GREATEST(room_like_totals.total, EXCLUDED.total),
+			live_name = EXCLUDED.live_name,
 			updated_at = CURRENT_TIMESTAMP`,
-		liveName, total,
+		ref.ID, strings.TrimSpace(ref.Name), total,
 	)
 	return err
 }

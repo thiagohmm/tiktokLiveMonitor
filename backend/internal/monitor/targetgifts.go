@@ -37,6 +37,9 @@ func (m *Monitor) targetGiftPriority(giftName string) bool {
 func (m *Monitor) setCurrentLiveLocked(username string) {
 	if normalizeID(m.currentUsername) != normalizeID(username) {
 		m.targetGiftProgress = nil
+		// O id da sessão anterior pertence a outro streamer: não pode vazar
+		// para as escritas da nova live.
+		m.liveID = ""
 	}
 	m.currentUsername = username
 }

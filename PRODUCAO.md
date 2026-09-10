@@ -94,8 +94,34 @@ proxy para o backend no Railway. Por isso o frontend não precisa de CORS.
 
 - Projeto `https://vcbvctmhwnurdnfssjfj.supabase.co` hospeda o PostgreSQL
   (acessado pelo backend via pooler em `DATABASE_URL`) e o Auth (e-mail/senha).
-- A migração `supabase/migrations/001_profiles.sql` foi aplicada manualmente
-  no SQL Editor (não há CI de migração — mudanças no banco são manuais).
+- As migrações são aplicadas manualmente no SQL Editor (não há CI de migração).
+  Situação das migrações operacionais:
+
+  | Arquivo | O que faz |
+  |---|---|
+  | `001_profiles.sql` | profiles + promoção do admin (manual) |
+  | `002_rls_operational_tables.sql` | RLS default deny nas tabelas operacionais |
+  | `003_target_gift_priority.sql` | prioridade da fila de presentes alvos |
+  | `004_live_sessions.sql` | **id de sessão por live** (migration 004) |
+  | `004_live_sessions_rollback.sql` | rollback do **schema** da 004 |
+
+- **Deploy da 004 (`live_sessions`) — ordem obrigatória:**
+  1. backup do Supabase antes de tudo;
+  2. aplicar `004_live_sessions.sql` no SQL Editor (idempotente, roda com a
+     aplicação no ar: só cria tabela/colunas e revoga grants);
+  3. publicar o backend — no boot, `migratePostgres()` roda o backfill (em lotes),
+     cria os índices com `CREATE INDEX CONCURRENTLY` e aplica `NOT NULL`/PK com
+     lock curto;
+  4. conferir: `select count(*) from public.gifts where live_id is null;` → `0`;
+  5. publicar o frontend (`npx vercel --prod`).
+
+- **Rollback:** depois do passo 3 as colunas `live_id` ficam `NOT NULL`, e o
+  binário anterior não cita `live_id` nos `INSERT`s. Reverter o backend exige
+  rodar `supabase/migrations/004_live_sessions_rollback.sql` **junto** (ele
+  libera o `NOT NULL` e devolve a PK de `room_like_totals` para `live_name`, que o
+  `ON CONFLICT (live_name)` antigo precisa). Sem isso, o rollback do app quebra
+  toda a ingestão de eventos. Não há rollback automático de schema.
+
 - O backend valida os tokens consultando a API Auth do Supabase
   (`SUPABASE_JWT_SECRET` vazio). A `SUPABASE_SERVICE_ROLE_KEY` é usada
   somente pelo backend (admin); nunca vai para o navegador/Vercel.

@@ -40,8 +40,11 @@ func (db *DB) GetFalsePositiveComments(limit int) ([]string, error) {
 	return out, rows.Err()
 }
 
-// LogAnomaly records a moderation decision.
-func (db *DB) LogAnomaly(liveName, comment string, isAnomaly bool, category, uniqueID string) error {
+// LogAnomaly records a moderation decision for one session.
+func (db *DB) LogAnomaly(ref model.LiveRef, comment string, isAnomaly bool, category, uniqueID string) error {
+	if !ref.Valid() {
+		return model.ErrInvalidID
+	}
 	now := time.Now()
 	day := now.UTC().Format("2006-01-02")
 
@@ -49,9 +52,9 @@ func (db *DB) LogAnomaly(liveName, comment string, isAnomaly bool, category, uni
 	defer db.mu.Unlock()
 
 	_, err := db.exec(
-		`INSERT INTO anomaly_logs (live_name, day, uniqueId, comment, is_anomaly, category)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		liveName, day, uniqueID, comment, isAnomaly, category,
+		`INSERT INTO anomaly_logs (live_id, live_name, day, uniqueId, comment, is_anomaly, category)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		ref.ID, strings.TrimSpace(ref.Name), day, uniqueID, comment, isAnomaly, category,
 	)
 	if err != nil {
 		return fmt.Errorf("insert anomaly: %w", err)
@@ -194,20 +197,25 @@ func (db *DB) CleanupOldAnomalies() (int64, error) {
 	return result.RowsAffected()
 }
 
-// GetTodayAnomalyLogs returns anomaly logs from today for the given live name.
-func (db *DB) GetTodayAnomalyLogs(liveName string) ([]model.AnomalyLog, error) {
+// GetSessionAnomalyLogs returns the anomaly logs of one session, in
+// chronological order. Used to restore pinned users on reconnect.
+func (db *DB) GetSessionAnomalyLogs(liveID string) ([]model.AnomalyLog, error) {
+	liveID = strings.TrimSpace(liveID)
+	if liveID == "" {
+		return []model.AnomalyLog{}, nil
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	rows, err := db.query(
 		`SELECT id, live_name, day, timestamp, uniqueId, comment, is_anomaly, category
 		 FROM anomaly_logs
-		 WHERE day = date('now') AND live_name = ?
+		 WHERE live_id = ?
 		 ORDER BY timestamp ASC`,
-		liveName,
+		liveID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("query today anomaly logs: %w", err)
+		return nil, fmt.Errorf("query session anomaly logs: %w", err)
 	}
 	defer closeRows(rows)
 

@@ -8,14 +8,17 @@ import (
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 )
 
-// AddGift stores a gift received during a live stream.
-func (db *DB) AddGift(liveName, uniqueID, nickname, giftName string, repeatCount, giftType int) (int64, error) {
+// AddGift stores a gift received during a live stream (one session).
+func (db *DB) AddGift(ref model.LiveRef, uniqueID, nickname, giftName string, repeatCount, giftType int) (int64, error) {
+	if !ref.Valid() {
+		return 0, model.ErrInvalidID
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	result, err := db.insertID(
-		"INSERT INTO gifts (live_name, uniqueId, nickname, gift_name, repeat_count, gift_type) VALUES (?, ?, ?, ?, ?, ?)",
-		liveName, uniqueID, nickname, giftName, repeatCount, giftType,
+		"INSERT INTO gifts (live_id, live_name, uniqueId, nickname, gift_name, repeat_count, gift_type) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		ref.ID, strings.TrimSpace(ref.Name), uniqueID, nickname, giftName, repeatCount, giftType,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert gift: %w", err)
@@ -123,16 +126,22 @@ func (db *DB) ClearGifts() (int64, error) {
 	return result.RowsAffected()
 }
 
-// GetGiftUnits returns the total gift units (SUM repeat_count) and the
-// number of gift events recorded for a live. When no gift names are given
-// (or only empty strings), all gifts count; otherwise only events whose
-// gift_name matches one of the given names count.
-func (db *DB) GetGiftUnits(liveName string, giftNames ...string) (units, count int, err error) {
+// GetGiftUnits returns the total gift units (SUM repeat_count) and the number
+// of gift events recorded for one session. When no gift names are given (or only
+// empty strings), all gifts count; otherwise only events whose gift_name matches
+// one of the given names count.
+//
+// Scoped to the session: a goal belongs to the live it was created in, so its
+// progress must not count gifts from other sessions of the same streamer.
+func (db *DB) GetGiftUnits(ref model.LiveRef, giftNames ...string) (units, count int, err error) {
+	if !ref.Valid() {
+		return 0, 0, model.ErrInvalidID
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	query := "SELECT COALESCE(SUM(repeat_count), 0), COUNT(*) FROM gifts WHERE live_name = ?"
-	args := []interface{}{liveName}
+	query := "SELECT COALESCE(SUM(repeat_count), 0), COUNT(*) FROM gifts WHERE live_id = ?"
+	args := []interface{}{ref.ID}
 	seen := make(map[string]bool)
 	for _, name := range giftNames {
 		if name == "" || seen[name] {

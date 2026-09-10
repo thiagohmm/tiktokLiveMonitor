@@ -43,6 +43,19 @@
         return `${Math.floor(minutes / 60)}h ${minutes % 60}min`;
     }
 
+    // Datas de sessão (YYYY-MM-DD) em pt-BR; sem Date() para não deslocar o dia
+    // por fuso horário.
+    function formatDay(day) {
+        const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day || ''));
+        return match ? `${match[3]}/${match[2]}/${match[1]}` : (day || '—');
+    }
+
+    // Parâmetros do delete: o id seleciona a sessão; live e day são a trava de
+    // segurança do backend (409 se não baterem com a sessão).
+    function sessionDeleteParams(live) {
+        return new URLSearchParams({ id: live.id, live: live.name || '', day: live.day || '' }).toString();
+    }
+
     function actionButton(label, className, handler) {
         const button = document.createElement('button');
         button.type = 'button';
@@ -185,7 +198,7 @@
             cell(row, formatDuration(live.startedAt, live.endedAt));
             cell(row, live.events || 0);
             const actions = document.createElement('td');
-            actions.appendChild(actionButton('Deletar', 'danger', () => deleteLive(live.name)));
+            actions.appendChild(actionButton('Deletar', 'danger', () => deleteLive(live)));
             row.appendChild(actions);
             livesBody.appendChild(row);
         });
@@ -199,10 +212,11 @@
         }
     }
 
-    async function deleteLive(name) {
-        if (!confirm(`Deletar todos os dados da live "${name}"?`)) return;
+    async function deleteLive(live) {
+        if (!live || !live.id) return;
+        if (!confirm(`Deletar os dados da live "${live.name}" do dia ${formatDay(live.day)}? Essa ação não pode ser desfeita.`)) return;
         try {
-            await api('/api/admin/lives/delete?live=' + encodeURIComponent(name), { method: 'POST' });
+            await api('/api/admin/lives/session/delete?' + sessionDeleteParams(live), { method: 'POST' });
             showMessage('Live removida.', 'success');
             await loadLives();
         } catch (error) {

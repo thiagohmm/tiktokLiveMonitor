@@ -85,6 +85,7 @@ type Settings struct {
 type State struct {
 	Connected         bool     `json:"connected"`
 	Username          string   `json:"username"`
+	LiveID            string   `json:"liveId,omitempty"`
 	Settings          Settings `json:"settings"`
 	ReconnectAttempts int      `json:"reconnectAttempts,omitempty"`
 }
@@ -122,6 +123,8 @@ type Monitor struct {
 	stdin           io.WriteCloser
 	stdout          io.ReadCloser
 	currentUsername string
+	liveID          string
+	liveTouchAt     time.Time
 	chatBuffer      []ChatMessage
 	questionBuffer  []QuestionEntry
 	pinnedUsers     map[string]bool
@@ -179,6 +182,7 @@ func (m *Monitor) GetState() State {
 	return State{
 		Connected:         m.connected,
 		Username:          m.currentUsername,
+		LiveID:            m.liveID,
 		Settings:          m.settings,
 		ReconnectAttempts: m.reconnectAttempts,
 	}
@@ -216,6 +220,14 @@ func (m *Monitor) SetCurrentLive(username string) {
 	m.setCurrentLiveLocked(username)
 }
 
+// CurrentLiveID returns the id of the session currently being monitored, or
+// empty when no session is open.
+func (m *Monitor) CurrentLiveID() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.liveID
+}
+
 func (m *Monitor) StartMonitoring(ctx context.Context, username string) error {
 	m.mu.Lock()
 	m.userStopped = false
@@ -248,7 +260,7 @@ func (m *Monitor) StartMonitoring(ctx context.Context, username string) error {
 	m.mu.Unlock()
 
 	if m.repo != nil {
-		m.restoreOrPurgeSessionData()
+		m.beginOrResumeSession()
 	}
 
 	return m.sendBridge(map[string]interface{}{
@@ -262,6 +274,7 @@ func (m *Monitor) StartMonitoring(ctx context.Context, username string) error {
 func (m *Monitor) Close() {
 	m.stopSupervisor()
 	m.stopBridge()
+	m.endCurrentSession()
 }
 
 func (m *Monitor) StopMonitoring() {
@@ -285,6 +298,7 @@ func (m *Monitor) StopMonitoring() {
 		"success": false,
 		"error":   "Desconectado pelo usuário",
 	})
+	m.endCurrentSession()
 }
 
 // Emit dispatches an event to all registered handlers. It is exported so the
@@ -296,10 +310,28 @@ func (m *Monitor) Emit(eventType string, data EventData) {
 func (m *Monitor) emit(eventType string, data EventData) {
 	m.mu.Lock()
 	handlers := append([]EventHandler(nil), m.handlers...)
+	liveID := m.liveID
 	m.mu.Unlock()
+
+	// Every event carries its session id. Without it the controller would have
+	// to resolve the session from the streamer name on each event — a database
+	// lookup per chat message. The payload is copied instead of mutated so
+	// callers can keep sharing their map.
+	if liveID != "" {
+		if _, exists := data["liveId"]; !exists {
+			enriched := make(EventData, len(data)+1)
+			for k, v := range data {
+				enriched[k] = v
+			}
+			enriched["liveId"] = liveID
+			data = enriched
+		}
+	}
+
 	for _, h := range handlers {
 		h(eventType, data)
 	}
+	m.touchSession()
 }
 
 func (m *Monitor) pruneQuestions(now int64) {

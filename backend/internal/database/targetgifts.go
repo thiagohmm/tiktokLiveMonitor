@@ -12,7 +12,10 @@ import (
 // priority is true ("fura fila" por tipo de presente), the entry is inserted
 // already promoted: is_priority=TRUE and priority_at=received_at, so it joins
 // the queue head in FIFO order among jumpers.
-func (db *DB) AddTargetGiftHistory(liveName, uniqueID, nickname, giftName string, receivedAt time.Time, priority bool) (int64, error) {
+func (db *DB) AddTargetGiftHistory(ref model.LiveRef, uniqueID, nickname, giftName string, receivedAt time.Time, priority bool) (int64, error) {
+	if !ref.Valid() {
+		return 0, model.ErrInvalidID
+	}
 	if receivedAt.IsZero() {
 		receivedAt = time.Now()
 	}
@@ -25,9 +28,9 @@ func (db *DB) AddTargetGiftHistory(liveName, uniqueID, nickname, giftName string
 	}
 	id, err := db.insertID(
 		`INSERT INTO target_gift_history
-			(live_name, uniqueId, nickname, gift_name, received_at, is_priority, priority_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		liveName, uniqueID, nickname, giftName, receivedAt.UTC().Format(time.RFC3339Nano), priority, priorityAt,
+			(live_id, live_name, uniqueId, nickname, gift_name, received_at, is_priority, priority_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		ref.ID, strings.TrimSpace(ref.Name), uniqueID, nickname, giftName, receivedAt.UTC().Format(time.RFC3339Nano), priority, priorityAt,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert target gift history: %w", err)

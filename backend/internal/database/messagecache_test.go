@@ -13,12 +13,12 @@ func TestMessageCacheAddAndFlush(t *testing.T) {
 
 	// 15 unique messages from user A -> only the 10 most recent survive.
 	for i := 0; i < 15; i++ {
-		cache.Add("live1", "userA", "nickA", fmt.Sprintf("message %d", i))
+		cache.Add(testRef("live1"), "userA", "nickA", fmt.Sprintf("message %d", i))
 		time.Sleep(time.Millisecond) // ensure increasing timestamps
 	}
 	// 3 unique messages from user B.
 	for i := 0; i < 3; i++ {
-		cache.Add("live1", "userB", "nickB", fmt.Sprintf("question %d", i))
+		cache.Add(testRef("live1"), "userB", "nickB", fmt.Sprintf("question %d", i))
 	}
 
 	if got := cache.pendingLen(); got != 13 {
@@ -62,9 +62,9 @@ func TestMessageCacheDedup(t *testing.T) {
 	db := openTestDB(t)
 	cache := NewMessageCache(db)
 
-	cache.Add("live1", "userA", "nickA", "same message")
-	cache.Add("live1", "USERA", "nickA", "  SAME MESSAGE  ") // case/whitespace insensitive
-	cache.Add("live1", "userA", "nickA", "")                 // ignored
+	cache.Add(testRef("live1"), "userA", "nickA", "same message")
+	cache.Add(testRef("live1"), "USERA", "nickA", "  SAME MESSAGE  ") // case/whitespace insensitive
+	cache.Add(testRef("live1"), "userA", "nickA", "")                 // ignored
 
 	if got := cache.pendingLen(); got != 1 {
 		t.Fatalf("expected 1 buffered message, got %d", got)
@@ -84,7 +84,7 @@ func TestMessageCacheFlushIdempotent(t *testing.T) {
 	db := openTestDB(t)
 	cache := NewMessageCache(db)
 
-	cache.Add("live1", "userA", "nickA", "hello")
+	cache.Add(testRef("live1"), "userA", "nickA", "hello")
 	cache.Flush()
 	cache.Flush() // second flush is a no-op
 
@@ -104,7 +104,7 @@ func TestMessageCacheStopFlushesRemaining(t *testing.T) {
 	cache.Start()
 	defer cache.Stop()
 
-	cache.Add("live1", "userA", "nickA", "pending message")
+	cache.Add(testRef("live1"), "userA", "nickA", "pending message")
 	cache.Stop()
 
 	msgs, err := db.GetUserMessages("userA")
@@ -127,7 +127,7 @@ func TestMessageCacheConcurrentAdd(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < 50; i++ {
 				// 5 unique messages per goroutine/user pair.
-				cache.Add("live1", fmt.Sprintf("user%d", g), fmt.Sprintf("nick%d", g), fmt.Sprintf("msg %d", i%5))
+				cache.Add(testRef("live1"), fmt.Sprintf("user%d", g), fmt.Sprintf("nick%d", g), fmt.Sprintf("msg %d", i%5))
 			}
 		}(g)
 	}
@@ -158,7 +158,7 @@ func TestMessageCacheAsyncFlush(t *testing.T) {
 	cache.Start()
 	defer cache.Stop()
 
-	cache.Add("live1", "userA", "nickA", "async hello")
+	cache.Add(testRef("live1"), "userA", "nickA", "async hello")
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {

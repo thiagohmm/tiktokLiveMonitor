@@ -71,8 +71,9 @@ sseWriteTimeout      = 5s      // deadline por escrita
 | `/api/goals` | GET/POST | metas (ler/criar/atualizar) | Sim |
 | `/api/goals/cancel` | POST | cancelar meta (`?id=`) | Sim |
 | `/api/goals/complete` | POST | completar meta (`?id=`) | Sim |
-| `/api/admin/lives` | GET | listar lives | Sim + admin |
-| `/api/admin/lives/delete` | POST | apagar live | Sim + admin |
+| `/api/admin/lives` | GET | listar lives (uma linha por sessão, com `id`) | Sim + admin |
+| `/api/admin/lives/session/delete` | POST | apagar **uma** live (`?id=&live=&day=`) | Sim + admin |
+| `/api/admin/lives/delete` | POST | aposentado — responde 410 | Sim + admin |
 | `/api/auth/config` | GET | config pública de auth | **Público** |
 | `/api/auth/login` | GET/POST | estado/login | **Público** |
 | `/api/auth/signup` | POST | cadastro | **Público** |

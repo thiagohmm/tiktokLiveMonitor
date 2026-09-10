@@ -35,7 +35,12 @@ func (db *DB) LiveFirstSeen(liveName string) (string, error) {
 	return at.UTC().Format(time.RFC3339), nil
 }
 
-// ListLives returns derived lives grouped by live_name and day, most recent first.
+// ListLives returns one row per live session, most recent first.
+//
+// Sessions are real rows in live_sessions, so legacy data backfilled from the
+// pre-session schema also shows up here and can be deleted like any other. No
+// "in progress" filter: an idle session that was never closed must stay
+// visible, otherwise it would be impossible to delete from the UI.
 func (db *DB) ListLives(limit int) ([]model.Live, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -44,24 +49,24 @@ func (db *DB) ListLives(limit int) ([]model.Live, error) {
 		limit = 100
 	}
 
+	// Event count covers the event tables only: gift_goals and room_like_totals
+	// are session metadata, not events.
 	query := `
-		SELECT live_name, day, MIN(ts) AS started_at, MAX(ts) AS ended_at, COUNT(*) AS events
-		FROM (
-			SELECT live_name, DATE(timestamp) AS day, timestamp AS ts FROM user_messages
-			UNION ALL
-			SELECT live_name, DATE(timestamp), timestamp FROM gifts
-			UNION ALL
-			SELECT live_name, DATE(timestamp), timestamp FROM shares
-			UNION ALL
-			SELECT live_name, DATE(timestamp), timestamp FROM anomaly_logs
-			UNION ALL
-			SELECT live_name, DATE(timestamp), timestamp FROM pinned_comments
-			UNION ALL
-			SELECT live_name, DATE(received_at), received_at FROM target_gift_history
-		)
-		WHERE live_name != ''
-		GROUP BY live_name, day
-		ORDER BY day DESC, started_at DESC
+		SELECT s.id, s.live_name, s.day, s.started_at, s.ended_at, COALESCE(e.events, 0) AS events
+		FROM live_sessions s
+		LEFT JOIN (
+			SELECT live_id, COUNT(*) AS events FROM (
+				SELECT live_id FROM user_messages       WHERE live_id IS NOT NULL
+				UNION ALL SELECT live_id FROM gifts      WHERE live_id IS NOT NULL
+				UNION ALL SELECT live_id FROM shares     WHERE live_id IS NOT NULL
+				UNION ALL SELECT live_id FROM likes      WHERE live_id IS NOT NULL
+				UNION ALL SELECT live_id FROM pinned_comments     WHERE live_id IS NOT NULL
+				UNION ALL SELECT live_id FROM anomaly_logs        WHERE live_id IS NOT NULL
+				UNION ALL SELECT live_id FROM target_gift_history WHERE live_id IS NOT NULL
+			) ev
+			GROUP BY live_id
+		) e ON e.live_id = s.id
+		ORDER BY s.day DESC, s.started_at DESC
 		LIMIT ?`
 
 	rows, err := db.query(query, limit)
@@ -73,45 +78,70 @@ func (db *DB) ListLives(limit int) ([]model.Live, error) {
 	results := []model.Live{}
 	for rows.Next() {
 		var (
-			l    model.Live
-			s, e sql.NullString
+			l       model.Live
+			started time.Time
+			ended   sql.NullTime
 		)
-		if err := rows.Scan(&l.Name, &l.Day, &s, &e, &l.Events); err != nil {
+		if err := rows.Scan(&l.ID, &l.Name, &l.Day, &started, &ended, &l.Events); err != nil {
 			return nil, fmt.Errorf("scan live: %w", err)
 		}
 		l.Day = normalizeDate(l.Day)
-		if s.Valid {
-			l.StartedAt = normalizeTime(s.String)
-		}
-		if e.Valid {
-			l.EndedAt = normalizeTime(e.String)
+		l.StartedAt = started.UTC().Format(time.RFC3339)
+		if ended.Valid {
+			l.EndedAt = ended.Time.UTC().Format(time.RFC3339)
 		}
 		results = append(results, l)
 	}
 	return results, rows.Err()
 }
 
-// DeleteLive removes all rows for a live from every table that stores live_name.
-// It returns the total number of rows deleted.
-func (db *DB) DeleteLive(liveName string) (int64, error) {
-	if strings.TrimSpace(liveName) == "" {
-		return 0, fmt.Errorf("live name is required")
+// DeleteLiveSession removes every row produced by one live session and returns
+// the total number of rows deleted (session row included). Only that session is
+// affected: other sessions of the same streamer are untouched.
+func (db *DB) DeleteLiveSession(id string) (int64, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return 0, model.ErrInvalidID
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tables := []string{"user_messages", "gifts", "likes", "room_like_totals", "shares", "anomaly_logs", "pinned_comments", "target_gift_history", "gift_goals"}
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin delete live session: %w", err)
+	}
+	// Rollback is a no-op once the transaction commits; its error is not
+	// actionable, so it is intentionally ignored.
+	defer func() { _ = tx.Rollback() }()
+
+	// A lista vem de liveIDColumns (fonte única): o teste anti-drift compara essa
+	// mesma lista com o que existe no banco, então uma tabela nova com live_id não
+	// passa despercebida por aqui.
 	total := int64(0)
-	for _, table := range tables {
-		res, err := db.exec(fmt.Sprintf("DELETE FROM %s WHERE live_name = ?", table), liveName)
+	for _, table := range liveIDTableNames() {
+		res, err := tx.Exec(db.bind(fmt.Sprintf("DELETE FROM %s WHERE live_id = ?", table)), id)
 		if err != nil {
-			return total, fmt.Errorf("delete from %s: %w", table, err)
+			return total, fmt.Errorf("delete session rows from %s: %w", table, err)
 		}
 		n, err := res.RowsAffected()
 		if err != nil {
 			return total, fmt.Errorf("rows affected in %s: %w", table, err)
 		}
 		total += n
+	}
+
+	res, err := tx.Exec(db.bind("DELETE FROM live_sessions WHERE id = ?"), id)
+	if err != nil {
+		return total, fmt.Errorf("delete live session: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return total, fmt.Errorf("rows affected in live_sessions: %w", err)
+	}
+	total += n
+
+	if err := tx.Commit(); err != nil {
+		return total, fmt.Errorf("commit delete live session: %w", err)
 	}
 	return total, nil
 }

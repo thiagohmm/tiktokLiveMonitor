@@ -7,7 +7,13 @@ import (
 	"time"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 )
+
+// testRef builds a live reference for tests that do not need a real session row.
+func testRef(name string) model.LiveRef {
+	return model.LiveRef{ID: name + "-session", Name: name}
+}
 
 func TestNormalizeID(t *testing.T) {
 	tests := []struct {
@@ -151,29 +157,6 @@ func TestCoalesce(t *testing.T) {
 	}
 }
 
-func TestSessionReusable(t *testing.T) {
-	now := time.Date(2026, 8, 17, 15, 0, 0, 0, time.Local)
-	tests := []struct {
-		name string
-		last time.Time
-		want bool
-	}{
-		{"zero", time.Time{}, false},
-		{"same day under 10h", now.Add(-2 * time.Hour), true},
-		{"same day exactly 10h", now.Add(-10 * time.Hour), false},
-		{"same day over 10h", now.Add(-11 * time.Hour), false},
-		{"previous day under 10h", now.Add(-16 * time.Hour), false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := sessionReusable(tt.last, now)
-			if got != tt.want {
-				t.Fatalf("sessionReusable(%v) = %v, want %v", tt.last, got, tt.want)
-			}
-		})
-	}
-}
-
 func newMonitorWithDB(t *testing.T) (*Monitor, *database.DB) {
 	t.Helper()
 	baseDSN := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
@@ -199,21 +182,29 @@ func newMonitorWithDB(t *testing.T) (*Monitor, *database.DB) {
 	return m, db
 }
 
-func TestRestoreOrPurgeKeepsRecentSameDay(t *testing.T) {
+func TestBeginOrResumeSessionRestoresBuffer(t *testing.T) {
 	m, db := newMonitorWithDB(t)
 
-	if err := db.AddUserMessageDedup("live1", "user1", "User One", "hello today"); err != nil {
+	session, err := db.BeginLiveSession("live1", time.Now())
+	if err != nil {
+		t.Fatalf("begin session: %v", err)
+	}
+	ref := model.LiveRef{ID: session.ID, Name: "live1"}
+	if err := db.AddUserMessageDedup(ref, "user1", "User One", "hello today"); err != nil {
 		t.Fatalf("add message: %v", err)
 	}
-	if err := db.LogAnomaly("live1", "spam", true, "SPAM", "user1"); err != nil {
+	if err := db.LogAnomaly(ref, "spam", true, "SPAM", "user1"); err != nil {
 		t.Fatalf("log anomaly: %v", err)
 	}
-	if _, err := db.AddGift("live1", "user1", "User One", "Rose", 1, 0); err != nil {
+	if _, err := db.AddGift(ref, "user1", "User One", "Rose", 1, 0); err != nil {
 		t.Fatalf("add gift: %v", err)
 	}
 
-	m.restoreOrPurgeSessionData()
+	m.beginOrResumeSession()
 
+	if got := m.CurrentLiveID(); got != session.ID {
+		t.Fatalf("expected to resume session %s, got %q", session.ID, got)
+	}
 	if len(m.GetChatBuffer()) == 0 {
 		t.Fatal("expected chat buffer to be restored")
 	}
@@ -229,53 +220,110 @@ func TestRestoreOrPurgeKeepsRecentSameDay(t *testing.T) {
 	}
 }
 
-func TestRestoreOrPurgeDeletesStaleSession(t *testing.T) {
+// A new day must start a new session WITHOUT deleting the previous live's rows:
+// the old data stays in the database, addressed by its own id.
+func TestBeginOrResumeSessionKeepsPreviousHistory(t *testing.T) {
 	m, db := newMonitorWithDB(t)
 
-	stale := time.Now().Add(-25 * time.Hour).Format("2006-01-02 15:04:05")
-	err := db.ExecSQL(
-		`INSERT INTO gifts (live_name, uniqueId, nickname, gift_name, timestamp) VALUES (?, ?, ?, ?, ?)`,
-		"live1", "user1", "User", "Rose", stale,
-	)
+	oldAt := time.Now().UTC().Add(-25 * time.Hour)
+	oldSession, err := db.BeginLiveSession("live1", oldAt)
 	if err != nil {
-		t.Fatalf("insert gift: %v", err)
+		t.Fatalf("begin old session: %v", err)
 	}
-	err = db.ExecSQL(
-		`INSERT INTO anomaly_logs (live_name, day, uniqueId, comment, is_anomaly, category, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		"live1", "2020-01-01", "user1", "old", true, "SPAM", stale,
-	)
-	if err != nil {
-		t.Fatalf("insert anomaly: %v", err)
+	oldRef := model.LiveRef{ID: oldSession.ID, Name: "live1"}
+	if _, err := db.AddGift(oldRef, "user1", "User One", "Rose", 1, 0); err != nil {
+		t.Fatalf("add gift: %v", err)
 	}
-	err = db.ExecSQL(
-		`INSERT INTO user_messages (uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?)`,
-		"user1", "User", "old hello", stale,
-	)
-	if err != nil {
-		t.Fatalf("insert message: %v", err)
+	if err := db.AddUserMessageDedup(oldRef, "user1", "User One", "old hello"); err != nil {
+		t.Fatalf("add message: %v", err)
+	}
+	if err := db.LogAnomaly(oldRef, "old", true, "SPAM", "user1"); err != nil {
+		t.Fatalf("log anomaly: %v", err)
 	}
 
-	m.restoreOrPurgeSessionData()
+	m.beginOrResumeSession()
 
-	if len(m.GetChatBuffer()) != 0 {
-		t.Fatal("expected empty chat buffer after purge")
+	newID := m.CurrentLiveID()
+	if newID == "" {
+		t.Fatal("expected a session id")
 	}
-	if m.IsPinnedUser("user1") {
-		t.Fatal("expected no pinned users after purge")
+	if newID == oldSession.ID {
+		t.Fatal("expected a NEW session on a different day")
 	}
+
+	// Nothing was deleted.
 	gifts, err := db.GetRecentGifts("live1", 10)
 	if err != nil {
 		t.Fatalf("gifts: %v", err)
 	}
-	if len(gifts) != 0 {
-		t.Fatalf("expected gifts deleted, got %d", len(gifts))
+	if len(gifts) != 1 {
+		t.Fatalf("expected the previous live's gift to survive, got %d", len(gifts))
 	}
-	msgs, err := db.GetTodayUserMessages("live1")
-	if err != nil {
-		t.Fatalf("messages: %v", err)
+	if _, err := db.GetLiveSession(oldSession.ID); err != nil {
+		t.Fatalf("expected the previous session row to survive: %v", err)
 	}
-	if len(msgs) != 0 {
-		t.Fatalf("expected messages deleted, got %d", len(msgs))
+
+	// The previous live's data never leaks into the new session's buffers.
+	if len(m.GetChatBuffer()) != 0 {
+		t.Fatal("expected empty chat buffer: old session data must not be loaded")
+	}
+	if m.IsPinnedUser("user1") {
+		t.Fatal("expected no pinned users from the previous session")
+	}
+}
+
+// An admin can delete the live that is still streaming. The session must then be
+// reopened, so later events do not become invisible orphan rows.
+func TestTouchSessionReopensDeletedSession(t *testing.T) {
+	m, db := newMonitorWithDB(t)
+	m.beginOrResumeSession()
+
+	first := m.CurrentLiveID()
+	if first == "" {
+		t.Fatal("expected a session id")
+	}
+	if _, err := db.DeleteLiveSession(first); err != nil {
+		t.Fatalf("delete session: %v", err)
+	}
+
+	// Clear the throttle window so the next touch hits the database.
+	m.mu.Lock()
+	m.liveTouchAt = time.Time{}
+	m.mu.Unlock()
+	m.touchSession()
+
+	got := m.CurrentLiveID()
+	if got == "" || got == first {
+		t.Fatalf("expected a new session after the deletion, got %q (first %q)", got, first)
+	}
+	if _, err := db.GetLiveSession(got); err != nil {
+		t.Fatalf("the reopened session must exist: %v", err)
+	}
+}
+
+// Every emitted event must carry the session id, otherwise the controller would
+// fall back to a per-event database lookup to resolve the session.
+func TestEmitInjectsLiveID(t *testing.T) {
+	m, _ := newMonitorWithDB(t)
+	m.beginOrResumeSession()
+	want := m.CurrentLiveID()
+	if want == "" {
+		t.Fatal("expected a session id")
+	}
+
+	var got EventData
+	m.OnEvent(func(eventType string, data EventData) {
+		got = data
+	})
+
+	src := EventData{"comment": "oi"}
+	m.emit("test-event", src)
+
+	if got["liveId"] != want {
+		t.Fatalf("expected liveId %q in %#v", want, got)
+	}
+	if _, exists := src["liveId"]; exists {
+		t.Fatal("emit must not mutate the caller's payload")
 	}
 }
 

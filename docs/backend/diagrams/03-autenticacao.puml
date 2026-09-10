@@ -57,7 +57,7 @@ end
 deactivate VIEW
 
 == Endpoint administrativo ==
-CLIENT -> VIEW : POST /api/admin/lives/delete (admin)
+CLIENT -> VIEW : POST /api/admin/lives/session/delete?id=&live=&day= (admin)
 activate VIEW
 VIEW -> JWT : RequireAdmin(user.Role é admin)
 alt não-admin

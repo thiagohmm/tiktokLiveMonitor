@@ -3808,7 +3808,7 @@ function renderAdminLives(lives) {
             <td data-label="Eventos">${live.events ?? 0}</td>
             <td data-label="Ações"><button class="small-btn" type="button" style="border-color: var(--pink);">Deletar</button></td>
         `;
-        tr.querySelector('button').addEventListener('click', () => deleteAdminLive(live.name));
+        tr.querySelector('button').addEventListener('click', () => deleteAdminLive(live));
         adminLivesTableBody.appendChild(tr);
     });
 }
@@ -3845,10 +3845,17 @@ if (adminLivesRefreshBtn) {
     });
 }
 
+// Formata o dia da sessão (YYYY-MM-DD) em pt-BR sem passar por Date(), para
+// não deslocar o dia por fuso horário.
+function formatAdminDay(day) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day || ''));
+    return match ? `${match[3]}/${match[2]}/${match[1]}` : (day || '—');
+}
+
 // Abre o modal de confirmação de exclusão de uma live.
-function openDeleteLiveModal(liveName) {
-    deleteLivePending = liveName;
-    deleteLiveModalMessage.textContent = `Deletar TODOS os dados da live "${liveName}" do banco? Essa ação não pode ser desfeita.`;
+function openDeleteLiveModal(live) {
+    deleteLivePending = live;
+    deleteLiveModalMessage.textContent = `Deletar os dados da live "${live.name}" do dia ${formatAdminDay(live.day)}? Essa ação não pode ser desfeita.`;
     deleteLiveModalBackdrop.classList.add('is-open');
     deleteLiveModalBackdrop.setAttribute('aria-hidden', 'false');
 }
@@ -3861,18 +3868,21 @@ function closeDeleteLiveModal() {
 }
 
 // Inicia a exclusão de uma live (abre confirmação).
-function deleteAdminLive(liveName) {
-    if (!liveName || liveName === '—') return;
-    openDeleteLiveModal(liveName);
+function deleteAdminLive(live) {
+    if (!live || !live.id || !live.name || live.name === '—') return;
+    openDeleteLiveModal(live);
 }
 
 if (deleteLiveModalConfirmBtn) {
     deleteLiveModalConfirmBtn.addEventListener('click', async () => {
-        const liveName = deleteLivePending;
-        if (!liveName) return;
+        const live = deleteLivePending;
+        if (!live || !live.id) return;
         closeDeleteLiveModal();
         try {
-            const response = await fetch('/api/admin/lives/delete?live=' + encodeURIComponent(liveName), { method: 'POST' });
+            // O id seleciona a sessão; live e day são a trava de segurança do
+            // backend (409 se não baterem com a sessão).
+            const params = new URLSearchParams({ id: live.id, live: live.name, day: live.day || '' });
+            const response = await fetch('/api/admin/lives/session/delete?' + params.toString(), { method: 'POST' });
             if (!response.ok) {
                 throw new Error(`status ${response.status}`);
             }

@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/url"
@@ -151,11 +152,32 @@ func (db *DB) migratePostgres() error {
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
 		)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_pinned_comments_pin
-			ON pinned_comments(live_name, pin_id)
-			WHERE pin_id IS NOT NULL AND pin_id != ''`,
-		`CREATE INDEX IF NOT EXISTS idx_user_messages_dedup
-			ON user_messages(LOWER("uniqueId"), LOWER(message))`,
+		// Sessões de live (uma por conexão de monitor). O delete da administração
+		// apaga por live_sessions.id — live_name é o username do streamer e não
+		// identifica uma sessão. Idempotente; espelha supabase/migrations/004
+		// (o REVOKE de anon/authenticated fica só lá: bancos de teste não têm
+		// esses papéis).
+		`CREATE TABLE IF NOT EXISTS live_sessions (
+			id           TEXT PRIMARY KEY,
+			live_name    TEXT NOT NULL,
+			day          DATE NOT NULL,
+			started_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			last_seen_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			ended_at     TIMESTAMPTZ
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_live_sessions_name_day
+			ON live_sessions(live_name, day DESC)`,
+		`ALTER TABLE live_sessions ENABLE ROW LEVEL SECURITY`,
+		// live_id nas tabelas operacionais que guardam live_name.
+		`ALTER TABLE user_messages        ADD COLUMN IF NOT EXISTS live_id TEXT`,
+		`ALTER TABLE gifts                ADD COLUMN IF NOT EXISTS live_id TEXT`,
+		`ALTER TABLE shares               ADD COLUMN IF NOT EXISTS live_id TEXT`,
+		`ALTER TABLE likes                ADD COLUMN IF NOT EXISTS live_id TEXT`,
+		`ALTER TABLE pinned_comments      ADD COLUMN IF NOT EXISTS live_id TEXT`,
+		`ALTER TABLE anomaly_logs         ADD COLUMN IF NOT EXISTS live_id TEXT`,
+		`ALTER TABLE target_gift_history  ADD COLUMN IF NOT EXISTS live_id TEXT`,
+		`ALTER TABLE gift_goals           ADD COLUMN IF NOT EXISTS live_id TEXT`,
+		`ALTER TABLE room_like_totals     ADD COLUMN IF NOT EXISTS live_id TEXT`,
 		// Fila de presentes alvos: prioridade ("fura fila") + momento da
 		// promoção. Idempotente; espelha supabase/migrations/003.
 		`ALTER TABLE target_gift_history ADD COLUMN IF NOT EXISTS is_priority BOOLEAN NOT NULL DEFAULT FALSE`,
@@ -182,7 +204,359 @@ func (db *DB) migratePostgres() error {
 			return fmt.Errorf("exec migration: %w", err)
 		}
 	}
+	return db.migrateLiveSessions()
+}
+
+// liveMigrationBatchSize bounds how many rows each backfill statement rewrites,
+// so the migration never holds one giant transaction over a big production table.
+const liveMigrationBatchSize = 5000
+
+// liveMigrationLockTimeout makes a migration statement that cannot take its lock
+// fail fast instead of queueing every write behind it. Railway allows 300s for
+// the healthcheck, and every step here is idempotent, so failing loudly and
+// retrying on the next boot beats hanging.
+const liveMigrationLockTimeout = "30s"
+
+// legacyLiveIDExpression is the deterministic id of the synthetic session that
+// owns rows written before live_sessions existed. It must be evaluated the same
+// way in the backfill INSERT and in every UPDATE, otherwise a row ends up
+// pointing at a session that does not exist.
+func legacyLiveIDExpression(dayExpr string) string {
+	return "'legacy:' || md5(live_name || ':' || (" + dayExpr + ")::text)"
+}
+
+// liveSource describes how to derive the day and the instant of one table. Each
+// table names its timestamp column differently.
+type liveSource struct {
+	table   string
+	dayExpr string
+	tsExpr  string
+}
+
+// liveIDColumns lists every table that carries live_id. DeleteLiveSession covers
+// exactly this set (asserted against information_schema by a test).
+var liveIDColumns = []liveSource{
+	{"user_messages", "(timestamp AT TIME ZONE 'UTC')::date", "timestamp"},
+	{"gifts", "(timestamp AT TIME ZONE 'UTC')::date", "timestamp"},
+	{"shares", "(timestamp AT TIME ZONE 'UTC')::date", "timestamp"},
+	{"likes", "(timestamp AT TIME ZONE 'UTC')::date", "timestamp"},
+	{"pinned_comments", "(timestamp AT TIME ZONE 'UTC')::date", "timestamp"},
+	{"anomaly_logs", "day", "timestamp"},
+	{"target_gift_history", "(received_at AT TIME ZONE 'UTC')::date", "received_at"},
+	{"gift_goals", "(COALESCE(created_at, CURRENT_TIMESTAMP) AT TIME ZONE 'UTC')::date", "COALESCE(created_at, CURRENT_TIMESTAMP)"},
+	{"room_like_totals", "(COALESCE(updated_at, CURRENT_TIMESTAMP) AT TIME ZONE 'UTC')::date", "COALESCE(updated_at, CURRENT_TIMESTAMP)"},
+}
+
+// migrateLiveSessions runs the non-additive part of the live_sessions migration,
+// in the only order that is safe: concurrent indexes -> backfill -> NOT NULL ->
+// primary key. It is written to run against a LIVE production database:
+//
+//   - indexes are built with CREATE INDEX CONCURRENTLY, so the scan does not
+//     block writes;
+//   - the backfill rewrites rows in batches (one transaction each) instead of a
+//     single statement over every row of every table;
+//   - SET NOT NULL goes through a validated CHECK constraint, avoiding the
+//     full-table scan under ACCESS EXCLUSIVE that ALTER COLUMN would need;
+//   - the room_like_totals primary key is attached to a concurrently built
+//     unique index instead of being rebuilt under an exclusive lock;
+//   - lock_timeout makes any step that cannot take its lock fail fast instead of
+//     blocking the application behind it.
+//
+// Every step checks what is already done, so a container restart in the middle
+// of the migration resumes instead of failing. Called with db.mu held by
+// migratePostgres.
+func (db *DB) migrateLiveSessions() error {
+	ctx := context.Background()
+	conn, err := db.conn.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration connection: %w", err)
+	}
+	// A dedicated connection is required: the SETs below are session-scoped, and
+	// the pool would otherwise hand out another connection for the next statement.
+	defer func() { _ = conn.Close() }()
+
+	exec := func(query string) error {
+		if _, err := conn.ExecContext(ctx, query); err != nil {
+			return fmt.Errorf("%s: %w", migrationLabel(query), err)
+		}
+		return nil
+	}
+
+	if err := exec(`SET lock_timeout = '` + liveMigrationLockTimeout + `'`); err != nil {
+		return err
+	}
+	if err := exec("SET statement_timeout = 0"); err != nil {
+		return err
+	}
+
+	// 0) A container killed in the middle of a CREATE INDEX CONCURRENTLY leaves an
+	//    index marked invalid, which IF NOT EXISTS would then skip forever.
+	if err := dropInvalidIndexes(ctx, conn); err != nil {
+		return err
+	}
+
+	// 1) live_id indexes (concurrent: no write blocking).
+	for _, s := range liveIDColumns {
+		if s.table == "room_like_totals" {
+			// The primary key built in step 4 already provides this index.
+			continue
+		}
+		if err := exec(fmt.Sprintf(
+			"CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_%s_live_id ON %s(live_id)", s.table, s.table)); err != nil {
+			return err
+		}
+	}
+	// Message dedup and pinned comments become session-scoped. The rebuild only
+	// happens while the index still describes the old columns: running DROP +
+	// CREATE on every boot would rebuild (and re-scan) the message index on every
+	// deploy, eating into the healthcheck window for nothing.
+	rebuilds := []struct {
+		name     string
+		required string
+		create   string
+	}{
+		{
+			name:     "idx_user_messages_dedup",
+			required: "live_id",
+			create: `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_user_messages_dedup
+				ON user_messages(live_id, LOWER("uniqueId"), LOWER(message))`,
+		},
+		{
+			name:     "idx_pinned_comments_pin",
+			required: "live_id",
+			create: `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_pinned_comments_pin
+				ON pinned_comments(live_id, pin_id)
+				WHERE pin_id IS NOT NULL AND pin_id != ''`,
+		},
+	}
+	for _, r := range rebuilds {
+		stale, err := indexLacksColumn(ctx, conn, r.name, r.required)
+		if err != nil {
+			return err
+		}
+		if !stale {
+			continue
+		}
+		if err := exec(fmt.Sprintf("DROP INDEX CONCURRENTLY IF EXISTS %s", r.name)); err != nil {
+			return err
+		}
+		if err := exec(r.create); err != nil {
+			return err
+		}
+	}
+
+	// 2) Synthetic sessions for everything that already existed, one per
+	//    (live_name, day). Per table rather than one huge UNION, so each statement
+	//    stays small. COALESCE on the instant too: a legacy row with a NULL
+	//    timestamp would make MIN/MAX NULL and break the NOT NULL session columns.
+	for _, s := range liveIDColumns {
+		if err := exec(fmt.Sprintf(`
+			INSERT INTO live_sessions (id, live_name, day, started_at, last_seen_at)
+			SELECT %s, live_name, %s AS day,
+			       MIN(COALESCE(%s, CURRENT_TIMESTAMP)), MAX(COALESCE(%s, CURRENT_TIMESTAMP))
+			FROM %s
+			WHERE live_id IS NULL
+			GROUP BY live_name, %s
+			ON CONFLICT (id) DO NOTHING`,
+			legacyLiveIDExpression(s.dayExpr), s.dayExpr, s.tsExpr, s.tsExpr, s.table, s.dayExpr)); err != nil {
+			return err
+		}
+	}
+
+	// 3) Stamp the old rows with the id of their synthetic session, in batches.
+	for _, s := range liveIDColumns {
+		if err := backfillLiveID(ctx, conn, s); err != nil {
+			return err
+		}
+	}
+
+	// 4) With no NULLs left, lock the column down.
+	for _, s := range liveIDColumns {
+		if err := setLiveIDNotNull(ctx, conn, s.table); err != nil {
+			return err
+		}
+	}
+
+	// 5) room_like_totals becomes session-scoped.
+	return ensureRoomLikeTotalsSessionPK(ctx, conn)
+}
+
+// backfillLiveID stamps live_id on the rows that predate the migration. The
+// table is rewritten in small transactions so a big table cannot hold one long
+// lock; room_like_totals is tiny (one row per session) and needs no batching.
+func backfillLiveID(ctx context.Context, conn *sql.Conn, s liveSource) error {
+	expr := legacyLiveIDExpression(s.dayExpr)
+
+	if s.table == "room_like_totals" {
+		if _, err := conn.ExecContext(ctx, fmt.Sprintf(
+			"UPDATE room_like_totals SET live_id = %s WHERE live_id IS NULL", expr)); err != nil {
+			return fmt.Errorf("backfill room_like_totals.live_id: %w", err)
+		}
+		return nil
+	}
+
+	for {
+		res, err := conn.ExecContext(ctx, fmt.Sprintf(
+			`UPDATE %s SET live_id = %s
+			 WHERE id IN (SELECT id FROM %s WHERE live_id IS NULL LIMIT %d)`,
+			s.table, expr, s.table, liveMigrationBatchSize))
+		if err != nil {
+			return fmt.Errorf("backfill %s.live_id: %w", s.table, err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("backfill %s.live_id rows affected: %w", s.table, err)
+		}
+		if n == 0 {
+			return nil
+		}
+	}
+}
+
+// setLiveIDNotNull marks live_id as NOT NULL without the full table scan that
+// ALTER COLUMN SET NOT NULL would take under ACCESS EXCLUSIVE: a CHECK constraint
+// is added NOT VALID, validated (SHARE UPDATE EXCLUSIVE, writes keep flowing) and
+// only then used to set the column. Constraint names are derived from the table,
+// so a leftover from an interrupted run is dropped first.
+func setLiveIDNotNull(ctx context.Context, conn *sql.Conn, table string) error {
+	var nullable string
+	if err := conn.QueryRowContext(ctx,
+		`SELECT is_nullable FROM information_schema.columns
+		 WHERE table_schema = 'public' AND table_name = $1 AND column_name = 'live_id'`,
+		table).Scan(&nullable); err != nil {
+		return fmt.Errorf("read %s.live_id nullability: %w", table, err)
+	}
+	if nullable == "NO" {
+		return nil
+	}
+
+	constraint := table + "_live_id_not_null"
+	for _, stmt := range []string{
+		fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s", table, constraint),
+		fmt.Sprintf("ALTER TABLE %s ADD CONSTRAINT %s CHECK (live_id IS NOT NULL) NOT VALID", table, constraint),
+		fmt.Sprintf("ALTER TABLE %s VALIDATE CONSTRAINT %s", table, constraint),
+		// With the constraint validated, Postgres skips the scan here.
+		fmt.Sprintf("ALTER TABLE %s ALTER COLUMN live_id SET NOT NULL", table),
+		fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s", table, constraint),
+	} {
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("set %s.live_id NOT NULL: %w", table, err)
+		}
+	}
 	return nil
+}
+
+// ensureRoomLikeTotalsSessionPK moves the primary key of room_like_totals from
+// live_name to live_id. A unique index is built concurrently and attached with
+// ADD CONSTRAINT ... USING INDEX, so the table is not rewritten under an
+// exclusive lock. Reads are unaffected: LikeTotals still takes MAX(total) by
+// live_name across the streamer's sessions.
+func ensureRoomLikeTotalsSessionPK(ctx context.Context, conn *sql.Conn) error {
+	var onLiveID int
+	if err := conn.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM information_schema.table_constraints tc
+		JOIN information_schema.key_column_usage kcu
+		  ON kcu.constraint_name = tc.constraint_name AND kcu.table_schema = tc.table_schema
+		WHERE tc.table_schema = 'public' AND tc.table_name = 'room_like_totals'
+		  AND tc.constraint_type = 'PRIMARY KEY' AND kcu.column_name = 'live_id'`).Scan(&onLiveID); err != nil {
+		return fmt.Errorf("read room_like_totals primary key: %w", err)
+	}
+	if onLiveID > 0 {
+		return nil
+	}
+
+	for _, stmt := range []string{
+		`CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS room_like_totals_live_id_key
+			ON room_like_totals(live_id)`,
+		`ALTER TABLE room_like_totals DROP CONSTRAINT IF EXISTS room_like_totals_pkey`,
+		`ALTER TABLE room_like_totals ADD CONSTRAINT room_like_totals_pkey
+			PRIMARY KEY USING INDEX room_like_totals_live_id_key`,
+	} {
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("room_like_totals primary key: %w", err)
+		}
+	}
+	return nil
+}
+
+// liveIDTableNames lists the tables that carry live_id, from the single source
+// of truth (liveIDColumns). DeleteLiveSession deletes from exactly these tables
+// and a test asserts this list against information_schema, so a new table with
+// live_id cannot be silently left out of the delete.
+func liveIDTableNames() []string {
+	names := make([]string, 0, len(liveIDColumns))
+	for _, s := range liveIDColumns {
+		names = append(names, s.table)
+	}
+	return names
+}
+
+// indexLacksColumn reports whether the named index exists but does not include
+// column. A missing index also counts as "needs (re)building".
+func indexLacksColumn(ctx context.Context, conn *sql.Conn, name, column string) (bool, error) {
+	var def string
+	err := conn.QueryRowContext(ctx,
+		`SELECT pg_get_indexdef(oid) FROM pg_class WHERE relname = $1 AND relkind = 'i'`, name).Scan(&def)
+	if err == sql.ErrNoRows {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read index %s definition: %w", name, err)
+	}
+	return !strings.Contains(def, column), nil
+}
+
+// dropInvalidIndexes removes indexes left invalid by an interrupted
+// CREATE INDEX CONCURRENTLY, so the retry can rebuild them.
+func dropInvalidIndexes(ctx context.Context, conn *sql.Conn) error {
+	rows, err := conn.QueryContext(ctx, `
+		SELECT c.relname FROM pg_index i
+		JOIN pg_class c ON c.oid = i.indexrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = 'public' AND NOT i.indisvalid`)
+	if err != nil {
+		return fmt.Errorf("query invalid indexes: %w", err)
+	}
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan invalid index: %w", err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("invalid indexes rows: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close invalid indexes: %w", err)
+	}
+	for _, name := range names {
+		if _, err := conn.ExecContext(ctx,
+			fmt.Sprintf("DROP INDEX CONCURRENTLY IF EXISTS %s", quoteIdent(name))); err != nil {
+			return fmt.Errorf("drop invalid index %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// quoteIdent quotes an identifier read from the catalog.
+func quoteIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+// migrationLabel shortens a statement for error messages.
+func migrationLabel(query string) string {
+	q := strings.TrimSpace(query)
+	if i := strings.IndexAny(q, "\r\n"); i >= 0 {
+		q = q[:i]
+	}
+	if len(q) > 90 {
+		q = q[:90]
+	}
+	return q
 }
 
 // safeTestDBName reports whether name can be interpolated into DDL safely.

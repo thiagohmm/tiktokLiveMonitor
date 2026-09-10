@@ -364,8 +364,10 @@ func (s *HTTPServer) handleAdminLives(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"lives": lives})
 }
 
-// handleAdminLivesDelete removes all stored data for a live.
-func (s *HTTPServer) handleAdminLivesDelete(w http.ResponseWriter, r *http.Request) {
+// handleAdminLivesSessionDelete removes all stored data of exactly one live
+// session (id). live and day are required as a guard: with a wrong id in hand
+// the delete cannot silently hit another live.
+func (s *HTTPServer) handleAdminLivesSessionDelete(w http.ResponseWriter, r *http.Request) {
 	if _, ok := auth.RequireAdmin(w, r, s.auth); !ok {
 		return
 	}
@@ -373,17 +375,46 @@ func (s *HTTPServer) handleAdminLivesDelete(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	liveName := strings.TrimSpace(r.URL.Query().Get("live"))
-	if liveName == "" {
-		writeError(w, http.StatusBadRequest, "live is required")
+	query := r.URL.Query()
+	id := strings.TrimSpace(query.Get("id"))
+	liveName := strings.TrimSpace(query.Get("live"))
+	day := strings.TrimSpace(query.Get("day"))
+	if id == "" || liveName == "" || day == "" {
+		writeError(w, http.StatusBadRequest, "id, live e day são obrigatórios")
 		return
 	}
-	deleted, err := s.controller.DeleteLive(liveName)
+
+	session, err := s.controller.GetLiveSession(id)
+	switch {
+	case errors.Is(err, model.ErrLiveSessionNotFound):
+		writeError(w, http.StatusNotFound, "live não encontrada")
+		return
+	case err != nil:
+		writeInternalError(w, r, err)
+		return
+	}
+	if !strings.EqualFold(session.LiveName, liveName) || session.Day != day {
+		writeError(w, http.StatusConflict, "id não corresponde à live/dia informados")
+		return
+	}
+
+	deleted, err := s.controller.DeleteLive(id)
 	if err != nil {
 		writeInternalError(w, r, err)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"deleted": deleted})
+	writeJSON(w, map[string]interface{}{"deleted": deleted, "id": id})
+}
+
+// handleAdminLivesDelete is retired. The path is kept only to fail safely:
+// a client still on the old contract (which sent just ?live=) must never reach
+// a handler that deletes by streamer name. An old backend receiving the new
+// path answers 404, so both rollout directions are safe.
+func (s *HTTPServer) handleAdminLivesDelete(w http.ResponseWriter, r *http.Request) {
+	if _, ok := auth.RequireAdmin(w, r, s.auth); !ok {
+		return
+	}
+	writeError(w, http.StatusGone, "endpoint removido: use POST /api/admin/lives/session/delete?id=&live=&day=")
 }
 
 // handleReport generates a deterministic post-live report.

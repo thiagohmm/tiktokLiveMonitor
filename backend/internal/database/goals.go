@@ -9,7 +9,8 @@ import (
 	"time"
 )
 
-// AddGiftGoal stores a new gift goal and returns its id.
+// AddGiftGoal stores a new gift goal and returns its id. Goals belong to a
+// session, so live_id is required (the session is what the admin delete uses).
 func (db *DB) AddGiftGoal(g model.GiftGoal) (int64, error) {
 	if strings.TrimSpace(g.Title) == "" {
 		return 0, fmt.Errorf("goal title is required")
@@ -19,6 +20,9 @@ func (db *DB) AddGiftGoal(g model.GiftGoal) (int64, error) {
 	}
 	if strings.TrimSpace(g.LiveName) == "" {
 		return 0, fmt.Errorf("live name is required")
+	}
+	if strings.TrimSpace(g.LiveID) == "" {
+		return 0, model.ErrInvalidID
 	}
 	if g.Status == "" {
 		g.Status = model.GoalStatusActive
@@ -38,9 +42,9 @@ func (db *DB) AddGiftGoal(g model.GiftGoal) (int64, error) {
 	defer db.mu.Unlock()
 
 	id, err := db.insertID(
-		`INSERT INTO gift_goals (live_name, title, gift_name, target_units, status, milestones, created_at, completed_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		g.LiveName, g.Title, g.GiftName, g.TargetUnits, g.Status, string(milestonesJSON),
+		`INSERT INTO gift_goals (live_id, live_name, title, gift_name, target_units, status, milestones, created_at, completed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		g.LiveID, g.LiveName, g.Title, g.GiftName, g.TargetUnits, g.Status, string(milestonesJSON),
 		g.CreatedAt, nullTime(g.CompletedAt),
 	)
 	if err != nil {
@@ -49,17 +53,20 @@ func (db *DB) AddGiftGoal(g model.GiftGoal) (int64, error) {
 	return id, nil
 }
 
-// GetGiftGoals returns all goals for a live, newest first.
-func (db *DB) GetGiftGoals(liveName string) ([]model.GiftGoal, error) {
+// GetGiftGoals returns all goals of one session, newest first.
+func (db *DB) GetGiftGoals(ref model.LiveRef) ([]model.GiftGoal, error) {
+	if !ref.Valid() {
+		return nil, model.ErrInvalidID
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	rows, err := db.query(
-		`SELECT id, live_name, title, gift_name, target_units, status, milestones, created_at, completed_at
+		`SELECT id, live_id, live_name, title, gift_name, target_units, status, milestones, created_at, completed_at
 		 FROM gift_goals
-		 WHERE live_name = ?
+		 WHERE live_id = ?
 		 ORDER BY id DESC`,
-		liveName,
+		ref.ID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query gift goals: %w", err)
@@ -103,25 +110,13 @@ func (db *DB) SaveGiftGoal(g model.GiftGoal) error {
 	return nil
 }
 
-// DeleteGiftGoals removes all goals for a live and returns the rows deleted.
-func (db *DB) DeleteGiftGoals(liveName string) (int64, error) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	result, err := db.exec("DELETE FROM gift_goals WHERE live_name = ?", liveName)
-	if err != nil {
-		return 0, fmt.Errorf("delete gift goals: %w", err)
-	}
-	return result.RowsAffected()
-}
-
 func scanGiftGoal(rows *sql.Rows) (model.GiftGoal, error) {
 	var (
 		g           model.GiftGoal
 		milestones  string
 		completedAt sql.NullString
 	)
-	if err := rows.Scan(&g.ID, &g.LiveName, &g.Title, &g.GiftName, &g.TargetUnits, &g.Status, &milestones, &g.CreatedAt, &completedAt); err != nil {
+	if err := rows.Scan(&g.ID, &g.LiveID, &g.LiveName, &g.Title, &g.GiftName, &g.TargetUnits, &g.Status, &milestones, &g.CreatedAt, &completedAt); err != nil {
 		return model.GiftGoal{}, fmt.Errorf("scan gift goal: %w", err)
 	}
 	if err := json.Unmarshal([]byte(milestones), &g.Milestones); err != nil {

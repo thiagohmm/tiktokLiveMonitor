@@ -20,6 +20,34 @@ import (
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 )
 
+// testRef builds a live reference for tests that do not need a real session row.
+func testRef(name string) model.LiveRef {
+	return model.LiveRef{ID: name + "-session", Name: name}
+}
+
+// testDB exposes the concrete repository for test-only SQL.
+func testDB(t *testing.T, repo model.Repository) *database.DB {
+	t.Helper()
+	db, ok := repo.(*database.DB)
+	if !ok {
+		t.Fatalf("unexpected repository type %T", repo)
+	}
+	return db
+}
+
+// openTestSession opens a session whose id is testRef(name).ID, so rows seeded
+// with testRef(name) belong to the live under test.
+func openTestSession(t *testing.T, repo model.Repository, name string) {
+	t.Helper()
+	now := time.Now().UTC()
+	if err := testDB(t, repo).ExecSQL(
+		`INSERT INTO live_sessions (id, live_name, day, started_at, last_seen_at) VALUES (?, ?, ?, ?, ?)`,
+		testRef(name).ID, name, now.Format("2006-01-02"), now, now,
+	); err != nil {
+		t.Fatalf("open test session %s: %v", name, err)
+	}
+}
+
 func setupTestServer(t *testing.T) (*HTTPServer, model.Repository, string, *monitor.Monitor) {
 	t.Helper()
 	dir := t.TempDir()
@@ -45,6 +73,11 @@ func setupTestServer(t *testing.T) (*HTTPServer, model.Repository, string, *moni
 	}
 
 	ctrl := controller.NewAppController(mon, repo)
+
+	// StartMonitoring is what opens the session in production; the harness sets a
+	// live and opens its session so the event/goal handlers resolve one.
+	mon.SetCurrentLive("live1")
+	openTestSession(t, repo, "live1")
 
 	srv := New(Config{
 		Host: "127.0.0.1",
@@ -115,7 +148,7 @@ func TestHandleSettings(t *testing.T) {
 func TestHandleHistory(t *testing.T) {
 	srv, db, _, _ := setupTestServer(t)
 
-	err := db.LogAnomaly("live1", "test msg", true, "SPAM", "user1")
+	err := db.LogAnomaly(testRef("live1"), "test msg", true, "SPAM", "user1")
 	if err != nil {
 		t.Fatalf("log anomaly: %v", err)
 	}
@@ -140,7 +173,7 @@ func TestHandleHistory(t *testing.T) {
 func TestHandleHistoryDelete(t *testing.T) {
 	srv, db, _, _ := setupTestServer(t)
 
-	err := db.LogAnomaly("live1", "test msg", true, "SPAM", "user1")
+	err := db.LogAnomaly(testRef("live1"), "test msg", true, "SPAM", "user1")
 	if err != nil {
 		t.Fatalf("log anomaly: %v", err)
 	}
@@ -200,7 +233,7 @@ func TestHandleClearHistory(t *testing.T) {
 	srv, db, _, _ := setupTestServer(t)
 
 	for i := 0; i < 3; i++ {
-		_ = db.LogAnomaly("live1", "msg", false, "OK", "user1")
+		_ = db.LogAnomaly(testRef("live1"), "msg", false, "OK", "user1")
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/clear-history", nil)
@@ -224,8 +257,8 @@ func TestHandleClearHistory(t *testing.T) {
 func TestHandleGifts(t *testing.T) {
 	srv, db, _, mon := setupTestServer(t)
 
-	_, _ = db.AddGift("live1", "user1", "User One", "Rose", 3, 0)
-	_, _ = db.AddGift("live1", "user2", "User Two", "Tiger", 1, 1)
+	_, _ = db.AddGift(testRef("live1"), "user1", "User One", "Rose", 3, 0)
+	_, _ = db.AddGift(testRef("live1"), "user2", "User Two", "Tiger", 1, 1)
 
 	t.Run("GET all", func(t *testing.T) {
 		mon.SetCurrentLive("live1")
@@ -446,10 +479,10 @@ func TestHandlePinnedComments(t *testing.T) {
 
 	t.Run("GET recent for live", func(t *testing.T) {
 		mon.SetCurrentLive("live1")
-		if _, err := db.AddPinnedComment("live1", "user1", "User One", "olá", "pin-1", nil, time.Now()); err != nil {
+		if _, err := db.AddPinnedComment(testRef("live1"), "user1", "User One", "olá", "pin-1", nil, time.Now()); err != nil {
 			t.Fatalf("add pinned: %v", err)
 		}
-		if _, err := db.AddPinnedComment("live2", "user2", "User Two", "outra", "pin-2", nil, time.Now()); err != nil {
+		if _, err := db.AddPinnedComment(testRef("live2"), "user2", "User Two", "outra", "pin-2", nil, time.Now()); err != nil {
 			t.Fatalf("add other live: %v", err)
 		}
 
@@ -507,11 +540,11 @@ func TestHandleTargetGiftHistoryPending(t *testing.T) {
 	srv, db, _, mon := setupTestServer(t)
 	mon.SetCurrentLive("live1")
 
-	pendingID, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", time.Now(), false)
+	pendingID, err := db.AddTargetGiftHistory(testRef("live1"), "user1", "User One", "Rosa", time.Now(), false)
 	if err != nil {
 		t.Fatalf("add pending: %v", err)
 	}
-	answeredID, err := db.AddTargetGiftHistory("live1", "user2", "User Two", "Dino", time.Now(), false)
+	answeredID, err := db.AddTargetGiftHistory(testRef("live1"), "user2", "User Two", "Dino", time.Now(), false)
 	if err != nil {
 		t.Fatalf("add answered: %v", err)
 	}
@@ -538,7 +571,7 @@ func TestHandleTargetGiftHistoryPriority(t *testing.T) {
 	srv, db, _, mon := setupTestServer(t)
 	mon.SetCurrentLive("live1")
 
-	id, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", time.Now(), false)
+	id, err := db.AddTargetGiftHistory(testRef("live1"), "user1", "User One", "Rosa", time.Now(), false)
 	if err != nil {
 		t.Fatalf("add pending: %v", err)
 	}
@@ -673,7 +706,11 @@ func TestServerStartPortEnv(t *testing.T) {
 func TestHandleAdminLives(t *testing.T) {
 	srv, repo, _, _ := setupTestServer(t)
 
-	if _, err := repo.AddGift("liveA", "u1", "User", "rose", 1, 0); err != nil {
+	session, err := repo.BeginLiveSession("liveA", time.Now())
+	if err != nil {
+		t.Fatalf("begin session: %v", err)
+	}
+	if _, err := repo.AddGift(model.LiveRef{ID: session.ID, Name: "liveA"}, "u1", "User", "rose", 1, 0); err != nil {
 		t.Fatalf("seed gift: %v", err)
 	}
 
@@ -691,17 +728,26 @@ func TestHandleAdminLives(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
 		t.Fatalf("decode JSON: %v", err)
 	}
-	if len(result.Lives) != 1 {
-		t.Fatalf("expected 1 live, got %d", len(result.Lives))
+	if len(result.Lives) != 2 {
+		t.Fatalf("expected 2 lives (harness + liveA), got %d", len(result.Lives))
 	}
-	if result.Lives[0].Name != "liveA" {
-		t.Fatalf("unexpected live name: %q", result.Lives[0].Name)
+	var found *model.Live
+	for i := range result.Lives {
+		if result.Lives[i].Name == "liveA" {
+			found = &result.Lives[i]
+		}
 	}
-	if result.Lives[0].Day == "" {
+	if found == nil {
+		t.Fatalf("expected liveA in %#v", result.Lives)
+	}
+	if found.ID != session.ID {
+		t.Fatalf("expected session id %q, got %q", session.ID, found.ID)
+	}
+	if found.Day == "" {
 		t.Fatal("expected non-empty day")
 	}
-	if result.Lives[0].Events != 1 {
-		t.Fatalf("expected 1 event, got %d", result.Lives[0].Events)
+	if found.Events != 1 {
+		t.Fatalf("expected 1 event, got %d", found.Events)
 	}
 }
 
@@ -718,7 +764,12 @@ func TestHandleAdminLivesMethodNotAllowed(t *testing.T) {
 }
 
 func TestHandleAdminLivesEmptyDB(t *testing.T) {
-	srv, _, _, _ := setupTestServer(t)
+	srv, repo, _, _ := setupTestServer(t)
+
+	// The harness opens a session; this test is about the empty case.
+	if err := testDB(t, repo).ExecSQL("DELETE FROM live_sessions"); err != nil {
+		t.Fatalf("clear sessions: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/lives", nil)
 	rec := httptest.NewRecorder()
@@ -739,59 +790,145 @@ func TestHandleAdminLivesEmptyDB(t *testing.T) {
 	}
 }
 
-func TestHandleAdminLivesDelete(t *testing.T) {
+// TestHandleAdminLivesSessionDelete reproduces the reported bug through the API:
+// two lives of the SAME streamer on the same day, deleting one row must keep the
+// other (and its events).
+func TestHandleAdminLivesSessionDelete(t *testing.T) {
 	srv, repo, _, _ := setupTestServer(t)
 
-	if _, err := repo.AddGift("liveA", "u1", "User", "rose", 1, 0); err != nil {
-		t.Fatalf("seed gift: %v", err)
+	now := time.Now()
+	target, err := repo.BeginLiveSession("liveA", now)
+	if err != nil {
+		t.Fatalf("begin target: %v", err)
+	}
+	if err := repo.EndLiveSession(target.ID, now.Add(time.Minute)); err != nil {
+		t.Fatalf("end target: %v", err)
+	}
+	kept, err := repo.BeginLiveSession("liveA", now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("begin kept: %v", err)
+	}
+	if _, err := repo.AddGift(model.LiveRef{ID: target.ID, Name: "liveA"}, "u1", "User", "rose", 1, 0); err != nil {
+		t.Fatalf("seed target gift: %v", err)
+	}
+	if _, err := repo.AddGift(model.LiveRef{ID: kept.ID, Name: "liveA"}, "u2", "User", "rose", 1, 0); err != nil {
+		t.Fatalf("seed kept gift: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/admin/lives/delete?live=liveA", nil)
-	rec := httptest.NewRecorder()
-	srv.handleAdminLivesDelete(rec, req)
+	deleteURL := func(query string) string {
+		return "/api/admin/lives/session/delete?" + query
+	}
 
+	// missing params -> 400
+	for _, query := range []string{
+		"",
+		"live=liveA&day=" + target.Day,
+		"id=" + target.ID + "&day=" + target.Day,
+		"id=" + target.ID + "&live=liveA",
+	} {
+		rec := httptest.NewRecorder()
+		srv.handleAdminLivesSessionDelete(rec, httptest.NewRequest(http.MethodPost, deleteURL(query), nil))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("query %q: expected 400, got %d", query, rec.Code)
+		}
+	}
+
+	// unknown id -> 404
+	rec := httptest.NewRecorder()
+	srv.handleAdminLivesSessionDelete(rec, httptest.NewRequest(
+		http.MethodPost, deleteURL("id=does-not-exist&live=liveA&day="+target.Day), nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// id does not match live/day -> 409 (and nothing deleted)
+	for _, query := range []string{
+		"id=" + target.ID + "&live=liveB&day=" + target.Day,
+		"id=" + target.ID + "&live=liveA&day=1999-01-01",
+	} {
+		rec := httptest.NewRecorder()
+		srv.handleAdminLivesSessionDelete(rec, httptest.NewRequest(http.MethodPost, deleteURL(query), nil))
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("query %q: expected 409, got %d", query, rec.Code)
+		}
+	}
+	if _, err := repo.GetLiveSession(target.ID); err != nil {
+		t.Fatalf("session must survive a rejected delete: %v", err)
+	}
+
+	// wrong method -> 405
+	rec = httptest.NewRecorder()
+	srv.handleAdminLivesSessionDelete(rec, httptest.NewRequest(
+		http.MethodGet, deleteURL("id="+target.ID+"&live=liveA&day="+target.Day), nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", rec.Code)
+	}
+
+	// happy path -> 200, deleting the target session (gift + session row)
+	rec = httptest.NewRecorder()
+	srv.handleAdminLivesSessionDelete(rec, httptest.NewRequest(
+		http.MethodPost, deleteURL("id="+target.ID+"&live=liveA&day="+target.Day), nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-
 	var result struct {
-		Deleted int64 `json:"deleted"`
+		Deleted int64  `json:"deleted"`
+		ID      string `json:"id"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
 		t.Fatalf("decode JSON: %v", err)
 	}
-	if result.Deleted != 1 {
-		t.Fatalf("expected 1 deleted, got %d", result.Deleted)
+	if result.ID != target.ID {
+		t.Fatalf("expected id %q, got %q", target.ID, result.ID)
+	}
+	if result.Deleted != 2 {
+		t.Fatalf("expected 2 deleted rows (gift + session), got %d", result.Deleted)
+	}
+	if _, err := repo.GetLiveSession(target.ID); err != model.ErrLiveSessionNotFound {
+		t.Fatalf("expected target session to be gone, got %v", err)
 	}
 
-	// live is gone
-	req2 := httptest.NewRequest(http.MethodGet, "/api/admin/lives", nil)
-	rec2 := httptest.NewRecorder()
-	srv.handleAdminLives(rec2, req2)
-	var lives struct {
-		Lives []model.Live `json:"lives"`
+	// The other live of the same streamer is untouched.
+	if _, err := repo.GetLiveSession(kept.ID); err != nil {
+		t.Fatalf("expected the kept session to survive: %v", err)
 	}
-	if err := json.Unmarshal(rec2.Body.Bytes(), &lives); err != nil {
-		t.Fatalf("decode JSON: %v", err)
+	gifts, err := repo.GetRecentGifts("liveA", 10)
+	if err != nil {
+		t.Fatalf("gifts: %v", err)
 	}
-	if len(lives.Lives) != 0 {
-		t.Fatalf("expected no lives after delete, got %#v", lives.Lives)
+	if len(gifts) != 1 || gifts[0].UniqueID != "u2" {
+		t.Fatalf("expected only the kept session's gift, got %#v", gifts)
+	}
+}
+
+// The retired path must never delete anything: an old client hitting it fails
+// safely instead of wiping the streamer's history.
+func TestHandleAdminLivesDeleteIsGone(t *testing.T) {
+	srv, repo, _, _ := setupTestServer(t)
+
+	session, err := repo.BeginLiveSession("liveA", time.Now())
+	if err != nil {
+		t.Fatalf("begin session: %v", err)
+	}
+	if _, err := repo.AddGift(model.LiveRef{ID: session.ID, Name: "liveA"}, "u1", "User", "rose", 1, 0); err != nil {
+		t.Fatalf("seed gift: %v", err)
 	}
 
-	// missing live param → 400
-	req3 := httptest.NewRequest(http.MethodPost, "/api/admin/lives/delete", nil)
-	rec3 := httptest.NewRecorder()
-	srv.handleAdminLivesDelete(rec3, req3)
-	if rec3.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", rec3.Code)
+	rec := httptest.NewRecorder()
+	srv.handleAdminLivesDelete(rec, httptest.NewRequest(http.MethodPost, "/api/admin/lives/delete?live=liveA", nil))
+	if rec.Code != http.StatusGone {
+		t.Fatalf("expected 410, got %d", rec.Code)
 	}
 
-	// wrong method → 405
-	req4 := httptest.NewRequest(http.MethodGet, "/api/admin/lives/delete?live=liveA", nil)
-	rec4 := httptest.NewRecorder()
-	srv.handleAdminLivesDelete(rec4, req4)
-	if rec4.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("expected 405, got %d", rec4.Code)
+	if _, err := repo.GetLiveSession(session.ID); err != nil {
+		t.Fatalf("expected nothing to be deleted, got %v", err)
+	}
+	gifts, err := repo.GetRecentGifts("liveA", 10)
+	if err != nil {
+		t.Fatalf("gifts: %v", err)
+	}
+	if len(gifts) != 1 {
+		t.Fatalf("expected the gift to survive, got %d", len(gifts))
 	}
 }
 
@@ -884,7 +1021,7 @@ func TestHandleGoals(t *testing.T) {
 	})
 
 	t.Run("GET state with progress", func(t *testing.T) {
-		if _, err := repo.AddGift("live1", "u1", "User One", "Rosa", 60, 0); err != nil {
+		if _, err := repo.AddGift(testRef("live1"), "u1", "User One", "Rosa", 60, 0); err != nil {
 			t.Fatalf("seed gift: %v", err)
 		}
 		req := httptest.NewRequest(http.MethodGet, "/api/goals", nil)

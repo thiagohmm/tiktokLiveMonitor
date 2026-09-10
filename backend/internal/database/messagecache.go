@@ -23,10 +23,18 @@ const (
 )
 
 type messageCacheEntry struct {
+	liveID    string
 	liveName  string
 	message   string // normalized: lower-case, trimmed
 	username  string
 	timestamp time.Time
+}
+
+// messageCacheKey scopes the in-memory dedup to one session: the same message
+// sent by the same user in two different lives must both be stored.
+type messageCacheKey struct {
+	liveID   string
+	uniqueID string
 }
 
 // MessageCache is an in-memory write-behind cache for user messages.
@@ -44,7 +52,7 @@ type MessageCache struct {
 	period time.Duration
 
 	mu       sync.Mutex
-	pending  map[string]map[string]messageCacheEntry // uniqueId(lower) -> message(lower) -> entry
+	pending  map[messageCacheKey]map[string]messageCacheEntry // (session,uniqueId) -> message(lower) -> entry
 	flushing bool
 
 	done     chan struct{}
@@ -57,7 +65,7 @@ func NewMessageCache(db *DB) *MessageCache {
 	return &MessageCache{
 		db:      db,
 		period:  defaultMessageCacheFlushPeriod,
-		pending: make(map[string]map[string]messageCacheEntry),
+		pending: make(map[messageCacheKey]map[string]messageCacheEntry),
 		done:    make(chan struct{}),
 	}
 }
@@ -73,23 +81,25 @@ func (c *MessageCache) SetFlushPeriod(d time.Duration) {
 }
 
 // Add buffers a user message in memory. It never performs I/O.
-func (c *MessageCache) Add(liveName, uniqueID, username, message string) {
+func (c *MessageCache) Add(ref model.LiveRef, uniqueID, username, message string) {
 	uniqueID = strings.ToLower(strings.TrimSpace(uniqueID))
 	message = strings.ToLower(strings.TrimSpace(message))
 	username = strings.TrimSpace(username)
-	liveName = strings.TrimSpace(liveName)
-	if uniqueID == "" || message == "" {
+	liveName := strings.TrimSpace(ref.Name)
+	if uniqueID == "" || message == "" || !ref.Valid() {
 		return
 	}
 	if username == "" {
 		username = uniqueID
 	}
 
+	key := messageCacheKey{liveID: ref.ID, uniqueID: uniqueID}
+
 	c.mu.Lock()
-	m := c.pending[uniqueID]
+	m := c.pending[key]
 	if m == nil {
 		m = make(map[string]messageCacheEntry)
-		c.pending[uniqueID] = m
+		c.pending[key] = m
 	}
 	total := 0
 	for _, pm := range c.pending {
@@ -97,13 +107,14 @@ func (c *MessageCache) Add(liveName, uniqueID, username, message string) {
 	}
 	if _, ok := m[message]; !ok {
 		m[message] = messageCacheEntry{
+			liveID:    ref.ID,
 			liveName:  liveName,
 			message:   message,
 			username:  username,
 			timestamp: time.Now(),
 		}
 		total++
-		c.pruneMemory(uniqueID)
+		c.pruneMemory(key)
 	}
 	c.mu.Unlock()
 
@@ -124,9 +135,9 @@ func (c *MessageCache) pendingLen() int {
 }
 
 // pruneMemory keeps only the messageCacheMaxPerUser most recent unique
-// messages for the given user. Caller must hold c.mu.
-func (c *MessageCache) pruneMemory(uniqueID string) {
-	m := c.pending[uniqueID]
+// messages for the given (session, user). Caller must hold c.mu.
+func (c *MessageCache) pruneMemory(key messageCacheKey) {
+	m := c.pending[key]
 	if len(m) <= messageCacheMaxPerUser {
 		return
 	}
@@ -141,7 +152,7 @@ func (c *MessageCache) pruneMemory(uniqueID string) {
 	for _, e := range entries[:messageCacheMaxPerUser] {
 		pruned[e.message] = e
 	}
-	c.pending[uniqueID] = pruned
+	c.pending[key] = pruned
 }
 
 // Flush writes all buffered messages to the database in one batch.
@@ -153,18 +164,19 @@ func (c *MessageCache) Flush() {
 	}
 	c.flushing = true
 	entries := make([]UserMessageEntry, 0, len(c.pending))
-	for uid, m := range c.pending {
+	for key, m := range c.pending {
 		for _, e := range m {
 			entries = append(entries, UserMessageEntry{
+				LiveID:    key.liveID,
 				LiveName:  e.liveName,
-				UniqueID:  uid,
+				UniqueID:  key.uniqueID,
 				Username:  e.username,
 				Message:   e.message,
 				Timestamp: e.timestamp,
 			})
 		}
 	}
-	c.pending = make(map[string]map[string]messageCacheEntry)
+	c.pending = make(map[messageCacheKey]map[string]messageCacheEntry)
 	c.flushing = false
 	c.mu.Unlock()
 
@@ -184,11 +196,11 @@ func (c *MessageCache) Snapshot() []model.UserMessage {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var out []model.UserMessage
-	for uid, m := range c.pending {
+	for key, m := range c.pending {
 		for _, e := range m {
 			out = append(out, model.UserMessage{
 				LiveName:  e.liveName,
-				UniqueID:  uid,
+				UniqueID:  key.uniqueID,
 				Username:  e.username,
 				Message:   e.message,
 				Timestamp: e.timestamp.Format("2006-01-02 15:04:05"),

@@ -1,70 +1,112 @@
 package monitor
 
 import (
+	"errors"
 	"log"
-	"strings"
 	"time"
+
+	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 )
 
-// sessionReusable is true when last activity is on the same UTC calendar day
-// and less than sessionReuseMaxAge before now.
-// Timestamps are stored and read in UTC, so compare days in UTC.
-func sessionReusable(last, now time.Time) bool {
-	if last.IsZero() {
-		return false
-	}
-	last = last.UTC()
-	now = now.UTC()
-	if last.Year() != now.Year() || last.YearDay() != now.YearDay() {
-		return false
-	}
-	return now.Sub(last) < sessionReuseMaxAge
-}
+// sessionTouchMinInterval throttles last_seen_at writes. The resume rule and the
+// listing of open sessions only need hour granularity, so one write per minute
+// per live is enough to keep them honest without amplifying event I/O.
+const sessionTouchMinInterval = time.Minute
 
-// restoreOrPurgeSessionData reloads today's session if it is still reusable;
-// otherwise it deletes gifts, messages and anomaly logs for this live.
-func (m *Monitor) restoreOrPurgeSessionData() {
+// beginOrResumeSession opens the live session for the current streamer.
+//
+// It resumes the session still open from a previous backend run when it is
+// recent enough, and starts a new id otherwise. Nothing is deleted: the buffers
+// are restored from this session's rows only, so data from other lives never
+// leaks into the current one and nothing has to be purged.
+func (m *Monitor) beginOrResumeSession() {
 	m.mu.Lock()
 	liveName := m.currentUsername
+	repo := m.repo
 	m.mu.Unlock()
 
-	last, ok, err := m.repo.GetLastSessionActivity(liveName)
+	if repo == nil || liveName == "" {
+		return
+	}
+
+	session, err := repo.BeginLiveSession(liveName, time.Now())
 	if err != nil {
-		log.Printf("[Monitor] Error reading last session activity: %v", err)
+		log.Printf("[Monitor] Error starting live session for %s: %v", liveName, err)
 		return
 	}
-	if ok && sessionReusable(last, time.Now()) {
-		m.loadTodayData()
-		return
-	}
-	if err := m.repo.DeleteSessionData(liveName); err != nil {
-		log.Printf("[Monitor] Error deleting stale session data: %v", err)
-		return
-	}
+
 	m.mu.Lock()
-	m.targetGiftProgress = nil
+	m.liveID = session.ID
 	m.mu.Unlock()
-	log.Printf("[Monitor] Purged session data for %s", liveName)
+
+	m.loadSessionData(session.ID)
+	log.Printf("[Monitor] Live session %s started for %s", session.ID, liveName)
 }
 
-// loadTodayData loads today's user messages and anomaly logs from the database
-// to restore the chat buffer and pinned users when reconnecting to the same live.
-func (m *Monitor) loadTodayData() {
-	now := time.Now().UnixMilli()
-
+// endCurrentSession closes the current session, if any. Safe to call on every
+// shutdown path (StopMonitoring and Close both run during single-mode shutdown).
+func (m *Monitor) endCurrentSession() {
 	m.mu.Lock()
-	currentUsername := m.currentUsername
+	liveID := m.liveID
+	repo := m.repo
+	m.liveID = ""
 	m.mu.Unlock()
 
-	todayMsgs, err := m.repo.GetTodayUserMessages(currentUsername)
+	if repo == nil || liveID == "" {
+		return
+	}
+	if err := repo.EndLiveSession(liveID, time.Now()); err != nil {
+		log.Printf("[Monitor] Error ending live session %s: %v", liveID, err)
+	}
+}
+
+// touchSession refreshes last_seen_at at most once per sessionTouchMinInterval.
+//
+// It doubles as the health check of the session: when the session was deleted
+// from the administration while the live is still streaming, a new one is
+// opened here, so the following events belong to a live that the admin can see
+// and delete again (instead of piling up invisible orphan rows).
+func (m *Monitor) touchSession() {
+	m.mu.Lock()
+	liveID := m.liveID
+	repo := m.repo
+	if repo == nil || liveID == "" || time.Since(m.liveTouchAt) < sessionTouchMinInterval {
+		m.mu.Unlock()
+		return
+	}
+	m.liveTouchAt = time.Now()
+	m.mu.Unlock()
+
+	err := repo.TouchLiveSession(liveID, time.Now())
+	if err == nil {
+		return
+	}
+	if errors.Is(err, model.ErrLiveSessionNotFound) {
+		log.Printf("[Monitor] Live session %s was deleted; opening a new session", liveID)
+		m.beginOrResumeSession()
+		return
+	}
+	log.Printf("[Monitor] Error touching live session %s: %v", liveID, err)
+}
+
+// loadSessionData restores the chat buffer and pinned users from the rows of
+// this session, so a resumed session continues where it stopped.
+func (m *Monitor) loadSessionData(liveID string) {
+	m.mu.Lock()
+	repo := m.repo
+	m.mu.Unlock()
+	if repo == nil || liveID == "" {
+		return
+	}
+
+	now := time.Now().UnixMilli()
+
+	sessionMsgs, err := repo.GetSessionUserMessages(liveID)
 	if err != nil {
-		log.Printf("[Monitor] Error loading today's messages: %v", err)
-	} else if len(todayMsgs) > 0 {
+		log.Printf("[Monitor] Error loading session messages: %v", err)
+	} else if len(sessionMsgs) > 0 {
 		m.mu.Lock()
-		for _, um := range todayMsgs {
-			if um.LiveName != "" && !strings.EqualFold(um.LiveName, currentUsername) {
-				continue
-			}
+		for _, um := range sessionMsgs {
 			ts := parseStoredTimestampMillis(um.Timestamp, now)
 			m.chatBuffer = append(m.chatBuffer, ChatMessage{
 				UniqueID:  um.UniqueID,
@@ -88,23 +130,23 @@ func (m *Monitor) loadTodayData() {
 			m.questionBuffer = m.questionBuffer[len(m.questionBuffer)-questionBufferMax:]
 		}
 		m.mu.Unlock()
-		log.Printf("[Monitor] Loaded %d messages from today", len(todayMsgs))
+		log.Printf("[Monitor] Loaded %d messages from session %s", len(sessionMsgs), liveID)
 	}
 
-	todayAnomalies, err := m.repo.GetTodayAnomalyLogs(currentUsername)
+	sessionAnomalies, err := repo.GetSessionAnomalyLogs(liveID)
 	if err != nil {
-		log.Printf("[Monitor] Error loading today's anomaly logs: %v", err)
+		log.Printf("[Monitor] Error loading session anomaly logs: %v", err)
 		return
 	}
-	if len(todayAnomalies) == 0 {
+	if len(sessionAnomalies) == 0 {
 		return
 	}
 	m.mu.Lock()
-	for _, al := range todayAnomalies {
+	for _, al := range sessionAnomalies {
 		if al.UniqueID != "" {
 			m.pinnedUsers[normalizeID(al.UniqueID)] = true
 		}
 	}
 	m.mu.Unlock()
-	log.Printf("[Monitor] Restored %d pinned users from today's anomaly logs", len(todayAnomalies))
+	log.Printf("[Monitor] Restored %d pinned users from session %s", len(sessionAnomalies), liveID)
 }

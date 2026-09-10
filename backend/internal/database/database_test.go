@@ -29,6 +29,25 @@ func openTestDB(t *testing.T) *DB {
 	return db
 }
 
+// testRef builds a live reference for tests that do not need a real session row.
+// The id is stable per streamer name so two different names never collide.
+func testRef(name string) model.LiveRef {
+	return model.LiveRef{ID: name + "-session", Name: name}
+}
+
+// seedSession inserts a closed session row directly, for tests that need a
+// specific id/day without going through the resume rules.
+func seedSession(t *testing.T, db *DB, id, liveName, day string) {
+	t.Helper()
+	if err := db.ExecSQL(
+		`INSERT INTO live_sessions (id, live_name, day, started_at, last_seen_at, ended_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		id, liveName, day, day+" 18:00:00", day+" 23:00:00", day+" 23:00:00",
+	); err != nil {
+		t.Fatalf("seed session %s: %v", id, err)
+	}
+}
+
 func TestOpenAndMigrate(t *testing.T) {
 	db := openTestDB(t)
 	if db == nil {
@@ -73,12 +92,12 @@ func TestGetFalsePositiveComments(t *testing.T) {
 func TestAddUserMessageDedup(t *testing.T) {
 	db := openTestDB(t)
 
-	err := db.AddUserMessageDedup("live1", "user1", "User One", "Hello")
+	err := db.AddUserMessageDedup(testRef("live1"), "user1", "User One", "Hello")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	err = db.AddUserMessageDedup("live1", "user1", "User One", "Hello")
+	err = db.AddUserMessageDedup(testRef("live1"), "user1", "User One", "Hello")
 	if err != nil {
 		t.Fatalf("unexpected error for duplicate: %v", err)
 	}
@@ -95,12 +114,12 @@ func TestAddUserMessageDedup(t *testing.T) {
 func TestAddUserMessageDedupCaseInsensitive(t *testing.T) {
 	db := openTestDB(t)
 
-	err := db.AddUserMessageDedup("live1", "user1", "User One", "Hello")
+	err := db.AddUserMessageDedup(testRef("live1"), "user1", "User One", "Hello")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	err = db.AddUserMessageDedup("live1", "USER1", "User One", "HELLO")
+	err = db.AddUserMessageDedup(testRef("live1"), "USER1", "User One", "HELLO")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -118,7 +137,7 @@ func TestAddUserMessageDedupMax10FIFO(t *testing.T) {
 	db := openTestDB(t)
 
 	for i := 0; i < 15; i++ {
-		err := db.AddUserMessageDedup("live1", "user1", "User One", "msg")
+		err := db.AddUserMessageDedup(testRef("live1"), "user1", "User One", "msg")
 		if err != nil {
 			t.Fatalf("add message %d: %v", i, err)
 		}
@@ -136,12 +155,12 @@ func TestAddUserMessageDedupMax10FIFO(t *testing.T) {
 func TestAddUserMessageDedupEmpty(t *testing.T) {
 	db := openTestDB(t)
 
-	err := db.AddUserMessageDedup("live1", "", "User", "msg")
+	err := db.AddUserMessageDedup(testRef("live1"), "", "User", "msg")
 	if err != nil {
 		t.Fatalf("expected nil for empty uniqueID, got: %v", err)
 	}
 
-	err = db.AddUserMessageDedup("live1", "user1", "User", "")
+	err = db.AddUserMessageDedup(testRef("live1"), "user1", "User", "")
 	if err != nil {
 		t.Fatalf("expected nil for empty message, got: %v", err)
 	}
@@ -167,11 +186,11 @@ func TestGetUserMessagesEmpty(t *testing.T) {
 func TestGetAllUserMessages(t *testing.T) {
 	db := openTestDB(t)
 
-	err := db.AddUserMessageDedup("live1", "user1", "User One", "msg1")
+	err := db.AddUserMessageDedup(testRef("live1"), "user1", "User One", "msg1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	err = db.AddUserMessageDedup("live1", "user2", "User Two", "msg2")
+	err = db.AddUserMessageDedup(testRef("live1"), "user2", "User Two", "msg2")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -194,7 +213,7 @@ func TestGetAllUserMessages(t *testing.T) {
 func TestLogAnomaly(t *testing.T) {
 	db := openTestDB(t)
 
-	err := db.LogAnomaly("live1", "bad msg", true, "SPAM", "user1")
+	err := db.LogAnomaly(testRef("live1"), "bad msg", true, "SPAM", "user1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -218,7 +237,7 @@ func TestGetRecentModerationsLimit(t *testing.T) {
 	db := openTestDB(t)
 
 	for i := 0; i < 5; i++ {
-		err := db.LogAnomaly("live1", "msg", false, "OK", "user1")
+		err := db.LogAnomaly(testRef("live1"), "msg", false, "OK", "user1")
 		if err != nil {
 			t.Fatalf("log %d: %v", i, err)
 		}
@@ -236,7 +255,7 @@ func TestGetRecentModerationsLimit(t *testing.T) {
 func TestDeleteModeration(t *testing.T) {
 	db := openTestDB(t)
 
-	err := db.LogAnomaly("live1", "msg", true, "SPAM", "user1")
+	err := db.LogAnomaly(testRef("live1"), "msg", true, "SPAM", "user1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -276,7 +295,7 @@ func TestClearHistory(t *testing.T) {
 	db := openTestDB(t)
 
 	for i := 0; i < 5; i++ {
-		err := db.LogAnomaly("live1", "msg", false, "OK", "user1")
+		err := db.LogAnomaly(testRef("live1"), "msg", false, "OK", "user1")
 		if err != nil {
 			t.Fatalf("log %d: %v", i, err)
 		}
@@ -294,7 +313,7 @@ func TestClearHistory(t *testing.T) {
 func TestAddGift(t *testing.T) {
 	db := openTestDB(t)
 
-	id, err := db.AddGift("live1", "user1", "User One", "Rose", 1, 0)
+	id, err := db.AddGift(testRef("live1"), "user1", "User One", "Rose", 1, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -333,7 +352,7 @@ func TestGetRecentGiftsLimit(t *testing.T) {
 	db := openTestDB(t)
 
 	for i := 0; i < 15; i++ {
-		_, err := db.AddGift("live1", "user1", "User One", "Rose", 1, 0)
+		_, err := db.AddGift(testRef("live1"), "user1", "User One", "Rose", 1, 0)
 		if err != nil {
 			t.Fatalf("add gift %d: %v", i, err)
 		}
@@ -351,11 +370,11 @@ func TestGetRecentGiftsLimit(t *testing.T) {
 func TestGetGiftsByUser(t *testing.T) {
 	db := openTestDB(t)
 
-	_, err := db.AddGift("live1", "user1", "User One", "Rose", 1, 0)
+	_, err := db.AddGift(testRef("live1"), "user1", "User One", "Rose", 1, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	_, err = db.AddGift("live1", "user2", "User Two", "Tiger", 2, 1)
+	_, err = db.AddGift(testRef("live1"), "user2", "User Two", "Tiger", 2, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -384,15 +403,15 @@ func TestGetGiftsByUserEmpty(t *testing.T) {
 func TestGetGiftSummary(t *testing.T) {
 	db := openTestDB(t)
 
-	_, err := db.AddGift("live1", "user1", "User One", "Rose", 3, 0)
+	_, err := db.AddGift(testRef("live1"), "user1", "User One", "Rose", 3, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	_, err = db.AddGift("live1", "user1", "User One", "Rose", 2, 0)
+	_, err = db.AddGift(testRef("live1"), "user1", "User One", "Rose", 2, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	_, err = db.AddGift("live1", "user2", "User Two", "Tiger", 1, 1)
+	_, err = db.AddGift(testRef("live1"), "user2", "User Two", "Tiger", 1, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -428,7 +447,7 @@ func TestClearGifts(t *testing.T) {
 	db := openTestDB(t)
 
 	for i := 0; i < 5; i++ {
-		_, err := db.AddGift("live1", "user1", "User One", "Rose", 1, 0)
+		_, err := db.AddGift(testRef("live1"), "user1", "User One", "Rose", 1, 0)
 		if err != nil {
 			t.Fatalf("add gift %d: %v", i, err)
 		}
@@ -451,14 +470,14 @@ func TestClearGifts(t *testing.T) {
 func TestCleanupOldAnomalies(t *testing.T) {
 	db := openTestDB(t)
 
-	err := db.ExecSQL("INSERT INTO anomaly_logs (live_name, day, comment, is_anomaly, category) VALUES ('live1', '2020-01-01', 'old', TRUE, 'SPAM')")
+	err := db.ExecSQL("INSERT INTO anomaly_logs (live_id, live_name, day, comment, is_anomaly, category) VALUES ('s1', 'live1', '2020-01-01', 'old', TRUE, 'SPAM')")
 	if err != nil {
 		t.Fatalf("insert old: %v", err)
 	}
 
 	// day is stored in UTC; seed 'today' with CURRENT_DATE so the test
 	// is independent of the host timezone.
-	err = db.ExecSQL("INSERT INTO anomaly_logs (live_name, day, comment, is_anomaly, category) VALUES ('live1', CURRENT_DATE, 'new', FALSE, 'OK')")
+	err = db.ExecSQL("INSERT INTO anomaly_logs (live_id, live_name, day, comment, is_anomaly, category) VALUES ('s1', 'live1', CURRENT_DATE, 'new', FALSE, 'OK')")
 	if err != nil {
 		t.Fatalf("insert new: %v", err)
 	}
@@ -482,212 +501,319 @@ func countTable(t *testing.T, db *DB, query string, args ...any) int {
 	return n
 }
 
-func TestGetLastSessionActivityEmpty(t *testing.T) {
+// TestDeleteLiveSessionOnlyDeletesThatSession reproduces the reported bug: two
+// lives of the SAME streamer on the same day, plus one of another streamer.
+// Deleting one session must not touch the others.
+func TestDeleteLiveSessionOnlyDeletesThatSession(t *testing.T) {
 	db := openTestDB(t)
 
-	_, ok, err := db.GetLastSessionActivity("live1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if ok {
-		t.Fatal("expected no session activity")
-	}
-}
+	seedSession(t, db, "sess-a", "liveA", "2026-08-24")
+	seedSession(t, db, "sess-b", "liveA", "2026-08-24")
+	seedSession(t, db, "sess-c", "liveB", "2026-08-24")
 
-func TestGetLastSessionActivityUsesLatestAcrossTables(t *testing.T) {
-	db := openTestDB(t)
-
-	err := db.ExecSQL(
-		`INSERT INTO gifts (live_name, uniqueId, nickname, gift_name, timestamp) VALUES (?, ?, ?, ?, ?)`,
-		"live1", "user1", "User", "Rose", "2026-08-17 10:00:00",
-	)
-	if err != nil {
-		t.Fatalf("insert gift: %v", err)
+	sessions := []struct{ id, name string }{
+		{"sess-a", "liveA"}, {"sess-b", "liveA"}, {"sess-c", "liveB"},
 	}
-	err = db.ExecSQL(
-		`INSERT INTO anomaly_logs (live_name, day, comment, is_anomaly, category, timestamp) VALUES (?, ?, ?, ?, ?, ?)`,
-		"live1", "2026-08-17", "spam", true, "SPAM", "2026-08-17 11:00:00",
-	)
-	if err != nil {
-		t.Fatalf("insert anomaly: %v", err)
-	}
-	err = db.ExecSQL(
-		`INSERT INTO user_messages (live_name, uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?, ?)`,
-		"live1", "user1", "User", "hello", "2026-08-17 12:30:00",
-	)
-	if err != nil {
-		t.Fatalf("insert message: %v", err)
-	}
-	// Mensagem mais recente de OUTRA live: não deve contar para live1.
-	if err := db.ExecSQL(
-		`INSERT INTO user_messages (live_name, uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?, ?)`,
-		"other", "user2", "Other", "oi", "2026-08-17 14:00:00",
-	); err != nil {
-		t.Fatalf("insert other message: %v", err)
-	}
-	err = db.ExecSQL(
-		`INSERT INTO gifts (live_name, uniqueId, nickname, gift_name, timestamp) VALUES (?, ?, ?, ?, ?)`,
-		"other", "user2", "Other", "Tiger", "2026-08-17 23:00:00",
-	)
-	if err != nil {
-		t.Fatalf("insert other gift: %v", err)
+	for _, s := range sessions {
+		ref := model.LiveRef{ID: s.id, Name: s.name}
+		if _, err := db.AddGift(ref, "u1", "User", "rose", 1, 0); err != nil {
+			t.Fatalf("add gift %s: %v", s.id, err)
+		}
+		if err := db.AddUserMessageDedup(ref, "u1", "User", "oi"); err != nil {
+			t.Fatalf("add message %s: %v", s.id, err)
+		}
+		if err := db.LogAnomaly(ref, "spam", true, "SPAM", "u1"); err != nil {
+			t.Fatalf("log anomaly %s: %v", s.id, err)
+		}
+		if err := db.AddShare(ref, "u1", "User"); err != nil {
+			t.Fatalf("add share %s: %v", s.id, err)
+		}
+		if err := db.AddLike(ref, "u1", "User", 3); err != nil {
+			t.Fatalf("add like %s: %v", s.id, err)
+		}
+		if err := db.UpsertRoomLikeTotal(ref, 100); err != nil {
+			t.Fatalf("upsert room total %s: %v", s.id, err)
+		}
+		if _, err := db.AddGiftGoal(model.GiftGoal{
+			LiveID: s.id, LiveName: s.name, Title: "meta",
+			TargetUnits: 10, Status: model.GoalStatusActive,
+		}); err != nil {
+			t.Fatalf("add goal %s: %v", s.id, err)
+		}
 	}
 
-	last, ok, err := db.GetLastSessionActivity("live1")
+	// 7 rows of the session + the session row itself.
+	deleted, err := db.DeleteLiveSession("sess-a")
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !ok {
-		t.Fatal("expected session activity")
-	}
-	want := time.Date(2026, 8, 17, 12, 30, 0, 0, time.UTC)
-	if !last.Equal(want) {
-		t.Fatalf("expected last activity %v, got %v", want, last)
-	}
-}
-
-func TestDeleteSessionData(t *testing.T) {
-	db := openTestDB(t)
-
-	if _, err := db.AddGift("live1", "user1", "User One", "Rose", 1, 0); err != nil {
-		t.Fatalf("add gift live1: %v", err)
-	}
-	if _, err := db.AddGift("live2", "user2", "User Two", "Tiger", 1, 0); err != nil {
-		t.Fatalf("add gift live2: %v", err)
-	}
-	if err := db.LogAnomaly("live1", "spam", true, "SPAM", "user1"); err != nil {
-		t.Fatalf("log live1: %v", err)
-	}
-	if err := db.LogAnomaly("live2", "ok", false, "OK", "user2"); err != nil {
-		t.Fatalf("log live2: %v", err)
-	}
-	if err := db.AddUserMessageDedup("live1", "user1", "User One", "hello"); err != nil {
-		t.Fatalf("add message: %v", err)
-	}
-	if err := db.AddUserMessageDedup("live2", "user2", "User Two", "oi"); err != nil {
-		t.Fatalf("add message live2: %v", err)
-	}
-	if err := db.ExecSQL(
-		"INSERT INTO false_positives (comment, category, expected) VALUES (?, ?, ?)",
-		"example", "SPAM", "SIM_SPAM",
-	); err != nil {
-		t.Fatalf("insert feedback: %v", err)
-	}
-	if _, err := db.AddPinnedComment("live1", "user1", "User One", "fixado live1", "pin-1", nil, time.Now()); err != nil {
-		t.Fatalf("add pinned live1: %v", err)
-	}
-	if _, err := db.AddPinnedComment("live2", "user2", "User Two", "fixado live2", "pin-2", nil, time.Now()); err != nil {
-		t.Fatalf("add pinned live2: %v", err)
-	}
-	if _, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", time.Now(), false); err != nil {
-		t.Fatalf("add target gift live1: %v", err)
-	}
-	if _, err := db.AddTargetGiftHistory("live2", "user2", "User Two", "Dino", time.Now(), false); err != nil {
-		t.Fatalf("add target gift live2: %v", err)
-	}
-
-	if err := db.DeleteSessionData("live1"); err != nil {
 		t.Fatalf("delete session: %v", err)
 	}
+	if deleted != 8 {
+		t.Fatalf("expected 8 deleted rows, got %d", deleted)
+	}
 
-	if n := countTable(t, db, "SELECT COUNT(*) FROM gifts WHERE live_name = ?", "live1"); n != 0 {
-		t.Fatalf("expected 0 gifts for live1, got %d", n)
+	checks := []struct {
+		query string
+		arg   string
+		want  int
+	}{
+		{"SELECT COUNT(*) FROM gifts WHERE live_id = ?", "sess-a", 0},
+		{"SELECT COUNT(*) FROM gifts WHERE live_id = ?", "sess-b", 1},
+		{"SELECT COUNT(*) FROM user_messages WHERE live_id = ?", "sess-b", 1},
+		{"SELECT COUNT(*) FROM anomaly_logs WHERE live_id = ?", "sess-b", 1},
+		{"SELECT COUNT(*) FROM shares WHERE live_id = ?", "sess-b", 1},
+		{"SELECT COUNT(*) FROM likes WHERE live_id = ?", "sess-b", 1},
+		{"SELECT COUNT(*) FROM room_like_totals WHERE live_id = ?", "sess-b", 1},
+		{"SELECT COUNT(*) FROM gift_goals WHERE live_id = ?", "sess-b", 1},
+		{"SELECT COUNT(*) FROM live_sessions WHERE id = ?", "sess-a", 0},
+		// Same streamer, same day: untouched.
+		{"SELECT COUNT(*) FROM gifts WHERE live_id = ?", "sess-c", 1},
+		{"SELECT COUNT(*) FROM room_like_totals WHERE live_id = ?", "sess-c", 1},
+		{"SELECT COUNT(*) FROM live_sessions WHERE id = ?", "sess-c", 1},
 	}
-	if n := countTable(t, db, "SELECT COUNT(*) FROM gifts WHERE live_name = ?", "live2"); n != 1 {
-		t.Fatalf("expected 1 gift for live2, got %d", n)
+	for _, c := range checks {
+		if n := countTable(t, db, c.query, c.arg); n != c.want {
+			t.Fatalf("%s arg=%s: expected %d, got %d", c.query, c.arg, c.want, n)
+		}
 	}
-	if n := countTable(t, db, "SELECT COUNT(*) FROM anomaly_logs WHERE live_name = ?", "live1"); n != 0 {
-		t.Fatalf("expected 0 anomalies for live1, got %d", n)
-	}
-	if n := countTable(t, db, "SELECT COUNT(*) FROM anomaly_logs WHERE live_name = ?", "live2"); n != 1 {
-		t.Fatalf("expected 1 anomaly for live2, got %d", n)
-	}
-	if n := countTable(t, db, "SELECT COUNT(*) FROM user_messages WHERE live_name = ?", "live1"); n != 0 {
-		t.Fatalf("expected 0 user messages for live1, got %d", n)
-	}
-	if n := countTable(t, db, "SELECT COUNT(*) FROM user_messages WHERE live_name = ?", "live2"); n != 1 {
-		t.Fatalf("expected 1 user message for live2, got %d", n)
-	}
-	if n := countTable(t, db, "SELECT COUNT(*) FROM false_positives"); n != 1 {
-		t.Fatalf("expected feedback to remain, got %d", n)
-	}
-	if n := countTable(t, db, "SELECT COUNT(*) FROM pinned_comments WHERE live_name = ?", "live1"); n != 0 {
-		t.Fatalf("expected 0 pinned comments for live1, got %d", n)
-	}
-	if n := countTable(t, db, "SELECT COUNT(*) FROM pinned_comments WHERE live_name = ?", "live2"); n != 1 {
-		t.Fatalf("expected 1 pinned comment for live2, got %d", n)
-	}
-	if n := countTable(t, db, "SELECT COUNT(*) FROM target_gift_history WHERE live_name = ?", "live1"); n != 0 {
-		t.Fatalf("expected 0 target gift history for live1, got %d", n)
-	}
-	if n := countTable(t, db, "SELECT COUNT(*) FROM target_gift_history WHERE live_name = ?", "live2"); n != 1 {
-		t.Fatalf("expected 1 target gift history for live2, got %d", n)
+
+	if _, err := db.DeleteLiveSession("  "); err == nil {
+		t.Fatal("expected error for empty id")
 	}
 }
 
-func TestSessionReuseAgeCases(t *testing.T) {
-	now := time.Now()
-	tests := []struct {
-		name string
-		at   time.Time
-	}{
-		{"same day under 10h", now.Add(-2 * time.Hour)},
-		{"same day over 10h", now.Add(-11 * time.Hour)},
-		{"different day", now.Add(-25 * time.Hour)},
+func TestDeleteLiveSessionCoversEveryLiveIDTable(t *testing.T) {
+	db := openTestDB(t)
+
+	// A lista do delete vem de liveIDColumns; aqui ela é confrontada com o banco,
+	// então esquecer uma tabela nova reprova o teste na direção que importa.
+	covered := make(map[string]bool, len(liveIDColumns))
+	for _, table := range liveIDTableNames() {
+		covered[table] = true
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			db := openTestDB(t)
-			err := db.ExecSQL(
-				`INSERT INTO gifts (live_name, uniqueId, nickname, gift_name, timestamp) VALUES (?, ?, ?, ?, ?)`,
-				"live1", "user1", "User", "Rose", tt.at.UTC().Format("2006-01-02 15:04:05"),
-			)
-			if err != nil {
-				t.Fatalf("insert gift: %v", err)
-			}
+	rows, err := db.query(
+		`SELECT table_name FROM information_schema.columns
+		 WHERE table_schema = 'public' AND column_name = 'live_id'`)
+	if err != nil {
+		t.Fatalf("query live_id columns: %v", err)
+	}
+	defer closeRows(rows)
 
-			last, ok, err := db.GetLastSessionActivity("live1")
-			if err != nil {
-				t.Fatalf("last activity: %v", err)
-			}
-			if !ok {
-				t.Fatal("expected last activity")
-			}
+	found := 0
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		found++
+		if !covered[name] {
+			t.Fatalf("table %q has live_id but is missing from DeleteLiveSession", name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	if found != len(covered) {
+		t.Fatalf("expected %d tables with live_id, got %d", len(covered), found)
+	}
+}
 
-			wantKeep := sameUTCDay(now, tt.at) && now.Sub(tt.at) < 10*time.Hour
-			keep := sameUTCDay(now, last) && now.Sub(last) < 10*time.Hour
-			if keep != wantKeep {
-				t.Fatalf("keep=%v want %v (last=%v now=%v)", keep, wantKeep, last, now)
-			}
-			if keep {
-				if n := countTable(t, db, "SELECT COUNT(*) FROM gifts WHERE live_name = ?", "live1"); n != 1 {
-					t.Fatalf("expected gift to remain, got %d", n)
-				}
-				return
-			}
-			if err := db.DeleteSessionData("live1"); err != nil {
-				t.Fatalf("delete: %v", err)
-			}
-			if n := countTable(t, db, "SELECT COUNT(*) FROM gifts WHERE live_name = ?", "live1"); n != 0 {
-				t.Fatalf("expected gifts deleted, got %d", n)
-			}
-		})
+func TestLiveIDSchemaHardening(t *testing.T) {
+	db := openTestDB(t)
+
+	// Reentrancy: the backfill, SET NOT NULL and the primary key swap must all
+	// be safe to run again on boot.
+	if err := db.migratePostgres(); err != nil {
+		t.Fatalf("re-running migration: %v", err)
+	}
+
+	rows, err := db.query(
+		`SELECT table_name, is_nullable FROM information_schema.columns
+		 WHERE table_schema = 'public' AND column_name = 'live_id'`)
+	if err != nil {
+		t.Fatalf("query live_id columns: %v", err)
+	}
+	for rows.Next() {
+		var table, nullable string
+		if err := rows.Scan(&table, &nullable); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if nullable != "NO" {
+			t.Fatalf("%s.live_id must be NOT NULL, got is_nullable=%s", table, nullable)
+		}
+	}
+	closeRows(rows)
+
+	// room_like_totals is now scoped by session.
+	var pkColumns int
+	if err := db.queryRow(
+		`SELECT COUNT(*) FROM information_schema.table_constraints tc
+		 JOIN information_schema.key_column_usage kcu
+		   ON kcu.constraint_name = tc.constraint_name AND kcu.table_schema = tc.table_schema
+		 WHERE tc.table_schema = 'public' AND tc.table_name = 'room_like_totals'
+		   AND tc.constraint_type = 'PRIMARY KEY' AND kcu.column_name = 'live_id'`,
+	).Scan(&pkColumns); err != nil {
+		t.Fatalf("query room_like_totals pk: %v", err)
+	}
+	if pkColumns != 1 {
+		t.Fatalf("expected primary key on room_like_totals(live_id), got %d cols", pkColumns)
+	}
+}
+
+func TestBeginLiveSessionLifecycle(t *testing.T) {
+	db := openTestDB(t)
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+
+	first, err := db.BeginLiveSession("live1", now)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if first.ID == "" || first.LiveName != "live1" {
+		t.Fatalf("unexpected session: %#v", first)
+	}
+	if first.Day != "2026-08-24" {
+		t.Fatalf("expected day 2026-08-24, got %s", first.Day)
+	}
+
+	// Backend restart inside the same live resumes the open session.
+	resumed, err := db.BeginLiveSession("live1", now.Add(2*time.Hour))
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if resumed.ID != first.ID {
+		t.Fatalf("expected resume of %s, got %s", first.ID, resumed.ID)
+	}
+
+	// Closing is idempotent and keeps the first ended_at.
+	if err := db.EndLiveSession(first.ID, now.Add(3*time.Hour)); err != nil {
+		t.Fatalf("end: %v", err)
+	}
+	if err := db.EndLiveSession(first.ID, now.Add(4*time.Hour)); err != nil {
+		t.Fatalf("end twice must not fail: %v", err)
+	}
+	ended, err := db.GetLiveSession(first.ID)
+	if err != nil {
+		t.Fatalf("get ended: %v", err)
+	}
+	wantEnded := now.Add(3 * time.Hour).Format(time.RFC3339)
+	if ended.EndedAt != wantEnded {
+		t.Fatalf("expected ended_at %s, got %s", wantEnded, ended.EndedAt)
+	}
+
+	// Stop + start on the SAME day is a different live (this is the case the
+	// old <10h reuse rule merged into one).
+	second, err := db.BeginLiveSession("live1", now.Add(4*time.Hour))
+	if err != nil {
+		t.Fatalf("begin after end: %v", err)
+	}
+	if second.ID == first.ID {
+		t.Fatal("a stopped live must not be resumed by the next start")
+	}
+
+	// A new day starts a new session and closes the leftover open one.
+	nextDay := now.Add(25 * time.Hour)
+	third, err := db.BeginLiveSession("live1", nextDay)
+	if err != nil {
+		t.Fatalf("begin next day: %v", err)
+	}
+	if third.ID == second.ID {
+		t.Fatal("expected a new session on a new day")
+	}
+	prev, err := db.GetLiveSession(second.ID)
+	if err != nil {
+		t.Fatalf("get previous: %v", err)
+	}
+	if prev.EndedAt == "" {
+		t.Fatal("expected the leftover open session to be closed")
+	}
+
+	// An idle session (untouched past the reuse window) is not resumed, but is
+	// closed and stays in the listing.
+	idleAt := now.Add(-11 * time.Hour)
+	if err := db.ExecSQL(
+		`INSERT INTO live_sessions (id, live_name, day, started_at, last_seen_at, ended_at)
+		 VALUES (?, ?, ?, ?, ?, NULL)`,
+		"idle-session", "live9", idleAt.Format("2006-01-02"), idleAt, idleAt,
+	); err != nil {
+		t.Fatalf("seed idle session: %v", err)
+	}
+	afterIdle, err := db.BeginLiveSession("live9", now)
+	if err != nil {
+		t.Fatalf("begin after idle: %v", err)
+	}
+	if afterIdle.ID == "idle-session" {
+		t.Fatal("an idle session past the reuse window must not be resumed")
+	}
+	idle, err := db.GetLiveSession("idle-session")
+	if err != nil {
+		t.Fatalf("get idle: %v", err)
+	}
+	if idle.EndedAt == "" {
+		t.Fatal("expected the idle session to be closed")
+	}
+
+	// Invalid input.
+	if _, err := db.BeginLiveSession("   ", now); err == nil {
+		t.Fatal("expected error for empty live name")
+	}
+	if _, err := db.GetLiveSession(""); err == nil {
+		t.Fatal("expected error for empty id")
+	}
+	if _, err := db.GetLiveSession("does-not-exist"); err != model.ErrLiveSessionNotFound {
+		t.Fatalf("expected ErrLiveSessionNotFound, got %v", err)
+	}
+}
+
+func TestLatestLiveSessionPrefersOpen(t *testing.T) {
+	db := openTestDB(t)
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+
+	seedSession(t, db, "closed", "live1", "2026-08-23")
+	seedSession(t, db, "closed-2", "live1", "2026-08-24")
+	if err := db.ExecSQL(
+		`INSERT INTO live_sessions (id, live_name, day, started_at, last_seen_at, ended_at)
+		 VALUES (?, ?, ?, ?, ?, NULL)`,
+		"open", "live1", "2026-08-22", now.Add(-time.Hour), now,
+	); err != nil {
+		t.Fatalf("seed open session: %v", err)
+	}
+
+	got, err := db.LatestLiveSession("live1")
+	if err != nil {
+		t.Fatalf("latest: %v", err)
+	}
+	if got.ID != "open" {
+		t.Fatalf("expected the open session, got %s", got.ID)
+	}
+
+	// Without an open session, the most recent one wins.
+	if err := db.EndLiveSession("open", now); err != nil {
+		t.Fatalf("end open: %v", err)
+	}
+	got, err = db.LatestLiveSession("live1")
+	if err != nil {
+		t.Fatalf("latest after end: %v", err)
+	}
+	if got.ID != "closed-2" {
+		t.Fatalf("expected closed-2, got %s", got.ID)
+	}
+
+	// Never creates a session.
+	if _, err := db.LatestLiveSession("unknown-live"); err != model.ErrLiveSessionNotFound {
+		t.Fatalf("expected ErrLiveSessionNotFound, got %v", err)
+	}
+	if n := countTable(t, db, "SELECT COUNT(*) FROM live_sessions WHERE live_name = ?", "unknown-live"); n != 0 {
+		t.Fatalf("expected no session to be created, got %d", n)
 	}
 }
 
 // sameUTCDay mirrors the production rule: timestamps are stored and read in UTC.
-func sameUTCDay(a, b time.Time) bool {
-	a = a.UTC()
-	b = b.UTC()
-	return a.Year() == b.Year() && a.YearDay() == b.YearDay()
-}
 
 func TestTargetGiftHistoryFlow(t *testing.T) {
 	db := openTestDB(t)
 	receivedAt := time.Date(2026, 8, 17, 15, 30, 0, 0, time.UTC)
 
-	id, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", receivedAt, false)
+	id, err := db.AddTargetGiftHistory(testRef("live1"), "user1", "User One", "Rosa", receivedAt, false)
 	if err != nil {
 		t.Fatalf("add history: %v", err)
 	}
@@ -746,7 +872,7 @@ func TestMarkTargetGiftAnsweredInvalid(t *testing.T) {
 	if err := db.MarkTargetGiftAnswered(0, model.TargetGiftResponseManual, time.Now()); err == nil {
 		t.Fatal("expected error for invalid id")
 	}
-	id, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", time.Now(), false)
+	id, err := db.AddTargetGiftHistory(testRef("live1"), "user1", "User One", "Rosa", time.Now(), false)
 	if err != nil {
 		t.Fatalf("add history: %v", err)
 	}
@@ -759,18 +885,18 @@ func TestGetPendingTargetGiftHistory(t *testing.T) {
 	db := openTestDB(t)
 	now := time.Now()
 
-	pendingID, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", now, false)
+	pendingID, err := db.AddTargetGiftHistory(testRef("live1"), "user1", "User One", "Rosa", now, false)
 	if err != nil {
 		t.Fatalf("add pending: %v", err)
 	}
-	answeredID, err := db.AddTargetGiftHistory("live1", "user2", "User Two", "Dino", now.Add(time.Second), false)
+	answeredID, err := db.AddTargetGiftHistory(testRef("live1"), "user2", "User Two", "Dino", now.Add(time.Second), false)
 	if err != nil {
 		t.Fatalf("add answered: %v", err)
 	}
 	if err := db.MarkTargetGiftAnswered(answeredID, model.TargetGiftResponseManual, now.Add(2*time.Second)); err != nil {
 		t.Fatalf("mark answered: %v", err)
 	}
-	if _, err := db.AddTargetGiftHistory("live2", "user3", "User Three", "Rosa", now, false); err != nil {
+	if _, err := db.AddTargetGiftHistory(testRef("live2"), "user3", "User Three", "Rosa", now, false); err != nil {
 		t.Fatalf("add other live: %v", err)
 	}
 
@@ -813,7 +939,7 @@ func TestTargetGiftPriorityToggle(t *testing.T) {
 	db := openTestDB(t)
 	now := time.Now()
 
-	id, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", now, false)
+	id, err := db.AddTargetGiftHistory(testRef("live1"), "user1", "User One", "Rosa", now, false)
 	if err != nil {
 		t.Fatalf("add history: %v", err)
 	}
@@ -862,15 +988,15 @@ func TestTargetGiftPriorityQueueOrder(t *testing.T) {
 	now := time.Now()
 
 	// A(t1) e B(t2) normais; C(t3) normal.
-	idA, err := db.AddTargetGiftHistory("live1", "userA", "User A", "Rosa", now, false)
+	idA, err := db.AddTargetGiftHistory(testRef("live1"), "userA", "User A", "Rosa", now, false)
 	if err != nil {
 		t.Fatalf("add A: %v", err)
 	}
-	idB, err := db.AddTargetGiftHistory("live1", "userB", "User B", "Dino", now.Add(time.Second), false)
+	idB, err := db.AddTargetGiftHistory(testRef("live1"), "userB", "User B", "Dino", now.Add(time.Second), false)
 	if err != nil {
 		t.Fatalf("add B: %v", err)
 	}
-	idC, err := db.AddTargetGiftHistory("live1", "userC", "User C", "Lion", now.Add(2*time.Second), false)
+	idC, err := db.AddTargetGiftHistory(testRef("live1"), "userC", "User C", "Lion", now.Add(2*time.Second), false)
 	if err != nil {
 		t.Fatalf("add C: %v", err)
 	}
@@ -927,7 +1053,7 @@ func TestTargetGiftPriorityAnsweredRejected(t *testing.T) {
 	db := openTestDB(t)
 	now := time.Now()
 
-	id, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", now, false)
+	id, err := db.AddTargetGiftHistory(testRef("live1"), "user1", "User One", "Rosa", now, false)
 	if err != nil {
 		t.Fatalf("add history: %v", err)
 	}
@@ -956,11 +1082,11 @@ func TestTargetGiftHistoryInsertPriority(t *testing.T) {
 	db := openTestDB(t)
 	now := time.Now()
 
-	normalID, err := db.AddTargetGiftHistory("live1", "user1", "User One", "Rosa", now.Add(time.Second), false)
+	normalID, err := db.AddTargetGiftHistory(testRef("live1"), "user1", "User One", "Rosa", now.Add(time.Second), false)
 	if err != nil {
 		t.Fatalf("add normal: %v", err)
 	}
-	priorityID, err := db.AddTargetGiftHistory("live1", "user2", "User Two", "Dino", now, true)
+	priorityID, err := db.AddTargetGiftHistory(testRef("live1"), "user2", "User Two", "Dino", now, true)
 	if err != nil {
 		t.Fatalf("add priority: %v", err)
 	}
@@ -989,7 +1115,7 @@ func TestPinnedCommentFlow(t *testing.T) {
 	at := time.Date(2026, 8, 17, 15, 30, 0, 0, time.UTC)
 	follower := true
 
-	id, err := db.AddPinnedComment("live1", "user1", "User One", "comentário fixado", "pin-1", &follower, at)
+	id, err := db.AddPinnedComment(testRef("live1"), "user1", "User One", "comentário fixado", "pin-1", &follower, at)
 	if err != nil {
 		t.Fatalf("add pinned: %v", err)
 	}
@@ -997,7 +1123,7 @@ func TestPinnedCommentFlow(t *testing.T) {
 		t.Fatalf("expected positive id, got %d", id)
 	}
 
-	same, err := db.AddPinnedComment("live1", "user1", "User One", "comentário fixado", "pin-1", &follower, at.Add(time.Minute))
+	same, err := db.AddPinnedComment(testRef("live1"), "user1", "User One", "comentário fixado", "pin-1", &follower, at.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("dedup pinned: %v", err)
 	}
@@ -1005,10 +1131,10 @@ func TestPinnedCommentFlow(t *testing.T) {
 		t.Fatalf("expected same id %d, got %d", id, same)
 	}
 
-	if _, err := db.AddPinnedComment("live1", "user2", "User Two", "outro", "pin-2", nil, at.Add(2*time.Minute)); err != nil {
+	if _, err := db.AddPinnedComment(testRef("live1"), "user2", "User Two", "outro", "pin-2", nil, at.Add(2*time.Minute)); err != nil {
 		t.Fatalf("add second: %v", err)
 	}
-	if _, err := db.AddPinnedComment("live2", "user3", "User Three", "outra live", "pin-1", nil, at); err != nil {
+	if _, err := db.AddPinnedComment(testRef("live2"), "user3", "User Three", "outra live", "pin-1", nil, at); err != nil {
 		t.Fatalf("add other live: %v", err)
 	}
 
@@ -1040,7 +1166,7 @@ func TestPinnedCommentFlow(t *testing.T) {
 
 func TestAddPinnedCommentRequiresComment(t *testing.T) {
 	db := openTestDB(t)
-	if _, err := db.AddPinnedComment("live1", "user1", "User", "  ", "", nil, time.Now()); err == nil {
+	if _, err := db.AddPinnedComment(testRef("live1"), "user1", "User", "  ", "", nil, time.Now()); err == nil {
 		t.Fatal("expected error for empty comment")
 	}
 }
@@ -1048,60 +1174,115 @@ func TestAddPinnedCommentRequiresComment(t *testing.T) {
 func TestListLives(t *testing.T) {
 	db := openTestDB(t)
 
-	seed := func(table, liveName, ts string) {
+	// Same streamer on two different days, plus a second streamer on the later
+	// day. Sessions are the unit the admin table lists and deletes.
+	seedSession(t, db, "a1", "liveA", "2026-08-20")
+	seedSession(t, db, "a2", "liveA", "2026-08-24")
+	seedSession(t, db, "b1", "liveB", "2026-08-24")
+
+	seedEvent := func(liveID, liveName, table, ts string) {
 		t.Helper()
+		var err error
 		switch table {
 		case "user_messages":
-			err := db.ExecSQL(
-				"INSERT INTO user_messages (live_name, uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?, ?)",
-				liveName, "u1", "User", "oi", ts,
+			err = db.ExecSQL(
+				"INSERT INTO user_messages (live_id, live_name, uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+				liveID, liveName, "u1", "User", "oi", ts,
 			)
-			if err != nil {
-				t.Fatalf("seed user_messages: %v", err)
-			}
 		case "gifts":
-			err := db.ExecSQL(
-				"INSERT INTO gifts (live_name, uniqueId, nickname, gift_name, timestamp) VALUES (?, ?, ?, ?, ?)",
-				liveName, "u1", "User", "rose", ts,
+			err = db.ExecSQL(
+				"INSERT INTO gifts (live_id, live_name, uniqueId, nickname, gift_name, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+				liveID, liveName, "u1", "User", "rose", ts,
 			)
-			if err != nil {
-				t.Fatalf("seed gifts: %v", err)
-			}
+		case "likes":
+			err = db.ExecSQL(
+				"INSERT INTO likes (live_id, live_name, uniqueId, nickname, like_count, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+				liveID, liveName, "u1", "User", 1, ts,
+			)
+		case "gift_goals":
+			err = db.ExecSQL(
+				"INSERT INTO gift_goals (live_id, live_name, title, target_units, status) VALUES (?, ?, ?, ?, ?)",
+				liveID, liveName, "meta", 10, "active",
+			)
+		}
+		if err != nil {
+			t.Fatalf("seed %s: %v", table, err)
 		}
 	}
 
-	// Same live on two different days, plus a second live on the later day.
-	seed("gifts", "liveA", "2026-08-20 19:00:00")
-	seed("user_messages", "liveA", "2026-08-20 19:05:00")
-	seed("gifts", "liveA", "2026-08-20 21:30:00")
-	seed("gifts", "liveA", "2026-08-24 20:00:00")
-	seed("gifts", "liveB", "2026-08-24 18:00:00")
+	seedEvent("a1", "liveA", "gifts", "2026-08-20 19:00:00")
+	seedEvent("a1", "liveA", "user_messages", "2026-08-20 19:05:00")
+	seedEvent("a1", "liveA", "gifts", "2026-08-20 21:30:00")
+	seedEvent("a2", "liveA", "gifts", "2026-08-24 20:00:00")
+	seedEvent("b1", "liveB", "gifts", "2026-08-24 18:00:00")
+	// Likes count as events; goals do not.
+	seedEvent("a2", "liveA", "likes", "2026-08-24 20:10:00")
+	seedEvent("a2", "liveA", "gift_goals", "2026-08-24 20:20:00")
 
 	lives, err := db.ListLives(10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(lives) != 3 {
-		t.Fatalf("expected 3 live-day rows, got %d: %#v", len(lives), lives)
+		t.Fatalf("expected 3 session rows, got %d: %#v", len(lives), lives)
 	}
 
-	// Most recent day first.
-	if lives[0].Name != "liveA" || lives[0].Day != "2026-08-24" {
+	// Most recent day first; each row carries its session id.
+	if lives[0].Day != "2026-08-24" {
 		t.Fatalf("unexpected first row: %#v", lives[0])
 	}
-	if lives[0].Events != 1 {
-		t.Fatalf("expected 1 event, got %d", lives[0].Events)
-	}
-	if lives[0].StartedAt == "" || lives[0].EndedAt == "" {
-		t.Fatalf("expected timestamps, got %#v", lives[0])
+	byID := map[string]model.Live{}
+	for _, l := range lives {
+		if l.ID == "" {
+			t.Fatalf("expected session id in %#v", l)
+		}
+		if l.StartedAt == "" {
+			t.Fatalf("expected startedAt in %#v", l)
+		}
+		byID[l.ID] = l
 	}
 
-	// liveA on 2026-08-20 aggregates messages and gifts.
-	if lives[2].Name != "liveA" || lives[2].Day != "2026-08-20" {
-		t.Fatalf("unexpected last row: %#v", lives[2])
+	a1, ok := byID["a1"]
+	if !ok {
+		t.Fatalf("missing session a1: %#v", lives)
 	}
-	if lives[2].Events != 3 {
-		t.Fatalf("expected 3 events, got %d", lives[2].Events)
+	if a1.Name != "liveA" || a1.Day != "2026-08-20" || a1.Events != 3 {
+		t.Fatalf("unexpected a1: %#v", a1)
+	}
+	if a1.EndedAt == "" {
+		t.Fatalf("expected endedAt for a closed session: %#v", a1)
+	}
+
+	a2 := byID["a2"]
+	// gift + like = 2 events; the goal must not be counted.
+	if a2.Events != 2 {
+		t.Fatalf("expected 2 events for a2 (goal excluded), got %d", a2.Events)
+	}
+}
+
+func TestListLivesIncludesOpenSession(t *testing.T) {
+	db := openTestDB(t)
+
+	// An idle session that was never closed must stay visible, otherwise it
+	// could never be deleted from the UI.
+	idleAt := time.Now().UTC().Add(-30 * time.Hour)
+	if err := db.ExecSQL(
+		`INSERT INTO live_sessions (id, live_name, day, started_at, last_seen_at, ended_at)
+		 VALUES (?, ?, ?, ?, ?, NULL)`,
+		"idle", "live1", idleAt.Format("2006-01-02"), idleAt, idleAt,
+	); err != nil {
+		t.Fatalf("seed idle session: %v", err)
+	}
+
+	lives, err := db.ListLives(10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(lives) != 1 || lives[0].ID != "idle" {
+		t.Fatalf("expected the idle open session to be listed, got %#v", lives)
+	}
+	if lives[0].EndedAt != "" {
+		t.Fatalf("expected no endedAt, got %q", lives[0].EndedAt)
 	}
 }
 
@@ -1119,12 +1300,7 @@ func TestListLivesEmpty(t *testing.T) {
 func TestListLivesLimit(t *testing.T) {
 	db := openTestDB(t)
 	for i := 0; i < 5; i++ {
-		if err := db.ExecSQL(
-			"INSERT INTO gifts (live_name, uniqueId, nickname, gift_name) VALUES (?, ?, ?, ?)",
-			fmt.Sprintf("live%d", i), "u1", "User", "rose",
-		); err != nil {
-			t.Fatalf("seed: %v", err)
-		}
+		seedSession(t, db, fmt.Sprintf("s%d", i), fmt.Sprintf("live%d", i), "2026-08-24")
 	}
 	lives, err := db.ListLives(2)
 	if err != nil {
@@ -1135,57 +1311,10 @@ func TestListLivesLimit(t *testing.T) {
 	}
 }
 
-func TestDeleteLive(t *testing.T) {
+func TestDeleteLiveSessionEmptyID(t *testing.T) {
 	db := openTestDB(t)
-
-	seed := func(table, liveName string) {
-		t.Helper()
-		var err error
-		switch table {
-		case "gifts":
-			err = db.ExecSQL(
-				"INSERT INTO gifts (live_name, uniqueId, nickname, gift_name) VALUES (?, ?, ?, ?)",
-				liveName, "u1", "User", "rose",
-			)
-		case "user_messages":
-			err = db.ExecSQL(
-				"INSERT INTO user_messages (live_name, uniqueId, username, message) VALUES (?, ?, ?, ?)",
-				liveName, "u1", "User", "oi",
-			)
-		case "gift_goals":
-			err = db.ExecSQL(
-				"INSERT INTO gift_goals (live_name, title, target_units, status) VALUES (?, ?, ?, ?)",
-				liveName, "meta", 100, "active",
-			)
-		}
-		if err != nil {
-			t.Fatalf("seed %s: %v", table, err)
-		}
-	}
-
-	seed("gifts", "liveA")
-	seed("user_messages", "liveA")
-	seed("gift_goals", "liveA")
-	seed("gifts", "liveB")
-
-	deleted, err := db.DeleteLive("liveA")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if deleted != 3 {
-		t.Fatalf("expected 3 deleted rows, got %d", deleted)
-	}
-
-	lives, err := db.ListLives(10)
-	if err != nil {
-		t.Fatalf("list after delete: %v", err)
-	}
-	if len(lives) != 1 || lives[0].Name != "liveB" {
-		t.Fatalf("expected only liveB, got %#v", lives)
-	}
-
-	if _, err := db.DeleteLive("  "); err == nil {
-		t.Fatal("expected error for empty live name")
+	if _, err := db.DeleteLiveSession("   "); err == nil {
+		t.Fatal("expected error for empty session id")
 	}
 }
 
@@ -1193,6 +1322,7 @@ func TestGiftGoalCRUD(t *testing.T) {
 	db := openTestDB(t)
 
 	id, err := db.AddGiftGoal(model.GiftGoal{
+		LiveID:      testRef("live1").ID,
 		LiveName:    "live1",
 		Title:       "Meta da noite",
 		TargetUnits: 500,
@@ -1209,7 +1339,7 @@ func TestGiftGoalCRUD(t *testing.T) {
 		t.Fatalf("expected positive id, got %d", id)
 	}
 
-	goals, err := db.GetGiftGoals("live1")
+	goals, err := db.GetGiftGoals(testRef("live1"))
 	if err != nil {
 		t.Fatalf("get goals: %v", err)
 	}
@@ -1228,7 +1358,7 @@ func TestGiftGoalCRUD(t *testing.T) {
 	}
 
 	// Other live must not see the goal.
-	other, err := db.GetGiftGoals("live2")
+	other, err := db.GetGiftGoals(testRef("live2"))
 	if err != nil {
 		t.Fatalf("get other live: %v", err)
 	}
@@ -1244,7 +1374,7 @@ func TestGiftGoalCRUD(t *testing.T) {
 	if err := db.SaveGiftGoal(g); err != nil {
 		t.Fatalf("save goal: %v", err)
 	}
-	goals, err = db.GetGiftGoals("live1")
+	goals, err = db.GetGiftGoals(testRef("live1"))
 	if err != nil {
 		t.Fatalf("get goals after save: %v", err)
 	}
@@ -1262,20 +1392,6 @@ func TestGiftGoalCRUD(t *testing.T) {
 		t.Fatal("expected error saving goal without id")
 	}
 
-	deleted, err := db.DeleteGiftGoals("live1")
-	if err != nil {
-		t.Fatalf("delete goals: %v", err)
-	}
-	if deleted != 1 {
-		t.Fatalf("expected 1 deleted, got %d", deleted)
-	}
-	goals, err = db.GetGiftGoals("live1")
-	if err != nil {
-		t.Fatalf("get goals after delete: %v", err)
-	}
-	if len(goals) != 0 {
-		t.Fatalf("expected 0 goals after delete, got %d", len(goals))
-	}
 }
 
 func TestGiftGoalValidation(t *testing.T) {
@@ -1284,9 +1400,10 @@ func TestGiftGoalValidation(t *testing.T) {
 		name string
 		g    model.GiftGoal
 	}{
-		{"empty title", model.GiftGoal{LiveName: "live1", Title: " ", TargetUnits: 10}},
-		{"zero target", model.GiftGoal{LiveName: "live1", Title: "meta", TargetUnits: 0}},
-		{"empty live", model.GiftGoal{LiveName: "", Title: "meta", TargetUnits: 10}},
+		{"empty title", model.GiftGoal{LiveID: "s1", LiveName: "live1", Title: " ", TargetUnits: 10}},
+		{"zero target", model.GiftGoal{LiveID: "s1", LiveName: "live1", Title: "meta", TargetUnits: 0}},
+		{"empty live", model.GiftGoal{LiveID: "s1", LiveName: "", Title: "meta", TargetUnits: 10}},
+		{"empty live id", model.GiftGoal{LiveName: "live1", Title: "meta", TargetUnits: 10}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1300,7 +1417,7 @@ func TestGiftGoalValidation(t *testing.T) {
 func TestGetGiftUnits(t *testing.T) {
 	db := openTestDB(t)
 
-	units, count, err := db.GetGiftUnits("live1", "")
+	units, count, err := db.GetGiftUnits(testRef("live1"), "")
 	if err != nil {
 		t.Fatalf("empty live: %v", err)
 	}
@@ -1308,17 +1425,17 @@ func TestGetGiftUnits(t *testing.T) {
 		t.Fatalf("expected 0/0, got %d/%d", units, count)
 	}
 
-	if _, err := db.AddGift("live1", "u1", "User One", "Rosa", 5, 0); err != nil {
+	if _, err := db.AddGift(testRef("live1"), "u1", "User One", "Rosa", 5, 0); err != nil {
 		t.Fatalf("add gift: %v", err)
 	}
-	if _, err := db.AddGift("live1", "u2", "User Two", "Dino", 12, 0); err != nil {
+	if _, err := db.AddGift(testRef("live1"), "u2", "User Two", "Dino", 12, 0); err != nil {
 		t.Fatalf("add gift: %v", err)
 	}
-	if _, err := db.AddGift("live2", "u3", "User Three", "Rosa", 99, 0); err != nil {
+	if _, err := db.AddGift(testRef("live2"), "u3", "User Three", "Rosa", 99, 0); err != nil {
 		t.Fatalf("add gift other live: %v", err)
 	}
 
-	units, count, err = db.GetGiftUnits("live1", "")
+	units, count, err = db.GetGiftUnits(testRef("live1"), "")
 	if err != nil {
 		t.Fatalf("get units: %v", err)
 	}
@@ -1327,7 +1444,7 @@ func TestGetGiftUnits(t *testing.T) {
 	}
 
 	// Filtering by gift name counts only that gift.
-	units, count, err = db.GetGiftUnits("live1", "Rosa")
+	units, count, err = db.GetGiftUnits(testRef("live1"), "Rosa")
 	if err != nil {
 		t.Fatalf("get units (Rosa): %v", err)
 	}
@@ -1336,7 +1453,7 @@ func TestGetGiftUnits(t *testing.T) {
 	}
 
 	// Unknown gift name returns zero.
-	units, count, err = db.GetGiftUnits("live1", "Rocket")
+	units, count, err = db.GetGiftUnits(testRef("live1"), "Rocket")
 	if err != nil {
 		t.Fatalf("get units (Rocket): %v", err)
 	}
@@ -1350,8 +1467,8 @@ func seedMessagesAt(t *testing.T, db *DB, liveName, uid, user string, from time.
 	ids := make([]int64, 0, n)
 	for i := 0; i < n; i++ {
 		id, err := db.insertID(
-			"INSERT INTO user_messages (live_name, uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?, ?)",
-			liveName, uid, user, fmt.Sprintf("msg %d", i), from.Add(time.Duration(i)*time.Minute),
+			"INSERT INTO user_messages (live_id, live_name, uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+			testRef(liveName).ID, liveName, uid, user, fmt.Sprintf("msg %d", i), from.Add(time.Duration(i)*time.Minute),
 		)
 		if err != nil {
 			t.Fatalf("seed message %d: %v", i, err)
@@ -1421,16 +1538,16 @@ func TestGetUserShareCount(t *testing.T) {
 	db := openTestDB(t)
 
 	for i := 0; i < 3; i++ {
-		if err := db.AddShare("live1", "user1", "User One"); err != nil {
+		if err := db.AddShare(testRef("live1"), "user1", "User One"); err != nil {
 			t.Fatalf("add share %d: %v", i, err)
 		}
 	}
 	for i := 0; i < 2; i++ {
-		if err := db.AddShare("live1", "USER1", "User One"); err != nil {
+		if err := db.AddShare(testRef("live1"), "USER1", "User One"); err != nil {
 			t.Fatalf("add share (uppercase) %d: %v", i, err)
 		}
 	}
-	if err := db.AddShare("live1", "user2", "User Two"); err != nil {
+	if err := db.AddShare(testRef("live1"), "user2", "User Two"); err != nil {
 		t.Fatalf("add share user2: %v", err)
 	}
 
@@ -1474,13 +1591,13 @@ func TestGetUserShareCount(t *testing.T) {
 func TestGetUserLikeTotal(t *testing.T) {
 	db := openTestDB(t)
 
-	if err := db.AddLike("live1", "user1", "User One", 3); err != nil {
+	if err := db.AddLike(testRef("live1"), "user1", "User One", 3); err != nil {
 		t.Fatalf("add like: %v", err)
 	}
-	if err := db.AddLike("live2", "USER1", "User One", 5); err != nil {
+	if err := db.AddLike(testRef("live2"), "USER1", "User One", 5); err != nil {
 		t.Fatalf("add like (uppercase): %v", err)
 	}
-	if err := db.AddLike("live1", "user2", "User Two", 7); err != nil {
+	if err := db.AddLike(testRef("live1"), "user2", "User Two", 7); err != nil {
 		t.Fatalf("add like user2: %v", err)
 	}
 

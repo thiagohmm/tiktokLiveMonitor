@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
@@ -33,8 +34,26 @@ func newTestController(t *testing.T, liveName string) *AppController {
 	}
 	mon.SetCurrentLive(liveName)
 
+	// StartMonitoring is what opens the session in production; the harness opens
+	// it here so active/session resolution behaves like a running live.
+	if liveName != "" {
+		if _, err := db.BeginLiveSession(liveName, time.Now()); err != nil {
+			t.Fatalf("begin live session: %v", err)
+		}
+	}
+
 	c := NewAppController(mon, db)
 	return c
+}
+
+// activeRefForTest resolves the session of the live under test.
+func (c *AppController) activeRefForTest(t *testing.T) model.LiveRef {
+	t.Helper()
+	ref, err := c.activeLiveRef()
+	if err != nil {
+		t.Fatalf("active live ref: %v", err)
+	}
+	return ref
 }
 
 func giftData(uniqueID string, repeatCount int) monitor.EventData {
@@ -193,7 +212,7 @@ func TestGoalProgressFlow(t *testing.T) {
 	}
 
 	// No progress event without gifts: a duplicate check must be silent.
-	c.checkGoalProgress()
+	c.checkGoalProgress(c.activeRefForTest(t))
 	if len(updates) != 1 {
 		t.Fatalf("expected no new update, got %d", len(updates))
 	}
@@ -320,7 +339,7 @@ func TestGoalProgressEmitsOnPlainGifts(t *testing.T) {
 	}
 
 	// A repeated check with unchanged units must stay silent.
-	c.checkGoalProgress()
+	c.checkGoalProgress(c.activeRefForTest(t))
 	if len(updates) != 2 {
 		t.Fatalf("expected no new update on unchanged units, got %d", len(updates))
 	}

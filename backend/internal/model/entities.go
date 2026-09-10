@@ -78,6 +78,7 @@ type GoalMilestone struct {
 // gifts of the live; otherwise only units of the given gift count.
 type GiftGoal struct {
 	ID          int64           `json:"id"`
+	LiveID      string          `json:"liveId,omitempty"`
 	LiveName    string          `json:"liveName"`
 	Title       string          `json:"title"`
 	GiftName    string          `json:"giftName,omitempty"`
@@ -126,26 +127,26 @@ const (
 
 // UserRank is a single participant's engagement ranking for a live.
 type UserRank struct {
-	UniqueID      string  `json:"uniqueId"`
-	Nickname      string  `json:"nickname"`
-	Score         float64 `json:"score"`
-	GiftScore     float64 `json:"giftScore"`
+	UniqueID  string  `json:"uniqueId"`
+	Nickname  string  `json:"nickname"`
+	Score     float64 `json:"score"`
+	GiftScore float64 `json:"giftScore"`
 	// Diamonds is the total coin (diamond) value of the gifts sent by the
 	// user (sum of gift price x repeat count), the metric TikTok's in-room
 	// live ranking is based on.
 	Diamonds int `json:"diamonds"`
 	// Tier holds the TikTok visual tier for the gifter ranking top 3
 	// (crown / headband / medal); empty outside that podium.
-	Tier string `json:"tier,omitempty"`
-	MessageCount  int     `json:"messageCount"`
-	QuestionCount int     `json:"questionCount"`
-	GiftCount     int     `json:"giftCount"`
-	ShareCount    int     `json:"shareCount"`
-	LikeCount     int     `json:"likeCount"`
-	AnomalyCount  int     `json:"anomalyCount"`
-	RiskLevel     string  `json:"riskLevel"`
-	FirstSeen     string  `json:"firstSeen"`
-	LastSeen      string  `json:"lastSeen"`
+	Tier          string `json:"tier,omitempty"`
+	MessageCount  int    `json:"messageCount"`
+	QuestionCount int    `json:"questionCount"`
+	GiftCount     int    `json:"giftCount"`
+	ShareCount    int    `json:"shareCount"`
+	LikeCount     int    `json:"likeCount"`
+	AnomalyCount  int    `json:"anomalyCount"`
+	RiskLevel     string `json:"riskLevel"`
+	FirstSeen     string `json:"firstSeen"`
+	LastSeen      string `json:"lastSeen"`
 }
 
 // LiveRanking is the full engagement ranking for a single live.
@@ -165,14 +166,14 @@ type LiveRanking struct {
 
 // LiveReport is the AI-generated post-live summary.
 type LiveReport struct {
-	LiveName          string           `json:"liveName"`
-	StartedAt         string           `json:"startedAt"`
-	EndedAt           string           `json:"endedAt"`
-	DurationMinutes   int              `json:"durationMinutes"`
-	MessageCount      int              `json:"messageCount"`
-	ParticipantCount  int              `json:"participantCount"`
-	GiftCount         int              `json:"giftCount"`
-	GiftTotal         int              `json:"giftTotal"`
+	LiveName         string `json:"liveName"`
+	StartedAt        string `json:"startedAt"`
+	EndedAt          string `json:"endedAt"`
+	DurationMinutes  int    `json:"durationMinutes"`
+	MessageCount     int    `json:"messageCount"`
+	ParticipantCount int    `json:"participantCount"`
+	GiftCount        int    `json:"giftCount"`
+	GiftTotal        int    `json:"giftTotal"`
 	// GiftValue is the total coin (💎) value of the gifts received in the live.
 	GiftValue         int              `json:"giftValue,omitempty"`
 	TopSupporters     []UserRank       `json:"topSupporters"`
@@ -224,9 +225,33 @@ type UserLiveSummary struct {
 // that carry live_name (user_messages, gifts, shares, anomaly_logs, pinned_comments,
 // target_gift_history).
 type Live struct {
+	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Day       string `json:"day"`
 	StartedAt string `json:"startedAt"`
 	EndedAt   string `json:"endedAt"`
 	Events    int    `json:"events"`
+}
+
+// LiveSession is one monitoring connection to a live. live_name alone is the
+// streamer username, so it cannot identify a live: only ID can.
+type LiveSession struct {
+	ID         string `json:"id"`
+	LiveName   string `json:"name"`
+	Day        string `json:"day"`
+	StartedAt  string `json:"startedAt"`
+	LastSeenAt string `json:"lastSeenAt"`
+	EndedAt    string `json:"endedAt,omitempty"`
+}
+
+// LiveRef is the (session, streamer) pair carried by every write. Passing both
+// together makes it impossible to store an event without its session id.
+type LiveRef struct {
+	ID   string
+	Name string
+}
+
+// Valid reports whether the ref points at a session.
+func (r LiveRef) Valid() bool {
+	return r.ID != ""
 }

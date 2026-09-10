@@ -15,6 +15,9 @@ var ErrInvalidID = errors.New("invalid id")
 // ErrUniqueIDRequired is returned when uniqueId is required but empty.
 var ErrUniqueIDRequired = errors.New("uniqueId is required")
 
+// ErrLiveSessionNotFound is returned when a live session id does not exist.
+var ErrLiveSessionNotFound = errors.New("live session not found")
+
 // FeedbackRepository handles the read-only consumption of the user feedback
 // persisted by the Python agent (feedback.db is owned by the agent since the
 // AI unification — see docs/plano-unificacao-ia.md).
@@ -24,13 +27,13 @@ type FeedbackRepository interface {
 
 // AnomalyRepository handles persistence of moderation logs.
 type AnomalyRepository interface {
-	LogAnomaly(liveName, comment string, isAnomaly bool, category, uniqueID string) error
+	LogAnomaly(ref LiveRef, comment string, isAnomaly bool, category, uniqueID string) error
 	GetRecentModerations(limit int) ([]AnomalyLog, error)
 	GetRecentAnomalyLogs(limit int) ([]AnomalyLog, error)
 	GetAnomalyLogsByLiveName(liveName string) ([]AnomalyLog, error)
 	// GetAnomalyLogsByUser returns anomaly logs for a participant (case-insensitive).
 	GetAnomalyLogsByUser(uniqueID string, limit int) ([]AnomalyLog, error)
-	GetTodayAnomalyLogs(liveName string) ([]AnomalyLog, error)
+	GetSessionAnomalyLogs(liveID string) ([]AnomalyLog, error)
 	ClearHistory() (int64, error)
 	DeleteModeration(id int64) (int64, error)
 	CleanupOldAnomalies() (int64, error)
@@ -38,30 +41,30 @@ type AnomalyRepository interface {
 
 // UserMessageRepository handles persistence of user messages.
 type UserMessageRepository interface {
-	AddUserMessageDedup(liveName, uniqueID, username, message string) error
+	AddUserMessageDedup(ref LiveRef, uniqueID, username, message string) error
 	GetUserMessages(uniqueID string) ([]UserMessage, error)
 	// GetUserMessagesRecent returns the last `limit` messages of a user
 	// (newest first).
 	GetUserMessagesRecent(uniqueID string, limit int) ([]UserMessage, error)
 	GetAllUserMessages() (map[string][]UserMessage, error)
-	GetTodayUserMessages(liveName string) ([]UserMessage, error)
+	GetSessionUserMessages(liveID string) ([]UserMessage, error)
 }
 
 // GiftRepository handles persistence of gifts.
 type GiftRepository interface {
-	AddGift(liveName, uniqueID, nickname, giftName string, repeatCount, giftType int) (int64, error)
+	AddGift(ref LiveRef, uniqueID, nickname, giftName string, repeatCount, giftType int) (int64, error)
 	GetRecentGifts(liveName string, limit int) ([]Gift, error)
 	GetGiftsByUser(uniqueID string) ([]Gift, error)
 	GetGiftSummary() (map[string]map[string]int, error)
 	// GetGiftUnits returns total gift units (SUM repeat_count) and event count
-	// for a live. When no gift names are given, all gifts count.
-	GetGiftUnits(liveName string, giftNames ...string) (units, count int, err error)
+	// for a session. When no gift names are given, all gifts count.
+	GetGiftUnits(ref LiveRef, giftNames ...string) (units, count int, err error)
 	ClearGifts() (int64, error)
 }
 
 // TargetGiftHistoryRepository tracks target gift receive/answer history.
 type TargetGiftHistoryRepository interface {
-	AddTargetGiftHistory(liveName, uniqueID, nickname, giftName string, receivedAt time.Time, priority bool) (int64, error)
+	AddTargetGiftHistory(ref LiveRef, uniqueID, nickname, giftName string, receivedAt time.Time, priority bool) (int64, error)
 	MarkTargetGiftAnswered(id int64, responseType string, answeredAt time.Time) error
 	// SetTargetGiftPriority promotes (priority=true) or demotes (priority=false)
 	// a pending entry in the gift queue. Promotion stamps `at` as the
@@ -71,41 +74,56 @@ type TargetGiftHistoryRepository interface {
 	GetPendingTargetGiftHistory(liveName string, limit int) ([]TargetGiftHistory, error)
 }
 
-// GoalRepository handles persistence of live gift goals.
+// GoalRepository handles persistence of live gift goals. Goals belong to a
+// session: a goal created during a live is deleted with that live.
 type GoalRepository interface {
 	AddGiftGoal(g GiftGoal) (int64, error)
-	GetGiftGoals(liveName string) ([]GiftGoal, error)
+	GetGiftGoals(ref LiveRef) ([]GiftGoal, error)
 	SaveGiftGoal(g GiftGoal) error
-	DeleteGiftGoals(liveName string) (int64, error)
 }
 
 // PinnedCommentRepository tracks comments pinned during a live.
 type PinnedCommentRepository interface {
-	AddPinnedComment(liveName, uniqueID, nickname, comment, pinID string, isFollower *bool, at time.Time) (int64, error)
+	AddPinnedComment(ref LiveRef, uniqueID, nickname, comment, pinID string, isFollower *bool, at time.Time) (int64, error)
 	GetRecentPinnedComments(liveName string, limit int) ([]PinnedComment, error)
 }
 
-// SessionRepository handles reuse or purge of live session data on connect.
+// SessionRepository handles the lifecycle of monitoring sessions. A session is
+// one connection to a live; live_name alone (the streamer username) is shared
+// by every session of that streamer and cannot identify one.
 type SessionRepository interface {
-	GetLastSessionActivity(liveName string) (time.Time, bool, error)
-	DeleteSessionData(liveName string) error
+	// BeginLiveSession resumes an open, still-reusable session for liveName or
+	// starts a new one. It never deletes data.
+	BeginLiveSession(liveName string, now time.Time) (LiveSession, error)
+	// EndLiveSession closes a session. Idempotent: closing twice keeps the
+	// first ended_at instead of erroring.
+	EndLiveSession(id string, at time.Time) error
+	// TouchLiveSession refreshes last_seen_at (used by the resume rule).
+	TouchLiveSession(id string, at time.Time) error
+	GetLiveSession(id string) (LiveSession, error)
+	// LatestLiveSession resolves a session from a streamer name (open session
+	// first, then most recent). Used for events that arrive without a liveId.
+	LatestLiveSession(liveName string) (LiveSession, error)
+	// DeleteLiveSession removes every row produced by one session and returns
+	// the total number of rows deleted.
+	DeleteLiveSession(id string) (int64, error)
 }
 
 // ShareRepository tracks social shares of the live made by participants.
 type ShareRepository interface {
-	AddShare(liveName, uniqueID, nickname string) error
+	AddShare(ref LiveRef, uniqueID, nickname string) error
 	// GetUserShareCount returns the total number of share events made by a user.
 	GetUserShareCount(uniqueID string) (int, error)
 }
 
 // LikeRepository tracks likes (hearts) sent by participants during a live.
 type LikeRepository interface {
-	AddLike(liveName, uniqueID, nickname string, likeCount int) error
+	AddLike(ref LiveRef, uniqueID, nickname string, likeCount int) error
 	// GetUserLikeTotal returns the sum of like_count over all like events of a user.
 	GetUserLikeTotal(uniqueID string) (int64, error)
 	// UpsertRoomLikeTotal stores the room-level cumulative like counter as
 	// reported by the stream (monotonic: only the highest value is kept).
-	UpsertRoomLikeTotal(liveName string, total int64) error
+	UpsertRoomLikeTotal(ref LiveRef, total int64) error
 	// LikeTotals returns the room-level cumulative like total and the sum of
 	// the per-event likes actually delivered by the stream for a live.
 	LikeTotals(liveName string) (roomTotal, delivered int64, err error)
@@ -121,11 +139,8 @@ type RankingRepository interface {
 	RecentLivesForUser(uniqueID string, limit int) ([]UserLiveSummary, error)
 	// TotalDistinctUsers counts distinct users across all user_messages.
 	TotalDistinctUsers() (int, error)
-	// ListLives returns derived lives grouped by live_name and day, most recent first.
+	// ListLives returns one row per session (live connection), most recent first.
 	ListLives(limit int) ([]Live, error)
-
-	// DeleteLive removes all stored rows for a live (across every table with live_name).
-	DeleteLive(liveName string) (int64, error)
 }
 
 // LiveStat is per-user aggregated data used to compute a ranking score.

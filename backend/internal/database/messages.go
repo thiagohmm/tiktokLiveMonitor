@@ -9,12 +9,16 @@ import (
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 )
 
-// AddUserMessageDedup stores a user message only if it's unique for that user, keeping max 10.
-func (db *DB) AddUserMessageDedup(liveName, uniqueID, username, message string) error {
+// AddUserMessageDedup stores a user message only if it's unique for that user
+// within the session, keeping max 10 per user and session.
+func (db *DB) AddUserMessageDedup(ref model.LiveRef, uniqueID, username, message string) error {
 	uniqueID = strings.ToLower(strings.TrimSpace(uniqueID))
 	message = strings.ToLower(strings.TrimSpace(message))
 	username = strings.TrimSpace(username)
-	liveName = strings.TrimSpace(liveName)
+	liveName := strings.TrimSpace(ref.Name)
+	if !ref.Valid() {
+		return model.ErrInvalidID
+	}
 
 	if message == "" || uniqueID == "" {
 		return nil
@@ -23,11 +27,11 @@ func (db *DB) AddUserMessageDedup(liveName, uniqueID, username, message string) 
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// Check if message already exists for this user.
+	// Check if message already exists for this user in this session.
 	var count int
 	err := db.queryRow(
-		"SELECT COUNT(*) FROM user_messages WHERE LOWER(uniqueId) = ? AND LOWER(message) = ?",
-		uniqueID, message,
+		"SELECT COUNT(*) FROM user_messages WHERE live_id = ? AND LOWER(uniqueId) = ? AND LOWER(message) = ?",
+		ref.ID, uniqueID, message,
 	).Scan(&count)
 	if err != nil || count > 0 {
 		return err
@@ -35,20 +39,20 @@ func (db *DB) AddUserMessageDedup(liveName, uniqueID, username, message string) 
 
 	// Insert new message.
 	_, err = db.exec(
-		"INSERT INTO user_messages (live_name, uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?, ?)",
-		liveName, uniqueID, username, message, time.Now(),
+		"INSERT INTO user_messages (live_id, live_name, uniqueId, username, message, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+		ref.ID, liveName, uniqueID, username, message, time.Now(),
 	)
 	if err != nil {
 		return fmt.Errorf("insert user message: %w", err)
 	}
 
-	// Keep only the 10 most recent unique messages per user.
+	// Keep only the 10 most recent unique messages per user in this session.
 	_, err = db.exec(`
-		DELETE FROM user_messages WHERE id NOT IN (
-			SELECT id FROM user_messages WHERE LOWER(uniqueId) = ?
+		DELETE FROM user_messages WHERE live_id = ? AND id NOT IN (
+			SELECT id FROM user_messages WHERE live_id = ? AND LOWER(uniqueId) = ?
 			ORDER BY timestamp DESC LIMIT 10
 		) AND LOWER(uniqueId) = ?
-	`, uniqueID, uniqueID)
+	`, ref.ID, ref.ID, uniqueID, uniqueID)
 	if err != nil {
 		return fmt.Errorf("prune user messages: %w", err)
 	}
@@ -57,6 +61,7 @@ func (db *DB) AddUserMessageDedup(liveName, uniqueID, username, message string) 
 
 // UserMessageEntry is a pending user message to be stored in a batch.
 type UserMessageEntry struct {
+	LiveID    string
 	LiveName  string
 	UniqueID  string
 	Username  string
@@ -65,8 +70,9 @@ type UserMessageEntry struct {
 }
 
 // BatchAddUserMessages inserts multiple user messages in a single transaction.
-// Duplicates (same user, same message, case-insensitive) are skipped and every
-// affected user is pruned to their 10 most recent messages.
+// Duplicates (same session, same user, same message, case-insensitive) are
+// skipped and every affected user is pruned to their 10 most recent messages of
+// that session.
 func (db *DB) BatchAddUserMessages(entries []UserMessageEntry) error {
 	if len(entries) == 0 {
 		return nil
@@ -83,11 +89,14 @@ func (db *DB) BatchAddUserMessages(entries []UserMessageEntry) error {
 	// actionable, so it is intentionally ignored.
 	defer func() { _ = tx.Rollback() }()
 
-	users := make(map[string]struct{})
+	// Pruning is per (session, user), so the key must carry both.
+	type userKey struct{ liveID, uid string }
+	users := make(map[userKey]struct{})
 	for _, e := range entries {
 		uid := strings.ToLower(strings.TrimSpace(e.UniqueID))
 		msg := strings.ToLower(strings.TrimSpace(e.Message))
-		if uid == "" || msg == "" {
+		liveID := strings.TrimSpace(e.LiveID)
+		if uid == "" || msg == "" || liveID == "" {
 			continue
 		}
 		username := strings.TrimSpace(e.Username)
@@ -100,22 +109,22 @@ func (db *DB) BatchAddUserMessages(entries []UserMessageEntry) error {
 			ts = time.Now()
 		}
 		_, err := tx.Exec(db.bind(`
-			INSERT INTO user_messages (live_name, uniqueId, username, message, timestamp)
-			SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (
-				SELECT 1 FROM user_messages WHERE LOWER(uniqueId) = ? AND LOWER(message) = ?
-			)`), liveName, e.UniqueID, username, e.Message, ts, uid, msg)
+			INSERT INTO user_messages (live_id, live_name, uniqueId, username, message, timestamp)
+			SELECT ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (
+				SELECT 1 FROM user_messages WHERE live_id = ? AND LOWER(uniqueId) = ? AND LOWER(message) = ?
+			)`), liveID, liveName, e.UniqueID, username, e.Message, ts, liveID, uid, msg)
 		if err != nil {
 			return fmt.Errorf("batch insert user message: %w", err)
 		}
-		users[uid] = struct{}{}
+		users[userKey{liveID: liveID, uid: uid}] = struct{}{}
 	}
 
-	for uid := range users {
+	for key := range users {
 		_, err := tx.Exec(db.bind(`
-			DELETE FROM user_messages WHERE id NOT IN (
-				SELECT id FROM user_messages WHERE LOWER(uniqueId) = ?
+			DELETE FROM user_messages WHERE live_id = ? AND id NOT IN (
+				SELECT id FROM user_messages WHERE live_id = ? AND LOWER(uniqueId) = ?
 				ORDER BY timestamp DESC LIMIT 10
-			) AND LOWER(uniqueId) = ?`), uid, uid)
+			) AND LOWER(uniqueId) = ?`), key.liveID, key.liveID, key.uid, key.uid)
 		if err != nil {
 			return fmt.Errorf("prune user messages: %w", err)
 		}
@@ -180,10 +189,11 @@ func (db *DB) GetAllUserMessages() (map[string][]model.UserMessage, error) {
 	return result, rows.Err()
 }
 
-// GetTodayUserMessages returns today's user messages for the given live.
-func (db *DB) GetTodayUserMessages(liveName string) ([]model.UserMessage, error) {
-	liveName = strings.TrimSpace(liveName)
-	if liveName == "" {
+// GetSessionUserMessages returns the user messages stored for one session, in
+// chronological order. Used to restore the chat buffer on reconnect.
+func (db *DB) GetSessionUserMessages(liveID string) ([]model.UserMessage, error) {
+	liveID = strings.TrimSpace(liveID)
+	if liveID == "" {
 		return []model.UserMessage{}, nil
 	}
 
@@ -193,12 +203,12 @@ func (db *DB) GetTodayUserMessages(liveName string) ([]model.UserMessage, error)
 	rows, err := db.query(
 		`SELECT id, live_name, uniqueId, username, message, timestamp
 		 FROM user_messages
-		 WHERE live_name = ? AND date(timestamp) = date('now')
+		 WHERE live_id = ?
 		 ORDER BY timestamp ASC`,
-		liveName,
+		liveID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("query today user messages: %w", err)
+		return nil, fmt.Errorf("query session user messages: %w", err)
 	}
 	defer closeRows(rows)
 

@@ -22,7 +22,7 @@ const settingsKey = "app"
 
 // MessageCache is an in-memory write-behind buffer for user messages.
 type MessageCache interface {
-	Add(liveName, uniqueID, username, message string)
+	Add(ref model.LiveRef, uniqueID, username, message string)
 	Snapshot() []model.UserMessage
 }
 
@@ -217,7 +217,12 @@ func (c *AppController) ReportExternalFlag(data monitor.EventData) {
 		"category":  category,
 		"timestamp": eventString(data, "timestamp"),
 	})
-	if err := c.repo.LogAnomaly(liveName, comment, true, category, uniqueID); err != nil {
+	ref, err := c.eventLiveRef(data)
+	if err != nil {
+		log.Printf("[Controller] Error resolving live session for external flag (%s): %v", liveName, err)
+		return
+	}
+	if err := c.repo.LogAnomaly(ref, comment, true, category, uniqueID); err != nil {
 		log.Printf("[Controller] Error logging external flag: %v", err)
 	}
 }
@@ -252,14 +257,20 @@ func (c *AppController) ClearHistory() (int64, error) {
 	return c.repo.ClearHistory()
 }
 
-// GetLives returns derived lives (grouped by live and day) for the admin tab.
+// GetLives returns one row per live session for the admin tab.
 func (c *AppController) GetLives(limit int) ([]model.Live, error) {
 	return c.repo.ListLives(limit)
 }
 
-// DeleteLive removes all stored data for a live.
-func (c *AppController) DeleteLive(liveName string) (int64, error) {
-	return c.repo.DeleteLive(liveName)
+// GetLiveSession returns one live session by id (admin delete guard).
+func (c *AppController) GetLiveSession(id string) (model.LiveSession, error) {
+	return c.repo.GetLiveSession(id)
+}
+
+// DeleteLive removes all stored data of one live session (id), never the whole
+// history of the streamer.
+func (c *AppController) DeleteLive(id string) (int64, error) {
+	return c.repo.DeleteLiveSession(id)
 }
 
 // GetRecentGifts returns recent gifts for the current live.
@@ -279,7 +290,10 @@ func (c *AppController) ClearGifts() (int64, error) {
 
 // RecordTargetGiftReceived stores a pending target gift history entry and returns its id.
 func (c *AppController) RecordTargetGiftReceived(data monitor.EventData) (int64, error) {
-	liveName := c.eventLiveName(data)
+	ref, err := c.eventLiveRef(data)
+	if err != nil {
+		return 0, err
+	}
 	uniqueID := eventString(data, "uniqueId", "userId")
 	nickname := eventString(data, "nickname")
 	giftName := resolveGiftName(data)
@@ -300,7 +314,7 @@ func (c *AppController) RecordTargetGiftReceived(data monitor.EventData) (int64,
 		}
 	}
 
-	id, err := c.repo.AddTargetGiftHistory(liveName, uniqueID, nickname, giftName, receivedAt, eventBool(data, "isPriority"))
+	id, err := c.repo.AddTargetGiftHistory(ref, uniqueID, nickname, giftName, receivedAt, eventBool(data, "isPriority"))
 	if err == nil {
 		data["receivedAt"] = receivedAt.UTC().Format(time.RFC3339Nano)
 	}
@@ -361,7 +375,10 @@ func (c *AppController) RecordPinnedComment(data monitor.EventData) (int64, erro
 		}
 	}()
 
-	liveName := c.eventLiveName(data)
+	ref, err := c.eventLiveRef(data)
+	if err != nil {
+		return 0, err
+	}
 	uniqueID := eventString(data, "uniqueId", "userId")
 	nickname := eventString(data, "nickname")
 	comment := eventString(data, "comment")
@@ -380,7 +397,7 @@ func (c *AppController) RecordPinnedComment(data monitor.EventData) (int64, erro
 			at = time.Unix(ts, 0)
 		}
 	}
-	return c.repo.AddPinnedComment(liveName, uniqueID, nickname, comment, pinID, eventBoolPtr(data, "isFollower"), at)
+	return c.repo.AddPinnedComment(ref, uniqueID, nickname, comment, pinID, eventBoolPtr(data, "isFollower"), at)
 }
 
 // GetRecentPinnedComments returns recent pinned comments for the current live.
@@ -542,11 +559,15 @@ func (c *AppController) HandleGiftEvent(data monitor.EventData) {
 		repeatCount = 1
 	}
 	giftType := eventInt(data, "giftType", 0)
-	liveName := c.eventLiveName(data)
-	if _, err := c.repo.AddGift(liveName, uniqueID, nickname, giftName, repeatCount, giftType); err != nil {
+	ref, err := c.eventLiveRef(data)
+	if err != nil {
+		log.Printf("[Controller] Error resolving live session for gift: %v", err)
+		return
+	}
+	if _, err := c.repo.AddGift(ref, uniqueID, nickname, giftName, repeatCount, giftType); err != nil {
 		log.Printf("[Controller] Error storing gift: %v", err)
 	}
-	c.checkGoalProgress(liveName)
+	c.checkGoalProgress(ref)
 }
 
 // HandleChatMessageEvent processes a chat message event and stores it.
@@ -569,12 +590,16 @@ func (c *AppController) HandleChatMessageEvent(data monitor.EventData) {
 	if comment == "" {
 		return
 	}
-	liveName := c.eventLiveName(data)
-	if c.msgCache != nil {
-		c.msgCache.Add(liveName, uniqueID, nickname, comment)
+	ref, err := c.eventLiveRef(data)
+	if err != nil {
+		log.Printf("[Controller] Error resolving live session for message: %v", err)
 		return
 	}
-	if err := c.repo.AddUserMessageDedup(liveName, uniqueID, nickname, comment); err != nil {
+	if c.msgCache != nil {
+		c.msgCache.Add(ref, uniqueID, nickname, comment)
+		return
+	}
+	if err := c.repo.AddUserMessageDedup(ref, uniqueID, nickname, comment); err != nil {
 		log.Printf("[Controller] Error storing user message: %v", err)
 	}
 }
@@ -595,8 +620,12 @@ func (c *AppController) HandleShareEvent(data monitor.EventData) {
 	if nickname == "" {
 		nickname = uniqueID
 	}
-	liveName := c.eventLiveName(data)
-	if err := c.repo.AddShare(liveName, uniqueID, nickname); err != nil {
+	ref, err := c.eventLiveRef(data)
+	if err != nil {
+		log.Printf("[Controller] Error resolving live session for share: %v", err)
+		return
+	}
+	if err := c.repo.AddShare(ref, uniqueID, nickname); err != nil {
 		log.Printf("[Controller] Error storing share: %v", err)
 	}
 }
@@ -621,15 +650,19 @@ func (c *AppController) HandleLikeEvent(data monitor.EventData) {
 	if likeCount < 1 {
 		likeCount = 1
 	}
-	liveName := c.eventLiveName(data)
-	if err := c.repo.AddLike(liveName, uniqueID, nickname, likeCount); err != nil {
+	ref, err := c.eventLiveRef(data)
+	if err != nil {
+		log.Printf("[Controller] Error resolving live session for like: %v", err)
+		return
+	}
+	if err := c.repo.AddLike(ref, uniqueID, nickname, likeCount); err != nil {
 		log.Printf("[Controller] Error storing like: %v", err)
 	}
 	// `total` é o contador acumulado de curtidas da SALA (autoritativo).
 	// O stream entrega apenas uma amostra dos eventos de like, então esse
 	// total é usado para calibrar a contagem por usuário no ranking.
 	if roomTotal := int64(eventInt(data, "total", 0)); roomTotal > 0 {
-		if err := c.repo.UpsertRoomLikeTotal(liveName, roomTotal); err != nil {
+		if err := c.repo.UpsertRoomLikeTotal(ref, roomTotal); err != nil {
 			log.Printf("[Controller] Error storing room like total: %v", err)
 		}
 	}
@@ -653,6 +686,46 @@ func (c *AppController) eventLiveName(data monitor.EventData) string {
 		return liveName
 	}
 	return c.GetState().Username
+}
+
+// activeLiveRef returns the session of the live currently being monitored.
+//
+// When the monitor has no session id (a start that could not open one, or a
+// test harness that did not go through StartMonitoring) the latest session of
+// that streamer is used, so an event or goal is never written without a live.
+func (c *AppController) activeLiveRef() (model.LiveRef, error) {
+	state := c.GetState()
+	if state.Username == "" {
+		return model.LiveRef{}, fmt.Errorf("no live is being monitored")
+	}
+	if state.LiveID != "" {
+		return model.LiveRef{ID: state.LiveID, Name: state.Username}, nil
+	}
+	session, err := c.repo.LatestLiveSession(state.Username)
+	if err != nil {
+		return model.LiveRef{}, fmt.Errorf("resolve live session for %s: %w", state.Username, err)
+	}
+	return model.LiveRef{ID: session.ID, Name: state.Username}, nil
+}
+
+// eventLiveRef resolves the session an event belongs to.
+//
+// Events coming from the bridge carry liveId (injected by the manager). Events
+// arriving without it are resolved from the streamer name — and never create a
+// session, so an unknown source cannot spawn a session that owns no live.
+func (c *AppController) eventLiveRef(data monitor.EventData) (model.LiveRef, error) {
+	liveName := strings.TrimSpace(c.eventLiveName(data))
+	if liveName == "" {
+		return model.LiveRef{}, fmt.Errorf("live name is required")
+	}
+	if id := strings.TrimSpace(eventString(data, "liveId")); id != "" {
+		return model.LiveRef{ID: id, Name: liveName}, nil
+	}
+	session, err := c.repo.LatestLiveSession(liveName)
+	if err != nil {
+		return model.LiveRef{}, fmt.Errorf("resolve live session for %s: %w", liveName, err)
+	}
+	return model.LiveRef{ID: session.ID, Name: liveName}, nil
 }
 
 // Stop shuts down the bridge child process.

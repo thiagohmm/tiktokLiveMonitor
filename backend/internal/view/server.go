@@ -109,6 +109,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/goals/cancel", s.handleGoalCancel)
 	mux.HandleFunc("/api/goals/complete", s.handleGoalComplete)
 	mux.HandleFunc("/api/admin/lives", s.handleAdminLives)
+	mux.HandleFunc("/api/admin/lives/session/delete", s.handleAdminLivesSessionDelete)
 	mux.HandleFunc("/api/admin/lives/delete", s.handleAdminLivesDelete)
 	mux.HandleFunc("/api/auth/config", s.handleAuthConfig)
 	mux.HandleFunc("/api/auth/login", s.handleAuthLogin)

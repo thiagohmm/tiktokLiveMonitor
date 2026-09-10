@@ -8,8 +8,12 @@ import (
 	"time"
 )
 
-// AddPinnedComment stores a pinned comment. Duplicate pin_id for the same live is ignored.
-func (db *DB) AddPinnedComment(liveName, uniqueID, nickname, comment, pinID string, isFollower *bool, at time.Time) (int64, error) {
+// AddPinnedComment stores a pinned comment. Duplicate pin_id within the same
+// session is ignored.
+func (db *DB) AddPinnedComment(ref model.LiveRef, uniqueID, nickname, comment, pinID string, isFollower *bool, at time.Time) (int64, error) {
+	if !ref.Valid() {
+		return 0, model.ErrInvalidID
+	}
 	comment = strings.TrimSpace(comment)
 	if comment == "" {
 		return 0, model.ErrCommentRequired
@@ -40,8 +44,8 @@ func (db *DB) AddPinnedComment(liveName, uniqueID, nickname, comment, pinID stri
 	if pinID != "" {
 		var existing int64
 		err := db.queryRow(
-			`SELECT id FROM pinned_comments WHERE live_name = ? AND pin_id = ?`,
-			liveName, pinID,
+			`SELECT id FROM pinned_comments WHERE live_id = ? AND pin_id = ?`,
+			ref.ID, pinID,
 		).Scan(&existing)
 		if err == nil {
 			return existing, nil
@@ -53,9 +57,9 @@ func (db *DB) AddPinnedComment(liveName, uniqueID, nickname, comment, pinID stri
 
 	id, err := db.insertID(
 		`INSERT INTO pinned_comments
-			(live_name, uniqueId, nickname, comment, pin_id, is_follower, timestamp)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		liveName, uniqueID, nickname, comment, nullIfEmpty(pinID), follower, at.UTC().Format(time.RFC3339Nano),
+			(live_id, live_name, uniqueId, nickname, comment, pin_id, is_follower, timestamp)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		ref.ID, strings.TrimSpace(ref.Name), uniqueID, nickname, comment, nullIfEmpty(pinID), follower, at.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert pinned comment: %w", err)
