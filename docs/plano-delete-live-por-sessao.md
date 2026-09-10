@@ -524,3 +524,33 @@ durante a implementação, com o motivo:
 - `004_live_sessions.sql` aplicado **duas vezes** num Postgres onde o backend já havia
   migrado: idempotente, com PK de `room_like_totals` = `live_id` e as 9 colunas
   `NOT NULL`.
+
+### 14. Revisão da implementação (DeepSeek) e correções aplicadas
+
+Veredito: **APTO COM RESSALVAS** — sem nada bloqueante. As 3 ressalvas recomendadas
+foram aplicadas antes do push:
+
+1. **SQL de rollback de schema** → `supabase/migrations/004_live_sessions_rollback.sql`.
+   O `SET NOT NULL` inviabiliza o binário anterior (ele não cita `live_id` nos
+   `INSERT`s), e a PK de `room_like_totals` mudou de `live_name` para `live_id` — o
+   que quebraria o `ON CONFLICT (live_name)` do código antigo. O script libera o
+   `NOT NULL` e devolve a PK (deduplicando por `live_name`), e foi testado aplicando-o
+   sobre um banco migrado: `INSERT` sem `live_id` e `UPSERT ON CONFLICT (live_name)`
+   do binário antigo voltam a funcionar. Documentado no `PRODUCAO.md`.
+2. **Reconstrução de índice condicional** — o `DROP`/`CREATE` de
+   `idx_user_messages_dedup` e `idx_pinned_comments_pin` só roda se a definição atual
+   do índice ainda não contiver `live_id` (`pg_get_indexdef`). Antes, o `DROP`
+   incondicional reconstruía e re-varria `user_messages` a cada boot.
+3. **Lista única de tabelas** — `DeleteLiveSession` e o teste anti-drift passaram a
+   consumir `liveIDTableNames()` (derivada de `liveIDColumns`). Antes o teste comparava
+   `information_schema` com uma lista duplicada no próprio teste, então esquecer uma
+   tabela no delete não reprovava nada.
+
+Blindagem extra (também do review): `COALESCE(ts, CURRENT_TIMESTAMP)` no `MIN/MAX` do
+backfill, para uma linha legada com timestamp NULL não quebrar o `INSERT` da sessão.
+
+**Não adotado (risco residual aceito):** FK `live_id → live_sessions(id)`. Um evento
+já despachado e gravado logo após o delete da live em transmissão pode gerar uma linha
+órfã (invisível no admin). A janela é de milissegundos e o reopen de sessão cobre os
+eventos seguintes; a FK trocaria isso por inserts falhando em corrida, o que não parece
+melhor. Fica registrado como decisão consciente.
