@@ -776,10 +776,14 @@ let rankingMode = (function () {
     }
 })();
 const generateReportBtn = document.getElementById('generateReportBtn');
+const downloadPdfBtn = document.getElementById('downloadPdfBtn');
 const reportWrap = document.getElementById('reportWrap');
 const reportSummary = document.getElementById('reportSummary');
 const reportText = document.getElementById('reportText');
 const reportError = document.getElementById('reportError');
+const participantsSection = document.getElementById('participantsSection');
+const participantsTableWrap = document.getElementById('participantsTableWrap');
+const participantsCount = document.getElementById('participantsCount');
 
 let chart;
 let messageCount = 0;
@@ -1643,6 +1647,9 @@ if (rankingModeTikTokBtn) {
 }
 if (generateReportBtn) {
     generateReportBtn.addEventListener('click', () => loadReport());
+}
+if (downloadPdfBtn) {
+    downloadPdfBtn.addEventListener('click', () => generateLivePdf());
 }
 
 historyModalCloseBtn.addEventListener('click', closeHistoryModal);
@@ -2918,7 +2925,24 @@ function renderRanking(ranking) {
 }
 
 // --- Relatório Pós-Live ---
-// Solicita e renderiza o relatório pós-live.
+// Armazena o último relatório + lista de presentes para regerar o PDF.
+let lastReportData = null;
+let lastParticipants = [];
+
+// Helper: o UMD do jspdf@2 expõe `window.jspdf.jsPDF` (não `window.jsPDF`, que era da v1).
+function jsPDFAvailable() {
+    return typeof window !== 'undefined' && !!window.jspdf && !!window.jspdf.jsPDF;
+}
+function getJsPDFCtor() {
+    return (window.jspdf && window.jspdf.jsPDF) || null;
+}
+// Número de páginas de forma resiliente (API pública primeiro, depois internal).
+function docPageCount(doc) {
+    try { return doc.getNumberOfPages(); } catch (e) { /* ignora */ }
+    try { return doc.internal.getNumberOfPages(); } catch (e) { /* ignora */ }
+    return 1;
+}
+
 async function loadReport() {
     if (!generateReportBtn) return;
     generateReportBtn.disabled = true;
@@ -2928,15 +2952,46 @@ async function loadReport() {
     reportError.style.display = 'none';
     reportSummary.innerHTML = '';
     reportText.textContent = 'Gerando relatório, aguarde...';
+    participantsSection.style.display = 'none';
+    reportWrap.querySelectorAll('.jspdf-error').forEach(el => el.remove());
+    if (downloadPdfBtn) downloadPdfBtn.disabled = true;
+    // Reseta o estado para não reutilizar resultados de execuções anteriores.
+    lastReportData = null;
+    lastParticipants = [];
     try {
-        const response = await fetch('/api/report');
-        const data = await response.json();
-        if (data.error) {
+        const [reportRes, rankingRes] = await Promise.all([
+            fetch('/api/report'),
+            fetch('/api/ranking?mode=' + encodeURIComponent(rankingMode))
+        ]);
+        const report = await reportRes.json();
+        if (report.error) {
             reportText.textContent = '';
-            reportError.textContent = 'Erro: ' + data.error;
+            reportError.textContent = 'Erro: ' + report.error;
             reportError.style.display = 'block';
         } else {
-            renderReport(data);
+            reportError.style.display = 'none';
+            renderReport(report);
+            lastReportData = report;
+            // Mesmo sem participantes, o PDF do resumo (duração/mensagens) é útil,
+            // desde que a biblioteca de PDF tenha carregado.
+            if (downloadPdfBtn) downloadPdfBtn.disabled = !jsPDFAvailable();
+            if (!jsPDFAvailable()) {
+                // jsPDF não carregou (CDN bloqueado/falhou): avisa em vez de falhar em silêncio.
+                const existing = reportWrap.querySelectorAll('.jspdf-error');
+                existing.forEach(el => el.remove());
+                const line = document.createElement('div');
+                line.className = 'report-error jspdf-error';
+                line.style.display = 'block';
+                line.textContent = 'Não foi possível carregar a biblioteca de PDF. Tente novamente ou verifique a conexão.';
+                reportWrap.appendChild(line);
+            }
+            if (rankingRes && rankingRes.ok) {
+                const ranking = await rankingRes.json();
+                lastParticipants = (ranking && ranking.userRanks) ? ranking.userRanks : [];
+            } else {
+                lastParticipants = [];
+            }
+            renderParticipants(lastParticipants, report);
         }
     } catch (error) {
         reportText.textContent = '';
@@ -2968,6 +3023,196 @@ function renderReport(report) {
         reportSummary.appendChild(box);
     });
     reportText.textContent = report.summary || 'Relatório indisponível.';
+}
+
+// Monta a tabela com todos os presentes da live (reaproveita /api/ranking).
+function renderParticipants(participants, report) {
+    if (!participantsSection || !participantsTableWrap || !participantsCount) return;
+    const list = (participants || []).slice().sort((a, b) => (b.score || 0) - (a.score || 0));
+    participantsCount.textContent = String(list.length);
+    if (list.length === 0) {
+        // Mantém a seção visível com mensagem; o PDF do resumo continua disponível.
+        participantsSection.style.display = '';
+        participantsTableWrap.innerHTML =
+            '<div style="color:var(--text-muted);font-size:0.85em;padding:10px 2px;">' +
+            'Nenhum participante registrado nesta live.' +
+            '</div>';
+        // Habilita apenas se o PDF puder ser gerado.
+        if (downloadPdfBtn) downloadPdfBtn.disabled = !jsPDFAvailable();
+        return;
+    }
+    participantsSection.style.display = '';
+    const table = document.createElement('table');
+    table.className = 'ranking-table';
+    table.style.width = '100%';
+    table.style.borderCollapse = 'collapse';
+    table.style.fontSize = '0.85em';
+    const thead = document.createElement('thead');
+    thead.innerHTML = '<tr>' +
+        '<th class="col-rank">#</th>' +
+        '<th class="col-name">Nome</th>' +
+        '<th class="col-msg">Mens.</th>' +
+        '<th class="col-gift">Present.</th>' +
+        '<th class="col-like">Curt.</th>' +
+        '<th class="col-time">Tempo na live</th>' +
+        '</tr>';
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    list.forEach((user, idx) => {
+        const row = document.createElement('tr');
+        const tempo = participantDuration(user.firstSeen, user.lastSeen);
+        const name = user.nickname || user.uniqueId || '—';
+        row.innerHTML = '<td class="col-rank">' + (idx + 1) + '</td>' +
+            '<td class="col-name">' + escapeHtml(name) + '</td>' +
+            '<td class="col-msg">' + (user.messageCount || 0) + '</td>' +
+            '<td class="col-gift">' + (user.giftCount || 0) + '</td>' +
+            '<td class="col-like">' + (user.likeCount || 0) + '</td>' +
+            '<td class="col-time">' + escapeHtml(tempo) + '</td>';
+        tbody.appendChild(row);
+    });
+    table.appendChild(tbody);
+    participantsTableWrap.innerHTML = '';
+    participantsTableWrap.appendChild(table);
+    if (downloadPdfBtn) downloadPdfBtn.disabled = !jsPDFAvailable();
+}
+
+// Calcula o tempo de permanência na live a partir de firstSeen/lastSeen (RFC3339).
+function participantDuration(firstSeen, lastSeen) {
+    const start = new Date(firstSeen).getTime();
+    const end = new Date(lastSeen).getTime();
+    if (isNaN(start) || isNaN(end) || end <= start) {
+        return '—';
+    }
+    const secs = Math.floor((end - start) / 1000);
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    const pad2 = n => String(n).padStart(2, '0');
+    return (h > 0 ? h + 'h ' : '') + m + 'min ' + pad2(s) + 's';
+}
+
+// Gera o PDF do resumo da live (nome, duração e lista de presentes) com jsPDF.
+function generateLivePdf() {
+    if (!lastReportData || !jsPDFAvailable()) {
+        return;
+    }
+    const report = lastReportData;
+    const jsPDF = getJsPDFCtor();
+    const participants = (lastParticipants || []).slice().sort((a, b) => (b.score || 0) - (a.score || 0));
+    const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+    const marginL = 40, marginR = 40, top = 60;
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const bottom = pageH - 40;
+
+    // Cabeçalho
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(18);
+    doc.text('Resumo da Live', marginL, top);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(11);
+    doc.text('Live: ' + (report.liveName || '—'), marginL, top + 18);
+
+    // Metadados
+    const meta = [
+        ['Início', report.startedAt || '—'],
+        ['Fim', report.endedAt || '—'],
+        ['Duração', report.durationMinutes != null ? report.durationMinutes + ' min' : '—'],
+        ['Participantes', String(participants.length)],
+        ['Mensagens', String(report.messageCount || 0)],
+        ['Presentes', String(report.giftCount || 0)]
+    ];
+    let y = top + 36;
+    doc.setFontSize(9);
+    meta.forEach(([label, value]) => {
+        doc.setFont('helvetica', 'bold');
+        doc.text(label + ':', marginL, y);
+        doc.setFont('helvetica', 'normal');
+        doc.text(String(value), marginL + 80, y);
+        y += 13;
+    });
+
+    // Separador
+    doc.setLineWidth(0.5);
+    doc.line(marginL, y + 6, pageW - marginR, y + 6);
+
+    // Tabela de presentes
+    const headers = ['#', 'Nome', 'Mens.', 'Present.', 'Curt.', 'Tempo'];
+    const colW = [24, 150, 34, 44, 34, 54];
+    const rowH = 15;
+
+    // Desenha o cabeçalho da tabela na posição y; retorna o y após o cabeçalho.
+    // É reutilizado a cada quebra de página para as colunas não ficarem órfãs.
+    function drawTableHeader(y) {
+        doc.setFillColor(40, 40, 40);
+        // Fundo escuro da faixa de cabeçalho (evita texto branco invisível no branco).
+        doc.rect(marginL, y, pageW - marginL - marginR, 15, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        let cx = marginL;
+        colW.forEach((w, i) => {
+            doc.setTextColor(255, 255, 255);
+            doc.text(headers[i], cx + 4, y + 11);
+            cx += w;
+        });
+        doc.setLineWidth(0.3);
+        doc.setDrawColor(180);
+        doc.line(marginL, y + 4, pageW - marginR, y + 4);
+        doc.setTextColor(0, 0, 0);
+        doc.setFont('helvetica', 'normal');
+        return y + 16;
+    }
+
+    // Garante que a próxima linha cabe na página atual. Se não, cria página nova
+    // (redefinindo y) e redesenha o cabeçalho da tabela.
+    function ensurePage(y) {
+        if (y + rowH > bottom) {
+            doc.addPage();
+            y = drawTableHeader(top);
+        }
+        return y;
+    }
+
+    let ty = drawTableHeader(y + 22);
+
+    doc.setFontSize(8.5);
+    participants.forEach((user, idx) => {
+        ty = ensurePage(ty);
+        const tempo = participantDuration(user.firstSeen, user.lastSeen);
+        const name = truncate(user.nickname || user.uniqueId || '—', 28);
+        const cells = [String(idx + 1), name, String(user.messageCount || 0), String(user.giftCount || 0), String(user.likeCount || 0), tempo];
+        if (idx % 2 === 0) {
+            doc.setFillColor(245, 245, 245);
+            doc.rect(marginL, ty, pageW - marginL - marginR, rowH, 'F');
+        }
+        let cx2 = marginL;
+        cells.forEach((cell, i) => {
+            doc.text(cell, cx2 + 4, ty + 4);
+            cx2 += colW[i];
+        });
+        ty += rowH;
+    });
+
+    // Rodapé em todas as páginas.
+    const generated = 'Gerado em ' + new Date().toLocaleString('pt-BR');
+    const pages = docPageCount(doc);
+    for (let p = 1; p <= pages; p++) {
+        doc.setPage(p);
+        doc.setFont('helvetica', 'italic');
+        doc.setFontSize(8);
+        doc.setTextColor(120);
+        doc.text(generated + ' • p. ' + p + '/' + pages, marginL, pageH - 20);
+    }
+    doc.setTextColor(0, 0, 0);
+
+    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'normal');
+    doc.save('resumo-live-' + (report.liveName || 'report') + '.pdf');
+}
+
+function truncate(value, max) {
+    value = String(value);
+    return value.length > max ? value.slice(0, max - 1) + '…' : value;
 }
 
 // Escapa caracteres HTML para inserção segura.

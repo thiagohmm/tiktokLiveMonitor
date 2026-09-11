@@ -1601,8 +1601,19 @@
             </div>
         </div>
         <div id="reportWrap" class="report-box" style="display: none;">
+            <div class="report-toolbar">
+                <button id="downloadPdfBtn" class="small-btn" type="button" disabled>📄 Baixar PDF</button>
+            </div>
             <div id="reportSummary" class="report-summary"></div>
             <div id="reportText" class="report-text"></div>
+            <div id="participantsSection" class="participants-section" style="display: none;">
+                <div class="section-title">
+                    <div class="section-title-label">
+                        <h3>👥 Lista de Presentes (<span id="participantsCount">0</span>)</h3>
+                    </div>
+                </div>
+                <div id="participantsTableWrap" class="table-wrap" style="max-height:420px;overflow:auto;"></div>
+            </div>
             <div id="reportError" class="report-error" style="display: none;"></div>
         </div>
 
@@ -1632,6 +1643,7 @@
     <script src="/config.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="/auth.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jspdf@2/dist/jspdf.umd.min.js"></script>
     <script src="/renderer.js"></script>
 </body>
 </html>
