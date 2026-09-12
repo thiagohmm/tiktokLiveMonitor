@@ -2925,22 +2925,38 @@ function renderRanking(ranking) {
 }
 
 // --- Relatório Pós-Live ---
-// Armazena o último relatório + lista de presentes para regerar o PDF.
+// Armazena o último relatório + lista de presentes para gerar o PDF.
 let lastReportData = null;
 let lastParticipants = [];
 
-// Helper: o UMD do jspdf@2 expõe `window.jspdf.jsPDF` (não `window.jsPDF`, que era da v1).
 function jsPDFAvailable() {
     return typeof window !== 'undefined' && !!window.jspdf && !!window.jspdf.jsPDF;
 }
+
 function getJsPDFCtor() {
     return (window.jspdf && window.jspdf.jsPDF) || null;
 }
-// Número de páginas de forma resiliente (API pública primeiro, depois internal).
+
 function docPageCount(doc) {
-    try { return doc.getNumberOfPages(); } catch (e) { /* ignora */ }
-    try { return doc.internal.getNumberOfPages(); } catch (e) { /* ignora */ }
+    if (typeof doc.getNumberOfPages === 'function') return doc.getNumberOfPages();
+    if (doc.internal && typeof doc.internal.getNumberOfPages === 'function') {
+        return doc.internal.getNumberOfPages();
+    }
     return 1;
+}
+
+async function loadReportParticipants() {
+    try {
+        // A lista de presentes deve ser completa e previsível, sem depender do
+        // modo de ranking que o usuário selecionou na tela.
+        const response = await fetch('/api/ranking?mode=engagement');
+        if (!response.ok) throw new Error(`status ${response.status}`);
+        const ranking = await response.json();
+        return { participants: Array.isArray(ranking.userRanks) ? ranking.userRanks : [], unavailable: false };
+    } catch (error) {
+        console.error('[Frontend] Falha ao carregar participantes do relatório:', error);
+        return { participants: [], unavailable: true };
+    }
 }
 
 async function loadReport() {
@@ -2959,10 +2975,9 @@ async function loadReport() {
     lastReportData = null;
     lastParticipants = [];
     try {
-        const [reportRes, rankingRes] = await Promise.all([
-            fetch('/api/report'),
-            fetch('/api/ranking?mode=' + encodeURIComponent(rankingMode))
-        ]);
+        const participantsPromise = loadReportParticipants();
+        const reportRes = await fetch('/api/report');
+        if (!reportRes.ok) throw new Error(`status ${reportRes.status}`);
         const report = await reportRes.json();
         if (report.error) {
             reportText.textContent = '';
@@ -2985,13 +3000,9 @@ async function loadReport() {
                 line.textContent = 'Não foi possível carregar a biblioteca de PDF. Tente novamente ou verifique a conexão.';
                 reportWrap.appendChild(line);
             }
-            if (rankingRes && rankingRes.ok) {
-                const ranking = await rankingRes.json();
-                lastParticipants = (ranking && ranking.userRanks) ? ranking.userRanks : [];
-            } else {
-                lastParticipants = [];
-            }
-            renderParticipants(lastParticipants, report);
+            const participantResult = await participantsPromise;
+            lastParticipants = participantResult.participants;
+            renderParticipants(lastParticipants, participantResult.unavailable);
         }
     } catch (error) {
         reportText.textContent = '';
@@ -3026,27 +3037,27 @@ function renderReport(report) {
 }
 
 // Monta a tabela com todos os presentes da live (reaproveita /api/ranking).
-function renderParticipants(participants, report) {
+function renderParticipants(participants, unavailable = false) {
     if (!participantsSection || !participantsTableWrap || !participantsCount) return;
     const list = (participants || []).slice().sort((a, b) => (b.score || 0) - (a.score || 0));
     participantsCount.textContent = String(list.length);
     if (list.length === 0) {
-        // Mantém a seção visível com mensagem; o PDF do resumo continua disponível.
         participantsSection.style.display = '';
-        participantsTableWrap.innerHTML =
-            '<div style="color:var(--text-muted);font-size:0.85em;padding:10px 2px;">' +
-            'Nenhum participante registrado nesta live.' +
-            '</div>';
-        // Habilita apenas se o PDF puder ser gerado.
+        participantsTableWrap.innerHTML = '';
+        const emptyState = document.createElement('div');
+        emptyState.style.color = 'var(--text-muted)';
+        emptyState.style.fontSize = '0.85em';
+        emptyState.style.padding = '10px 2px';
+        emptyState.textContent = unavailable
+            ? 'O resumo foi gerado, mas não foi possível carregar a lista de presentes.'
+            : 'Nenhum participante registrado nesta live.';
+        participantsTableWrap.appendChild(emptyState);
         if (downloadPdfBtn) downloadPdfBtn.disabled = !jsPDFAvailable();
         return;
     }
     participantsSection.style.display = '';
     const table = document.createElement('table');
-    table.className = 'ranking-table';
-    table.style.width = '100%';
-    table.style.borderCollapse = 'collapse';
-    table.style.fontSize = '0.85em';
+    table.className = 'report-participants-table';
     const thead = document.createElement('thead');
     thead.innerHTML = '<tr>' +
         '<th class="col-rank">#</th>' +
@@ -3060,14 +3071,20 @@ function renderParticipants(participants, report) {
     const tbody = document.createElement('tbody');
     list.forEach((user, idx) => {
         const row = document.createElement('tr');
-        const tempo = participantDuration(user.firstSeen, user.lastSeen);
-        const name = user.nickname || user.uniqueId || '—';
-        row.innerHTML = '<td class="col-rank">' + (idx + 1) + '</td>' +
-            '<td class="col-name">' + escapeHtml(name) + '</td>' +
-            '<td class="col-msg">' + (user.messageCount || 0) + '</td>' +
-            '<td class="col-gift">' + (user.giftCount || 0) + '</td>' +
-            '<td class="col-like">' + (user.likeCount || 0) + '</td>' +
-            '<td class="col-time">' + escapeHtml(tempo) + '</td>';
+        const cells = [
+            ['col-rank', idx + 1],
+            ['col-name', user.nickname || user.uniqueId || '—'],
+            ['col-msg', user.messageCount || 0],
+            ['col-gift', user.giftCount || 0],
+            ['col-like', user.likeCount || 0],
+            ['col-time', participantDuration(user.firstSeen, user.lastSeen)]
+        ];
+        cells.forEach(([className, value]) => {
+            const cell = document.createElement('td');
+            cell.className = className;
+            cell.textContent = String(value);
+            row.appendChild(cell);
+        });
         tbody.appendChild(row);
     });
     table.appendChild(tbody);
@@ -3100,7 +3117,9 @@ function generateLivePdf() {
     const jsPDF = getJsPDFCtor();
     const participants = (lastParticipants || []).slice().sort((a, b) => (b.score || 0) - (a.score || 0));
     const doc = new jsPDF({ unit: 'pt', format: 'a4' });
-    const marginL = 40, marginR = 40, top = 60;
+    const marginL = 40;
+    const marginR = 40;
+    const top = 60;
     const pageW = doc.internal.pageSize.getWidth();
     const pageH = doc.internal.pageSize.getHeight();
     const bottom = pageH - 40;
@@ -3115,8 +3134,8 @@ function generateLivePdf() {
 
     // Metadados
     const meta = [
-        ['Início', report.startedAt || '—'],
-        ['Fim', report.endedAt || '—'],
+        ['Início', formatReportDateTime(report.startedAt)],
+        ['Fim', formatReportDateTime(report.endedAt)],
         ['Duração', report.durationMinutes != null ? report.durationMinutes + ' min' : '—'],
         ['Participantes', String(participants.length)],
         ['Mensagens', String(report.messageCount || 0)],
@@ -3138,8 +3157,8 @@ function generateLivePdf() {
 
     // Tabela de presentes
     const headers = ['#', 'Nome', 'Mens.', 'Present.', 'Curt.', 'Tempo'];
-    const colW = [24, 150, 34, 44, 34, 54];
-    const rowH = 15;
+    const colW = [28, 198, 52, 58, 52, 86];
+    const rowH = 17;
 
     // Desenha o cabeçalho da tabela na posição y; retorna o y após o cabeçalho.
     // É reutilizado a cada quebra de página para as colunas não ficarem órfãs.
@@ -3160,6 +3179,7 @@ function generateLivePdf() {
         doc.line(marginL, y + 4, pageW - marginR, y + 4);
         doc.setTextColor(0, 0, 0);
         doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8.5);
         return y + 16;
     }
 
@@ -3179,7 +3199,7 @@ function generateLivePdf() {
     participants.forEach((user, idx) => {
         ty = ensurePage(ty);
         const tempo = participantDuration(user.firstSeen, user.lastSeen);
-        const name = truncate(user.nickname || user.uniqueId || '—', 28);
+        const name = truncate(user.nickname || user.uniqueId || '—', 38);
         const cells = [String(idx + 1), name, String(user.messageCount || 0), String(user.giftCount || 0), String(user.likeCount || 0), tempo];
         if (idx % 2 === 0) {
             doc.setFillColor(245, 245, 245);
@@ -3187,7 +3207,7 @@ function generateLivePdf() {
         }
         let cx2 = marginL;
         cells.forEach((cell, i) => {
-            doc.text(cell, cx2 + 4, ty + 4);
+            doc.text(cell, cx2 + 4, ty + 11.5);
             cx2 += colW[i];
         });
         ty += rowH;
@@ -3204,10 +3224,25 @@ function generateLivePdf() {
         doc.text(generated + ' • p. ' + p + '/' + pages, marginL, pageH - 20);
     }
     doc.setTextColor(0, 0, 0);
-
-    doc.setTextColor(0, 0, 0);
     doc.setFont('helvetica', 'normal');
-    doc.save('resumo-live-' + (report.liveName || 'report') + '.pdf');
+    doc.save(reportPdfFilename(report.liveName));
+}
+
+function formatReportDateTime(value) {
+    if (!value) return '—';
+    const date = new Date(value);
+    if (isNaN(date.getTime())) return String(value);
+    return date.toLocaleString('pt-BR');
+}
+
+function reportPdfFilename(liveName) {
+    const safeName = String(liveName || 'live')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9_-]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 80) || 'live';
+    return `resumo-live-${safeName}.pdf`;
 }
 
 function truncate(value, max) {
@@ -3218,9 +3253,11 @@ function truncate(value, max) {
 // Escapa caracteres HTML para inserção segura.
 function escapeHtml(value) {
     return String(value)
-        .replace(/&/g, '&')
-        .replace(/</g, '<')
-        .replace(/>/g, '>');
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 // Garante a visibilidade da seção "todos os presentes".
