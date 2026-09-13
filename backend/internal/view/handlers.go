@@ -51,6 +51,18 @@ func (s *HTTPServer) handleSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		for target, tag := range settings.TargetGiftTags {
+			trimmed := strings.TrimSpace(tag)
+			if trimmed == "" {
+				delete(settings.TargetGiftTags, target)
+				continue
+			}
+			if len([]rune(trimmed)) > 40 {
+				writeError(w, http.StatusBadRequest, "A tag do presente alvo deve ter no máximo 40 caracteres.")
+				return
+			}
+			settings.TargetGiftTags[target] = trimmed
+		}
 		s.controller.SetSettings(settings)
 		// Broadcast updated settings to all SSE clients
 		s.broadcastSSE("settings-update", s.controller.GetSettings())

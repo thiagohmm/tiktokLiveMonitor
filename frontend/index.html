@@ -298,6 +298,19 @@
             border: 1px solid rgba(37, 244, 238, 0.35);
             white-space: nowrap;
         }
+        .queue-tag-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-size: 0.72em;
+            font-weight: 700;
+            color: #c4b5fd;
+            background: rgba(139, 92, 246, 0.14);
+            border: 1px solid rgba(139, 92, 246, 0.4);
+            white-space: nowrap;
+        }
         .user-row.queue-head {
             background: rgba(37, 244, 238, 0.05);
             box-shadow: inset 3px 0 0 var(--cyan);
@@ -411,6 +424,22 @@
         }
         .target-gift-chip.priority button:hover {
             color: #ff8589;
+        }
+        .target-gift-chip .chip-tag {
+            font-weight: 400;
+            opacity: 0.85;
+        }
+        .target-gift-chip .chip-tag-btn {
+            font-size: 0.95em;
+        }
+        .target-gift-chip input.chip-tag-input {
+            width: 110px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 0.95em;
+            padding: 2px 6px;
         }
         .report-box {
             background: rgba(37, 244, 238, 0.04);
@@ -580,6 +609,9 @@
         }
         .target-gifts-actions #targetGiftQuantity {
             width: 76px;
+        }
+        .target-gifts-actions #targetGiftTag {
+            width: 130px;
         }
         .target-gifts-actions #addTargetGiftBtn,
         .target-gifts-actions #targetGiftHistoryBtn {
@@ -1441,6 +1473,11 @@
                         Quantidade
                         <input type="number" id="targetGiftQuantity" min="1" step="1" value="1" required
                             title="Quantidade acumulada por participante para aparecer na tabela">
+                    </label>
+                    <label class="expiration-control" for="targetGiftTag">
+                        Tag
+                        <input type="text" id="targetGiftTag" maxlength="40" placeholder="Ex.: dedicatória"
+                            title="Texto exibido na coluna Fila em todos os presentes deste tipo">
                     </label>
                     <button id="addTargetGiftBtn" class="small-btn" type="button" title="Adicionar ou atualizar presente alvo">+</button>
                 </div>

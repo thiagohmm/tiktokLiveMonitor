@@ -157,3 +157,21 @@ test('live events with separate history IDs remain distinct and sort by server r
     context.addUserToList({ historyId: 1, uniqueId: 'ana', giftName: 'Rosa', receivedAt: new Date(Date.now() - 1000).toISOString() });
     assert.deepEqual(rows().map(row => row.dataset.historyId), ['1', '2']);
 });
+
+test('shows the gift tag badge alongside priority and next chips', () => {
+    const { context, add, rows } = setup();
+    context.targetGiftTagsCache = { Rosa: 'dedicatória' };
+    add(1, { isPriority: true, priorityAt: new Date().toISOString() });
+    add(2, { giftName: 'Dino' });
+    const first = rows()[0];
+    assert.equal(first.dataset.historyId, '1');
+    assert.equal(first.querySelector('.priority-badge').textContent, '⚡ Fura fila');
+    assert.equal(first.querySelector('.queue-head-chip').textContent, 'Próximo');
+    assert.equal(first.querySelector('.queue-tag-badge').textContent, '🏷 dedicatória');
+    assert.equal(rows()[1].querySelector('.queue-tag-badge'), null);
+    context.targetGiftTagsCache = {};
+    context.reorderGiftQueue();
+    assert.equal(first.querySelector('.queue-tag-badge'), null);
+    assert.equal(first.querySelector('.priority-badge').textContent, '⚡ Fura fila');
+    assert.equal(first.querySelector('.queue-head-chip').textContent, 'Próximo');
+});

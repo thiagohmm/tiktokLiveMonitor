@@ -719,6 +719,7 @@ const targetGiftsList = document.getElementById('targetGiftsList');
 const availableGiftSelect = document.getElementById('availableGiftSelect');
 const addTargetGiftBtn = document.getElementById('addTargetGiftBtn');
 const targetGiftQuantity = document.getElementById('targetGiftQuantity');
+const targetGiftTag = document.getElementById('targetGiftTag');
 const pinnedCommentHistoryBtn = document.getElementById('pinnedCommentHistoryBtn');
 const goalTitleInput = document.getElementById('goalTitleInput');
 const goalGiftSelect = document.getElementById('goalGiftSelect');
@@ -1894,6 +1895,42 @@ function compareGiftQueueRows(a, b) {
     return ka.historyId - kb.historyId;
 }
 
+// Tags livres por tipo de presente alvo (settings.targetGiftTags): exibidas na
+// coluna "Fila" sem interferir nos badges "Fura fila" e "Próximo". `var` para
+// que o harness de teste (vm) possa ler/atribuir via contexto.
+var targetGiftTagsCache = {};
+
+// Forma "compacta" de um nome de presente: minúsculas, só letras e dígitos.
+function compactGiftName(value) {
+    return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+// Espelha matchesTargetGift do backend: casa por substring (minúsculas) ou
+// pela forma compacta, para "Bola de Futebol" casar com "futebol", etc.
+function giftMatchesTarget(name, target) {
+    if (!target || !String(target).trim()) {
+        return false;
+    }
+    const lower = String(name || '').toLowerCase();
+    const tLower = String(target).toLowerCase();
+    if (lower.includes(tLower)) {
+        return true;
+    }
+    const compact = compactGiftName(name);
+    const tCompact = compactGiftName(target);
+    return tCompact !== '' && compact.includes(tCompact);
+}
+
+// Devolve a tag do primeiro alvo que casa com o nome do presente, ou ''.
+function targetGiftTagFor(giftName) {
+    for (const target of Object.keys(targetGiftTagsCache)) {
+        if (giftMatchesTarget(giftName, target)) {
+            return targetGiftTagsCache[target] || '';
+        }
+    }
+    return '';
+}
+
 // Reconstrói as tags "Fura fila" e "Próximo" conforme o estado da fila.
 function updateQueueCell(row) {
     const cell = row.querySelector('.queue-cell');
@@ -1901,7 +1938,7 @@ function updateQueueCell(row) {
         return;
     }
 
-    cell.querySelectorAll('.priority-badge, .queue-head-chip').forEach(el => el.remove());
+    cell.querySelectorAll('.priority-badge, .queue-head-chip, .queue-tag-badge').forEach(el => el.remove());
 
     if (row.dataset.priority === 'true') {
         const badge = document.createElement('span');
@@ -1915,6 +1952,15 @@ function updateQueueCell(row) {
         chip.className = 'queue-head-chip';
         chip.textContent = 'Próximo';
         cell.appendChild(chip);
+    }
+
+    const giftCell = row.querySelector('.gift-name-cell');
+    const tag = giftCell ? targetGiftTagFor(giftCell.innerText) : '';
+    if (tag) {
+        const tagBadge = document.createElement('span');
+        tagBadge.className = 'queue-tag-badge';
+        tagBadge.textContent = `🏷 ${tag}`;
+        cell.appendChild(tagBadge);
     }
 }
 
@@ -3279,6 +3325,7 @@ function renderTargetGifts() {
         .then(settings => {
             const gifts = settings.targetGifts || [];
             const priorities = settings.targetGiftPriorities || {};
+            targetGiftTagsCache = { ...(settings.targetGiftTags || {}) };
             gifts.forEach(giftName => {
                 const span = document.createElement('span');
                 span.className = 'target-gift-chip';
@@ -3289,6 +3336,24 @@ function renderTargetGifts() {
                 const label = document.createElement('span');
                 label.textContent = `${giftName} × ${settings.targetGiftQuantities?.[giftName] || 1}`;
                 span.appendChild(label);
+                const tagText = targetGiftTagsCache[giftName];
+                if (tagText) {
+                    const tagLabel = document.createElement('span');
+                    tagLabel.className = 'chip-tag';
+                    tagLabel.textContent = `🏷 ${tagText}`;
+                    span.appendChild(tagLabel);
+                }
+                const tagBtn = document.createElement('button');
+                tagBtn.type = 'button';
+                tagBtn.className = 'chip-tag-btn';
+                tagBtn.textContent = '🏷';
+                tagBtn.setAttribute('aria-label', `Editar tag de ${giftName}`);
+                tagBtn.title = 'Editar tag (texto exibido na coluna Fila)';
+                tagBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    editTargetGiftTag(giftName, span);
+                });
+                span.appendChild(tagBtn);
                 const btn = document.createElement('button');
                 btn.type = 'button';
                 btn.textContent = '×';
@@ -3302,6 +3367,7 @@ function renderTargetGifts() {
                 targetGiftsList.appendChild(span);
             });
             updateAllGiftsVisibility();
+            reorderGiftQueue();
         })
         .catch(() => {});
 }
@@ -3318,11 +3384,13 @@ async function removeTargetGift(giftToRemove) {
         delete quantities[giftToRemove];
         const priorities = { ...(settings.targetGiftPriorities || {}) };
         delete priorities[giftToRemove];
+        const tags = { ...(settings.targetGiftTags || {}) };
+        delete tags[giftToRemove];
 
         const res = await fetch('/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...settings, targetGifts: updatedGifts, targetGiftQuantities: quantities, targetGiftPriorities: priorities })
+            body: JSON.stringify({ ...settings, targetGifts: updatedGifts, targetGiftQuantities: quantities, targetGiftPriorities: priorities, targetGiftTags: tags })
         });
         if (res.ok) {
             console.log('Successfully removed target gift:', giftToRemove);
@@ -3358,6 +3426,80 @@ async function toggleTargetGiftPriority(giftName) {
         // renderTargetGifts() is triggered by the SSE 'settings-update' event.
     } catch (e) {
         console.error('Erro ao alternar fura fila do presente alvo:', e);
+    }
+}
+
+// Salva a tag escrita de um presente alvo nas settings (texto exibido na
+// coluna Fila em todos os presentes deste tipo). Tag vazia remove a entrada.
+async function setTargetGiftTag(giftName, tag) {
+    try {
+        const response = await fetch('/api/settings');
+        const settings = await response.json();
+        const tags = { ...(settings.targetGiftTags || {}) };
+        const trimmed = String(tag || '').trim();
+        if (trimmed) {
+            tags[giftName] = trimmed;
+        } else {
+            delete tags[giftName];
+        }
+        const res = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...settings, targetGiftTags: tags })
+        });
+        if (!res.ok) {
+            console.error('Failed to set target gift tag:', await res.text());
+            renderTargetGifts();
+        }
+        // renderTargetGifts() is triggered by the SSE 'settings-update' event.
+    } catch (e) {
+        console.error('Erro ao salvar tag do presente alvo:', e);
+        renderTargetGifts();
+    }
+}
+
+// Troca o rótulo da tag do chip por um input inline (Enter salva, Esc cancela).
+function editTargetGiftTag(giftName, chip) {
+    if (chip.querySelector('.chip-tag-input')) {
+        return;
+    }
+    const current = targetGiftTagsCache[giftName] || '';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'chip-tag-input';
+    input.maxLength = 40;
+    input.value = current;
+    input.setAttribute('aria-label', `Tag de ${giftName}`);
+    let done = false;
+    const finish = (save) => {
+        if (done) {
+            return;
+        }
+        done = true;
+        if (save && input.value.trim() !== current) {
+            setTargetGiftTag(giftName, input.value);
+        } else {
+            renderTargetGifts();
+        }
+    };
+    input.addEventListener('click', (e) => e.stopPropagation());
+    input.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') {
+            finish(true);
+        } else if (e.key === 'Escape') {
+            finish(false);
+        }
+    });
+    input.addEventListener('blur', () => finish(true));
+    const existing = chip.querySelector('.chip-tag');
+    if (existing) {
+        chip.replaceChild(input, existing);
+    } else {
+        chip.insertBefore(input, chip.querySelector('.chip-tag-btn'));
+    }
+    if (typeof input.focus === 'function') {
+        input.focus();
     }
 }
 
@@ -3550,15 +3692,23 @@ async function addTargetGift() {
         const gifts = settings.targetGifts || [];
         const updatedGifts = gifts.includes(value) ? gifts : [...gifts, value];
         const quantities = { ...settings.targetGiftQuantities, [value]: quantity };
+        const tags = { ...(settings.targetGiftTags || {}) };
+        const tagValue = targetGiftTag ? targetGiftTag.value.trim() : '';
+        if (tagValue) {
+            tags[value] = tagValue.slice(0, 40);
+        }
         const res = await fetch('/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...settings, targetGifts: updatedGifts, targetGiftQuantities: quantities })
+            body: JSON.stringify({ ...settings, targetGifts: updatedGifts, targetGiftQuantities: quantities, targetGiftTags: tags })
         });
         if (res.ok) {
             console.log('Successfully added target gift:', value);
             availableGiftSelect.value = '';
             targetGiftQuantity.value = '1';
+            if (targetGiftTag) {
+                targetGiftTag.value = '';
+            }
             // renderTargetGifts() is triggered by the SSE 'settings-update' event
             // sent by the server after the POST, avoiding a race that duplicates tags.
         } else {

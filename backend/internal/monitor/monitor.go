@@ -80,6 +80,8 @@ type Settings struct {
 	// TargetGiftPriorities marks gift types that jump the queue ("fura fila"):
 	// entries created for them start with is_priority=TRUE.
 	TargetGiftPriorities map[string]bool `json:"targetGiftPriorities,omitempty"`
+	// TargetGiftTags is a free label per target gift type, shown in the "Fila" column.
+	TargetGiftTags map[string]string `json:"targetGiftTags,omitempty"`
 }
 
 type State struct {
@@ -166,6 +168,7 @@ func New() (*Monitor, error) {
 			LogLevel:             "info",
 			TargetGifts:          []string{},
 			TargetGiftPriorities: map[string]bool{},
+			TargetGiftTags:       map[string]string{},
 		},
 	}, nil
 }
