@@ -28,7 +28,9 @@ const MIME = {
 };
 
 const server = http.createServer((req, res) => {
-  const urlPath = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+  const requestPath = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+  const urlPath = /^\/promo\/?$/.test(requestPath) ? '/landing.html'
+    : /^\/login\/?$/.test(requestPath) ? '/login.html' : requestPath;
   let file = path.normalize(path.join(ROOT, urlPath));
   if (!file.startsWith(ROOT + path.sep) && file !== ROOT) {
     res.writeHead(403);

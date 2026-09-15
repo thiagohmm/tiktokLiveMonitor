@@ -169,6 +169,9 @@ func (c Config) UpdatePassword(accessToken, newPassword string) error {
 	if _, err := io.Copy(io.Discard, res.Body); err != nil {
 		return ErrAuthUnavailable
 	}
+	if res.StatusCode >= 500 {
+		return ErrAuthUnavailable
+	}
 	if res.StatusCode >= 300 {
 		return ErrInvalidResetLink
 	}

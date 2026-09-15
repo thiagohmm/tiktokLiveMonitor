@@ -392,6 +392,45 @@ func TestHandleAuthResetPasswordInvalidTokenReturnsGenericError(t *testing.T) {
 	}
 }
 
+func TestHandleAuthResetPasswordAuthUnavailableReturnsBadGateway(t *testing.T) {
+	// Mock que devolve 5xx no PUT /auth/v1/user (Supabase fora do ar).
+	supabase := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Internal Server Error"})
+	}))
+	t.Cleanup(supabase.Close)
+
+	cfg := auth.Config{Enabled: true, SupabaseURL: supabase.URL, SupabaseAnon: "anon"}
+	srv := &HTTPServer{auth: cfg}
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/reset-password", strings.NewReader(
+		`{"token":"rec-token","password":"novaSenha123"}`))
+	rec := httptest.NewRecorder()
+	srv.handleAuthResetPassword(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "serviço de autenticação indisponível") {
+		t.Fatalf("body=%s", rec.Body.String())
+	}
+}
+
+func TestHandleAuthResetPasswordAuthUnavailableOnNetworkErrorReturnsBadGateway(t *testing.T) {
+	// Mock que encerra a conexão sem responder (falha de rede).
+	supabase := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic(http.ErrAbortHandler)
+	}))
+	t.Cleanup(supabase.Close)
+	cfg := auth.Config{Enabled: true, SupabaseURL: supabase.URL, SupabaseAnon: "anon"}
+	srv := &HTTPServer{auth: cfg}
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/reset-password", strings.NewReader(
+		`{"token":"rec-token","password":"novaSenha123"}`))
+	rec := httptest.NewRecorder()
+	srv.handleAuthResetPassword(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleAdminUsersRejectsOwnAccountMutation(t *testing.T) {
 	srv := adminAuthorizationTestServer(t, nil)
 	tests := []struct {

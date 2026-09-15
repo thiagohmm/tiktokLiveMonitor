@@ -327,6 +327,10 @@ func (s *HTTPServer) handleAuthResetPassword(w http.ResponseWriter, r *http.Requ
 		// Erro real vai só para o log; o cliente recebe mensagem genérica
 		// (token inválido/expirado/usado não é discriminado).
 		log.Printf("[View] reset-password: %v", err)
+		if errors.Is(err, auth.ErrAuthUnavailable) {
+			writeError(w, http.StatusBadGateway, "serviço de autenticação indisponível, tente novamente")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "link inválido ou expirado")
 		return
 	}

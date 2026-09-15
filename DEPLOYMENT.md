@@ -80,13 +80,29 @@ O e-mail é sempre o mesmo para e-mail cadastrado ou não (anti-enumeração).
 Nunca envie `SUPABASE_SERVICE_ROLE_KEY` ao navegador, à Vercel como variável
 pública ou ao repositório. Ela é usada somente pelo backend Go.
 
-## Vercel
+## Produção no VPS
 
-O backend mantém conexão longa com o TikTok e SSE, portanto deve continuar em
-um servidor/container persistente. A Vercel hospeda os arquivos de
-`frontend/` e usa as regras de `frontend/vercel.json` como proxy para a URL
-pública HTTPS do backend. Substitua `https://SEU_BACKEND` antes do deploy e
-defina `CORS_ALLOWED_ORIGINS` com a URL da Vercel no `.env` do backend.
+O ambiente principal usa docker-compose.production.yml no servidor
+143.95.162.200, porta SSH 22022, em /opt/tiktok-live-monitor.
+Consulte [PRODUCAO.md](PRODUCAO.md) para deploy, backups, HTTPS e rollback.
 
-Na Vercel/Supabase, use a URL do pooler PostgreSQL em `DATABASE_URL`. Não use
-o hostname `postgres`/`db`, que existe somente na rede do Docker Compose.
+Rotas: /promo é a página comercial; /login é o acesso à ferramenta; / é o painel.
+O PostgreSQL operacional foi restaurado no VPS. Auth e profiles continuam no Supabase.
+
+Primeira instalação: copiar .env.production.example para .env, preencher
+credenciais, apontar o domínio e www para o VPS e executar:
+
+```sh
+docker compose -f docker-compose.production.yml up -d --build
+CERTBOT_EMAIL=seu-email@example.com ./deploy/enable-https.sh
+```
+
+Para atualizações, preservar o .env e deploy/nginx/default.conf remoto:
+este último contém o HTTPS gerado, enquanto o Git contém somente o bootstrap HTTP.
+A renovação periódica chama deploy/renew-https.sh pelo cron documentado.
+
+## Vercel e Railway (legados)
+
+O endereço antigo da Vercel redireciona a raiz para o login no VPS.
+Outras rotas ainda têm rewrites antigos para Railway. A configuração e os
+cuidados com deploys automáticos legados estão em PRODUCAO.md.

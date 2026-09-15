@@ -156,8 +156,8 @@
             <div class="hint">Mínimo de 8 caracteres.</div>
             <label for="signupName">Nome (opcional)</label>
             <input id="signupName" name="displayName" type="text" autocomplete="name">
-            <label for="signupNotes">Pagamento (opcional)</label>
-            <textarea id="signupNotes" name="notes" placeholder="PIX, nome no comprovante ou outra referência para o administrador aprovar."></textarea>
+            <label for="signupNotes">Seu canal e sua solicitação</label>
+            <textarea id="signupNotes" name="notes" placeholder="Informe o @ do seu canal no TikTok e conte como são suas lives. Nossa equipe usará essas informações para avaliar se a ferramenta atende às suas necessidades."></textarea>
             <button id="signupBtn" type="submit">Enviar cadastro</button>
         </form>
         <form id="recoverForm" class="hidden">
@@ -270,7 +270,7 @@
             if (tab === 'login') {
                 panelHint.textContent = 'Entre com o e-mail e a senha da sua assinatura.';
             } else {
-                panelHint.textContent = 'Crie a conta. O acesso só é liberado depois que o administrador confirmar o pagamento.';
+                panelHint.textContent = 'Crie sua conta e informe seu canal para solicitar uma avaliação. Aguarde a orientação da equipe antes de pagar. O acesso é liberado após a confirmação do pagamento.';
             }
         }
 
@@ -301,11 +301,14 @@
         });
 
         (async function init() {
+            if (new URLSearchParams(window.location.search).get('tab') === 'signup') {
+                switchTab('signup');
+            }
             await window.TLMAuth.loadAuthConfig();
             const response = await fetch('/api/auth/config');
             const config = await response.json();
             if (!config.enabled) {
-                window.location.href = '/';
+                window.location.href = '/index.html';
             }
         })();
 
@@ -317,7 +320,7 @@
             try {
                 await window.TLMAuth.signIn(emailInput.value, passwordInput.value);
                 const next = new URLSearchParams(window.location.search).get('next');
-                window.location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : '/';
+                window.location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : '/index.html';
             } catch (error) {
                 if (error.locked && error.retryAfterSec) {
                     startLockoutCountdown(error.retryAfterSec);

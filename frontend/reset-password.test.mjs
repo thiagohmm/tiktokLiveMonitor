@@ -9,6 +9,7 @@ const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => 
 async function loadForm({ hash = '#access_token=test-token&type=recovery', failure } = {}) {
     const elements = new Map();
     const calls = [];
+    const replaceStateCalls = [];
     const document = {
         getElementById(id) {
             if (!elements.has(id)) {
@@ -28,7 +29,7 @@ async function loadForm({ hash = '#access_token=test-token&type=recovery', failu
         },
     };
     const window = {
-        location: { hash },
+        location: { hash, pathname: '/reset-password.html', search: '' },
         TLMAuth: {
             async loadAuthConfig() {},
             async resetPassword(token, password) {
@@ -37,9 +38,17 @@ async function loadForm({ hash = '#access_token=test-token&type=recovery', failu
             },
         },
     };
-    runInNewContext(script, { document, window, URLSearchParams, setTimeout() {} });
+    const history = {
+        replaceState(...args) { replaceStateCalls.push(args); },
+    };
+    runInNewContext(script, { document, window, history, URLSearchParams, setTimeout() {} });
     await new Promise(resolve => setImmediate(resolve));
-    return { elements, calls, submit: () => elements.get('resetForm').submit({ preventDefault() {} }) };
+    return {
+        elements,
+        calls,
+        replaceStateCalls,
+        submit: () => elements.get('resetForm').submit({ preventDefault() {} }),
+    };
 }
 
 test('submits a valid password and displays success', async () => {
@@ -70,4 +79,11 @@ test('disables the form when the recovery token is missing', async () => {
     assert.equal(form.elements.get('resetBtn').disabled, true);
     assert.equal(form.elements.get('newPassword').disabled, true);
     assert.equal(form.calls.length, 0);
+    assert.equal(form.replaceStateCalls.length, 0);
+});
+
+test('clears the token from the URL after reading it', async () => {
+    const form = await loadForm();
+    assert.equal(form.replaceStateCalls.length, 1);
+    assert.equal(form.replaceStateCalls[0][2], '/reset-password.html');
 });

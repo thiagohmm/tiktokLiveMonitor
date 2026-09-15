@@ -224,7 +224,7 @@
         }
     }
 
-    byId('backBtn').addEventListener('click', () => { window.location.href = '/'; });
+    byId('backBtn').addEventListener('click', () => { window.location.href = '/index.html'; });
     byId('logoutBtn').addEventListener('click', () => window.TLMAuth.signOut());
     byId('refreshUsersBtn').addEventListener('click', loadUsers);
     byId('refreshLivesBtn').addEventListener('click', loadLives);

@@ -327,7 +327,7 @@
         }
         if (!me.active || me.role !== 'admin') {
             alert('Acesso exclusivo para administradores.');
-            window.location.href = '/';
+            window.location.href = '/index.html';
             return null;
         }
         return me;
