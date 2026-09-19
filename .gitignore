@@ -13,6 +13,9 @@ node_modules/
 frontend/.vercel/
 supabase/.temp/
 
+# Estado local do agent pi (tasks, delegações, sessions)
+.pi/
+
 # Build artifacts
 dist/
 frontend/dist/
