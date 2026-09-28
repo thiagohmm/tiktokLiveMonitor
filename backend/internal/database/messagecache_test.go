@@ -13,12 +13,12 @@ func TestMessageCacheAddAndFlush(t *testing.T) {
 
 	// 15 unique messages from user A -> only the 10 most recent survive.
 	for i := 0; i < 15; i++ {
-		cache.Add(testRef("live1"), "userA", "nickA", fmt.Sprintf("message %d", i))
+		cache.Add(testRef(t, db, "live1"), "userA", "nickA", fmt.Sprintf("message %d", i))
 		time.Sleep(time.Millisecond) // ensure increasing timestamps
 	}
 	// 3 unique messages from user B.
 	for i := 0; i < 3; i++ {
-		cache.Add(testRef("live1"), "userB", "nickB", fmt.Sprintf("question %d", i))
+		cache.Add(testRef(t, db, "live1"), "userB", "nickB", fmt.Sprintf("question %d", i))
 	}
 
 	if got := cache.pendingLen(); got != 13 {
@@ -30,7 +30,7 @@ func TestMessageCacheAddAndFlush(t *testing.T) {
 		t.Fatalf("expected empty buffer after flush, got %d", got)
 	}
 
-	msgsA, err := db.GetUserMessages("userA")
+	msgsA, err := db.GetUserMessages(testOrg, "userA")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestMessageCacheAddAndFlush(t *testing.T) {
 		}
 	}
 
-	msgsB, err := db.GetUserMessages("userB")
+	msgsB, err := db.GetUserMessages(testOrg, "userB")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -62,16 +62,16 @@ func TestMessageCacheDedup(t *testing.T) {
 	db := openTestDB(t)
 	cache := NewMessageCache(db)
 
-	cache.Add(testRef("live1"), "userA", "nickA", "same message")
-	cache.Add(testRef("live1"), "USERA", "nickA", "  SAME MESSAGE  ") // case/whitespace insensitive
-	cache.Add(testRef("live1"), "userA", "nickA", "")                 // ignored
+	cache.Add(testRef(t, db, "live1"), "userA", "nickA", "same message")
+	cache.Add(testRef(t, db, "live1"), "USERA", "nickA", "  SAME MESSAGE  ") // case/whitespace insensitive
+	cache.Add(testRef(t, db, "live1"), "userA", "nickA", "")                 // ignored
 
 	if got := cache.pendingLen(); got != 1 {
 		t.Fatalf("expected 1 buffered message, got %d", got)
 	}
 	cache.Flush()
 
-	msgs, err := db.GetUserMessages("userA")
+	msgs, err := db.GetUserMessages(testOrg, "userA")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -84,11 +84,11 @@ func TestMessageCacheFlushIdempotent(t *testing.T) {
 	db := openTestDB(t)
 	cache := NewMessageCache(db)
 
-	cache.Add(testRef("live1"), "userA", "nickA", "hello")
+	cache.Add(testRef(t, db, "live1"), "userA", "nickA", "hello")
 	cache.Flush()
 	cache.Flush() // second flush is a no-op
 
-	msgs, err := db.GetUserMessages("userA")
+	msgs, err := db.GetUserMessages(testOrg, "userA")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -104,10 +104,10 @@ func TestMessageCacheStopFlushesRemaining(t *testing.T) {
 	cache.Start()
 	defer cache.Stop()
 
-	cache.Add(testRef("live1"), "userA", "nickA", "pending message")
+	cache.Add(testRef(t, db, "live1"), "userA", "nickA", "pending message")
 	cache.Stop()
 
-	msgs, err := db.GetUserMessages("userA")
+	msgs, err := db.GetUserMessages(testOrg, "userA")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -119,6 +119,7 @@ func TestMessageCacheStopFlushesRemaining(t *testing.T) {
 func TestMessageCacheConcurrentAdd(t *testing.T) {
 	db := openTestDB(t)
 	cache := NewMessageCache(db)
+	ref := testRef(t, db, "live1")
 
 	var wg sync.WaitGroup
 	for g := 0; g < 8; g++ {
@@ -127,7 +128,7 @@ func TestMessageCacheConcurrentAdd(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < 50; i++ {
 				// 5 unique messages per goroutine/user pair.
-				cache.Add(testRef("live1"), fmt.Sprintf("user%d", g), fmt.Sprintf("nick%d", g), fmt.Sprintf("msg %d", i%5))
+				cache.Add(ref, fmt.Sprintf("user%d", g), fmt.Sprintf("nick%d", g), fmt.Sprintf("msg %d", i%5))
 			}
 		}(g)
 	}
@@ -137,7 +138,7 @@ func TestMessageCacheConcurrentAdd(t *testing.T) {
 
 	total := 0
 	for g := 0; g < 8; g++ {
-		msgs, err := db.GetUserMessages(fmt.Sprintf("user%d", g))
+		msgs, err := db.GetUserMessages(testOrg, fmt.Sprintf("user%d", g))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -158,11 +159,11 @@ func TestMessageCacheAsyncFlush(t *testing.T) {
 	cache.Start()
 	defer cache.Stop()
 
-	cache.Add(testRef("live1"), "userA", "nickA", "async hello")
+	cache.Add(testRef(t, db, "live1"), "userA", "nickA", "async hello")
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		msgs, err := db.GetUserMessages("userA")
+		msgs, err := db.GetUserMessages(testOrg, "userA")
 		if err == nil && len(msgs) == 1 {
 			break
 		}

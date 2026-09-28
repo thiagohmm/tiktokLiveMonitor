@@ -39,7 +39,11 @@ func (db *DB) AddTargetGiftHistory(ref model.LiveRef, uniqueID, nickname, giftNa
 }
 
 // MarkTargetGiftAnswered sets answered_at/response_type for a pending history entry.
-func (db *DB) MarkTargetGiftAnswered(id int64, responseType string, answeredAt time.Time) error {
+func (db *DB) MarkTargetGiftAnswered(orgID string, id int64, responseType string, answeredAt time.Time) error {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return err
+	}
 	if id <= 0 {
 		return model.ErrInvalidID
 	}
@@ -54,11 +58,20 @@ func (db *DB) MarkTargetGiftAnswered(id int64, responseType string, answeredAt t
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	_, err := db.exec(
+	var owned int
+	if err := db.queryRow(
+		`SELECT COUNT(*) FROM target_gift_history WHERE id = ? AND `+orgSessions, id, orgID,
+	).Scan(&owned); err != nil {
+		return fmt.Errorf("lookup target gift: %w", err)
+	}
+	if owned == 0 {
+		return model.ErrInvalidID
+	}
+	_, err = db.exec(
 		`UPDATE target_gift_history
 		 SET answered_at = ?, response_type = ?
-		 WHERE id = ? AND answered_at IS NULL`,
-		answeredAt.UTC().Format(time.RFC3339Nano), responseType, id,
+		 WHERE id = ? AND answered_at IS NULL AND `+orgSessions,
+		answeredAt.UTC().Format(time.RFC3339Nano), responseType, id, orgID,
 	)
 	if err != nil {
 		return fmt.Errorf("mark target gift answered: %w", err)
@@ -70,7 +83,11 @@ func (db *DB) MarkTargetGiftAnswered(id int64, responseType string, answeredAt t
 // a pending entry in the gift queue. Promotion stamps `at` as the promotion
 // moment so jumpers are ordered FIFO among themselves; demotion clears the
 // stamp and the entry returns to its normal position (by received_at).
-func (db *DB) SetTargetGiftPriority(id int64, priority bool, at time.Time) error {
+func (db *DB) SetTargetGiftPriority(orgID string, id int64, priority bool, at time.Time) error {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return err
+	}
 	if id <= 0 {
 		return model.ErrInvalidID
 	}
@@ -89,13 +106,13 @@ func (db *DB) SetTargetGiftPriority(id int64, priority bool, at time.Time) error
 		// Only pending entries can jump the queue.
 		query = `UPDATE target_gift_history
 			 SET is_priority = TRUE, priority_at = ?
-			 WHERE id = ? AND answered_at IS NULL`
-		args = []any{at.UTC().Format(time.RFC3339Nano), id}
+			 WHERE id = ? AND answered_at IS NULL AND ` + orgSessions
+		args = []any{at.UTC().Format(time.RFC3339Nano), id, orgID}
 	} else {
 		query = `UPDATE target_gift_history
 			 SET is_priority = FALSE, priority_at = NULL
-			 WHERE id = ?`
-		args = []any{id}
+			 WHERE id = ? AND ` + orgSessions
+		args = []any{id, orgID}
 	}
 
 	res, err := db.exec(query, args...)
@@ -113,33 +130,35 @@ func (db *DB) SetTargetGiftPriority(id int64, priority bool, at time.Time) error
 }
 
 // GetRecentTargetGiftHistory returns the latest N target gift history rows.
-func (db *DB) GetRecentTargetGiftHistory(liveName string, limit int) ([]model.TargetGiftHistory, error) {
+func (db *DB) GetRecentTargetGiftHistory(orgID, liveName string, limit int) ([]model.TargetGiftHistory, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
 	if limit < 1 || limit > 500 {
 		limit = 50
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	var (
-		rows *sql.Rows
-		err  error
-	)
+	var rows *sql.Rows
 	if strings.TrimSpace(liveName) == "" {
 		rows, err = db.query(
 			`SELECT id, live_name, uniqueId, nickname, gift_name, received_at, answered_at, response_type, is_priority, priority_at
 			 FROM target_gift_history
+			 WHERE `+orgSessions+`
 			 ORDER BY received_at DESC
 			 LIMIT ?`,
-			limit,
+			orgID, limit,
 		)
 	} else {
 		rows, err = db.query(
 			`SELECT id, live_name, uniqueId, nickname, gift_name, received_at, answered_at, response_type, is_priority, priority_at
 			 FROM target_gift_history
-			 WHERE live_name = ?
+			 WHERE `+orgSessions+` AND live_name = ?
 			 ORDER BY received_at DESC
 			 LIMIT ?`,
-			liveName, limit,
+			orgID, liveName, limit,
 		)
 	}
 	if err != nil {
@@ -161,7 +180,11 @@ func (db *DB) GetRecentTargetGiftHistory(liveName string, limit int) ([]model.Ta
 // GetPendingTargetGiftHistory returns the unanswered gift queue in queue
 // order: jumpers (is_priority) first, FIFO by promotion moment, then the
 // rest FIFO by received_at.
-func (db *DB) GetPendingTargetGiftHistory(liveName string, limit int) ([]model.TargetGiftHistory, error) {
+func (db *DB) GetPendingTargetGiftHistory(orgID, liveName string, limit int) ([]model.TargetGiftHistory, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
 	if limit < 1 || limit > 500 {
 		limit = 50
 	}
@@ -176,13 +199,13 @@ func (db *DB) GetPendingTargetGiftHistory(liveName string, limit int) ([]model.T
 	rows, err := db.query(
 		`SELECT id, live_name, uniqueId, nickname, gift_name, received_at, answered_at, response_type, is_priority, priority_at
 		 FROM target_gift_history
-		 WHERE live_name = ? AND answered_at IS NULL
+		 WHERE `+orgSessions+` AND live_name = ? AND answered_at IS NULL
 		 ORDER BY is_priority DESC,
 			 COALESCE(priority_at, received_at) ASC,
 			 received_at ASC,
 			 id ASC
 		 LIMIT ?`,
-		liveName, limit,
+		orgID, liveName, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query pending target gifts: %w", err)

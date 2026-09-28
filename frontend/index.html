@@ -1424,6 +1424,389 @@
         .goal-toast.show {
             opacity: 1;
         }
+
+        /* ── Fila PIX ─────────────────────────────────────────────── */
+        .pix-grid {
+            display: grid;
+            grid-template-columns: var(--pix-side-w, minmax(260px, 34%)) 8px 1fr;
+            gap: 14px;
+            align-items: stretch;
+        }
+        @media (max-width: 900px) {
+            .pix-grid { grid-template-columns: 1fr; }
+            .pix-resize-handle { display: none; }
+        }
+        .pix-resize-handle {
+            cursor: col-resize;
+            border-radius: 4px;
+            touch-action: none;
+            position: relative;
+            min-height: 120px;
+        }
+        .pix-resize-handle::after {
+            content: '';
+            position: absolute;
+            top: 24px;
+            bottom: 24px;
+            left: 3px;
+            width: 2px;
+            border-radius: 2px;
+            background: var(--border-strong);
+            transition: background 0.15s ease;
+        }
+        .pix-resize-handle:hover::after,
+        .pix-resize-handle.pix-resizing::after,
+        .pix-resize-handle:focus-visible::after {
+            background: var(--cyan);
+        }
+        .pix-resize-handle:focus-visible {
+            outline: none;
+        }
+        .pix-card {
+            background: var(--card-solid);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 14px;
+            padding: 14px;
+        }
+        .pix-sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            min-width: 0;
+        }
+        .pix-block + .pix-block {
+            padding-top: 14px;
+            border-top: 1px solid var(--border);
+        }
+        .pix-block-actions {
+            margin-top: 8px;
+        }
+        .pix-block-title {
+            font-size: 0.72em;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+        .pix-conn-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .pix-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 0.78em;
+            font-weight: 700;
+            color: var(--text-muted);
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--border);
+        }
+        .pix-status::before {
+            content: '';
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--text-muted);
+            flex: none;
+        }
+        .pix-status.pix-status-on {
+            color: var(--green);
+            border-color: rgba(34, 197, 94, 0.45);
+            background: rgba(34, 197, 94, 0.12);
+        }
+        .pix-status.pix-status-on::before {
+            background: var(--green);
+        }
+        .pix-qr-frame {
+            display: flex;
+            justify-content: center;
+            margin-top: 12px;
+        }
+        .pix-qr-frame:has(.pix-qr.pix-hidden) {
+            display: none;
+        }
+        .pix-qr {
+            width: 168px;
+            height: 168px;
+            object-fit: contain;
+            background: #fff;
+            border-radius: 12px;
+            padding: 8px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+        }
+        .pix-tickets {
+            max-height: 340px;
+            overflow-x: hidden;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .pix-ticket-row {
+            display: grid;
+            grid-template-columns: 36px 1fr;
+            gap: 10px;
+            align-items: start;
+            width: 100%;
+            padding: 8px;
+            border-radius: 10px;
+            cursor: pointer;
+            text-align: left;
+        }
+        .pix-ticket-row:hover {
+            background: rgba(37, 244, 238, 0.08);
+        }
+        .pix-ticket-row.active {
+            background: rgba(37, 244, 238, 0.12);
+            box-shadow: inset 3px 0 0 var(--cyan);
+        }
+        .pix-ticket-row.active .pix-ticket-name {
+            color: var(--cyan);
+        }
+        .pix-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            font-size: 0.85em;
+            font-weight: 700;
+            color: var(--cyan);
+            background: rgba(37, 244, 238, 0.14);
+        }
+        .pix-ticket-main {
+            min-width: 0;
+        }
+        .pix-ticket-top {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 8px;
+            min-width: 0;
+        }
+        .pix-ticket-name {
+            min-width: 0;
+            font-weight: 600;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .pix-ticket-sub,
+        .pix-ticket-preview {
+            font-size: 0.78em;
+            color: var(--text-muted);
+            margin-top: 2px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .pix-ticket-meta {
+            font-size: 0.82em;
+            font-weight: 700;
+            color: var(--cyan);
+            margin-top: 2px;
+        }
+        .pix-ticket-time {
+            color: var(--text-muted);
+            font-size: 0.72em;
+            white-space: nowrap;
+            flex: none;
+        }
+        .pix-empty {
+            text-align: center;
+            padding: 22px 10px;
+            color: var(--text-muted);
+        }
+        .pix-chip {
+            font-size: 0.7em;
+            padding: 3px 8px;
+            border-radius: 999px;
+            border: 1px solid var(--text-muted);
+            color: var(--text-muted);
+            white-space: nowrap;
+            font-weight: 700;
+        }
+        .pix-chip-done {
+            border-color: rgba(34, 197, 94, 0.55);
+            color: var(--green);
+            background: rgba(34, 197, 94, 0.1);
+        }
+        .pix-chip-open {
+            border-color: rgba(254, 44, 85, 0.5);
+            color: var(--pink-soft);
+            background: rgba(254, 44, 85, 0.12);
+        }
+        .pix-chat {
+            display: flex;
+            flex-direction: column;
+            min-height: 520px;
+            min-width: 0;
+        }
+        .pix-conv-titles {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            flex: 1;
+        }
+        .pix-conv-sub {
+            font-size: 0.78em;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+        .pix-count {
+            display: inline-block;
+            margin-left: 8px;
+            font-size: 0.72em;
+            background: var(--pink);
+            color: #fff;
+            /* O h3 do título usa texto em gradiente (fill transparente). */
+            -webkit-text-fill-color: #fff;
+            border-radius: 999px;
+            padding: 1px 9px;
+            vertical-align: middle;
+        }
+        .pix-toast {
+            position: fixed;
+            left: 50%;
+            bottom: 26px;
+            transform: translateX(-50%) translateY(20px);
+            background: var(--card-solid);
+            color: #fff;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 10px 18px;
+            border-radius: 10px;
+            font-size: 0.9em;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.25s ease, transform 0.25s ease;
+            z-index: 60;
+            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+        }
+        .pix-toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+        .pix-toast.success {
+            border-color: var(--green);
+        }
+        .pix-toast.error {
+            border-color: var(--pink);
+        }
+        .pix-badge {
+            display: inline-block;
+            padding: 0 5px;
+            border-radius: 6px;
+            font-size: 0.75em;
+            background: rgba(254, 44, 85, 0.18);
+            margin-left: 6px;
+        }
+        .pix-messages {
+            flex: 1;
+            min-height: 280px;
+            max-height: 520px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 12px 4px;
+        }
+        .pix-messages:empty {
+            align-items: center;
+            justify-content: center;
+        }
+        .pix-messages:empty::before {
+            content: 'Selecione um atendimento para ver a conversa';
+            color: var(--text-muted);
+            font-size: 0.88em;
+            text-align: center;
+        }
+        .pix-msg {
+            max-width: 82%;
+            padding: 8px 12px;
+            border-radius: 14px;
+            font-size: 0.92em;
+            word-break: break-word;
+        }
+        .pix-msg.inbound {
+            align-self: flex-start;
+            background: rgba(255, 255, 255, 0.07);
+            border-radius: 4px 14px 14px 14px;
+        }
+        .pix-msg.outbound {
+            align-self: flex-end;
+            background: rgba(37, 244, 238, 0.16);
+            border-radius: 14px 4px 14px 14px;
+        }
+        .pix-msg img {
+            max-width: 220px;
+            border-radius: 8px;
+            display: block;
+            margin-top: 6px;
+        }
+        .pix-msg a {
+            color: var(--cyan);
+        }
+        .pix-msg .pix-time {
+            display: block;
+            font-size: 0.72em;
+            opacity: 0.6;
+            margin-top: 4px;
+        }
+        .pix-composer {
+            display: flex;
+            gap: 8px;
+            margin-top: auto;
+            padding-top: 10px;
+            border-top: 1px solid var(--border);
+        }
+        .pix-composer input {
+            flex: 1;
+        }
+        .pix-value-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 6px;
+        }
+        .pix-value-prefix {
+            color: var(--text-muted);
+            font-weight: 700;
+            font-size: 0.85em;
+            flex: none;
+        }
+        .pix-value-row input {
+            flex: 1;
+            min-width: 0;
+            padding: 8px 10px;
+        }
+        .pix-value-row .small-btn {
+            padding: 6px 10px;
+            box-shadow: none;
+        }
+        .pix-msg .pix-value-tag {
+            display: inline-block;
+            margin-left: 6px;
+            font-weight: bold;
+            color: var(--cyan);
+        }
+        .pix-hint {
+            display: block;
+            margin-top: 8px;
+            font-size: 0.78em;
+            color: var(--text-muted);
+        }
+        .pix-hint.pix-error {
+            color: var(--red);
+        }
+        .pix-hidden {
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -1449,6 +1832,68 @@
             </div>
         </header>
         <div id="status" class="status-bar"><span class="status-dot"></span>Desconectado</div>
+
+        <!-- ── Fila PIX ─────────────────────────────────────────────── -->
+        <div id="pixSection" class="section-title">
+            <div class="section-title-label">
+                <h3>Fila PIX (WhatsApp)<span id="pixQueueCount" class="pix-count pix-hidden">0</span></h3>
+            </div>
+            <div class="section-title-actions">
+                <button id="pixHistoryBtn" class="small-btn" type="button">Histórico</button>
+            </div>
+        </div>
+        <div id="pixUnavailable" class="pix-card pix-hidden">
+            Fila PIX indisponível: configure WAHA e MinIO no servidor.
+        </div>
+        <div id="pixContent" class="pix-grid pix-hidden">
+            <div class="pix-card pix-sidebar">
+                <div class="pix-block">
+                    <div class="pix-block-title">WhatsApp</div>
+                    <div class="pix-conn-row">
+                        <span id="pixConnStatus" class="pix-status">Desconectado</span>
+                        <button id="pixConnectBtn" class="small-btn pix-hidden" type="button" title="Apenas o dono da organização conecta o WhatsApp">Conectar WhatsApp</button>
+                        <button id="pixDisconnectBtn" class="small-btn secondary-btn pix-hidden" type="button">Desconectar</button>
+                    </div>
+                    <div class="pix-qr-frame">
+                        <img id="pixQr" class="pix-qr pix-hidden" alt="QR code do WhatsApp">
+                    </div>
+                    <div id="pixQrHint" class="pix-hint pix-hidden" role="status"></div>
+                </div>
+                <div class="pix-block">
+                    <div class="pix-block-title">Valores PIX aceitos</div>
+                    <div id="pixValueRows"></div>
+                    <div class="pix-conn-row pix-block-actions">
+                        <button id="pixAddValueBtn" class="small-btn secondary-btn" type="button">+ Adicionar valor</button>
+                        <button id="pixSaveValuesBtn" class="small-btn" type="button">Salvar valores</button>
+                    </div>
+                    <div id="pixValuesHint" class="pix-hint">Comprovantes só entram na fila quando a soma dos valores bater um destes.</div>
+                </div>
+                <div class="pix-block">
+                    <div class="pix-block-title">Atendimentos</div>
+                    <div id="pixTicketsWrap" class="pix-tickets">
+                        <div id="pixTicketsBody"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="pix-resize-handle" id="pixResizeHandle" role="separator" aria-orientation="vertical" aria-label="Redimensionar painel da fila" tabindex="0" title="Arraste para redimensionar (duplo clique restaura)"></div>
+            <div class="pix-card pix-chat">
+                <div id="pixConversationHeader" class="pix-conn-row">
+                    <div class="pix-conv-titles">
+                        <strong id="pixConversationTitle">Selecione um atendimento</strong>
+                        <span id="pixConversationSub" class="pix-conv-sub"></span>
+                    </div>
+                    <span id="pixConversationStatus" class="pix-chip pix-hidden">Pendente</span>
+                    <button id="pixAnswerBtn" class="small-btn pix-hidden" type="button">Marcar como Respondido</button>
+                </div>
+                <div id="pixMessages" class="pix-messages"></div>
+                <div id="pixComposer" class="pix-composer pix-hidden">
+                    <input type="text" id="pixInput" maxlength="4000" placeholder="Mensagem de texto (sem anexos)...">
+                    <button id="pixSendBtn" class="small-btn" type="button">Enviar</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="pixToast" class="pix-toast" role="status" aria-live="polite"></div>
 
         <div class="chart-section">
             <div class="section-title">
@@ -1699,10 +2144,11 @@
             </div>
         </div>
 
-    <script src="/config.js"></script>
+    <script src="/config.js?v=20260927-1"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="/auth.js"></script>
+    <script src="/auth.js?v=20260927-1"></script>
     <script src="/vendor/jspdf.umd.min.js"></script>
-    <script src="/renderer.js"></script>
+    <script src="/renderer.js?v=20260927-1"></script>
+    <script src="/pix.js?v=20260927-2"></script>
 </body>
 </html>

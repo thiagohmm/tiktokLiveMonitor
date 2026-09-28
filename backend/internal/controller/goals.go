@@ -20,6 +20,8 @@ type GoalProgress struct {
 // GoalUpdate is emitted through the goal callback when progress changes:
 // crossed milestones and/or completion of the active goal.
 type GoalUpdate struct {
+	// OrgID routes the update to the organization's clients only.
+	OrgID                   string                `json:"-"`
 	Progress                GoalProgress          `json:"progress"`
 	UnlockedMilestones      []model.GoalMilestone `json:"unlockedMilestones,omitempty"`
 	NewlyUnlockedMilestones []model.GoalMilestone `json:"newlyUnlockedMilestones,omitempty"`
@@ -59,8 +61,8 @@ func (c *AppController) SetGoalCallback(fn func(GoalUpdate)) {
 // may be active at the same time: each one is tracked independently against
 // the live's units and completed when its own target is met.
 // An empty giftName counts all gifts; otherwise only that gift counts.
-func (c *AppController) CreateGoal(title, giftName string, targetUnits int, milestones []model.GoalMilestone) (model.GiftGoal, error) {
-	ref, err := c.activeLiveRef()
+func (c *AppController) CreateGoal(orgID, live, title, giftName string, targetUnits int, milestones []model.GoalMilestone) (model.GiftGoal, error) {
+	ref, err := c.activeLiveRef(orgID, live)
 	if err != nil {
 		return model.GiftGoal{}, fmt.Errorf("no live is being monitored")
 	}
@@ -85,9 +87,10 @@ func (c *AppController) CreateGoal(title, giftName string, targetUnits int, mile
 	return g, nil
 }
 
-// UpdateGoal persists mutable fields of an existing goal.
+// UpdateGoal persists mutable fields of an existing goal. g must come from
+// GetGoalsState of the same organization (its LiveID scopes the update).
 func (c *AppController) UpdateGoal(g model.GiftGoal) error {
-	if g.ID <= 0 {
+	if g.ID <= 0 || strings.TrimSpace(g.LiveID) == "" {
 		return fmt.Errorf("invalid goal id")
 	}
 	if g.Status == "" {
@@ -97,8 +100,8 @@ func (c *AppController) UpdateGoal(g model.GiftGoal) error {
 }
 
 // CancelGoal marks the given active goal of the current live as cancelled.
-func (c *AppController) CancelGoal(id int64) error {
-	g, err := c.activeGoalByID(id)
+func (c *AppController) CancelGoal(orgID, live string, id int64) error {
+	g, err := c.activeGoalByID(orgID, live, id)
 	if err != nil {
 		return err
 	}
@@ -111,8 +114,8 @@ func (c *AppController) CancelGoal(id int64) error {
 
 // CompleteGoal marks the given active goal of the current live as completed,
 // unlocking any milestone already crossed by the current units.
-func (c *AppController) CompleteGoal(id int64) error {
-	g, err := c.activeGoalByID(id)
+func (c *AppController) CompleteGoal(orgID, live string, id int64) error {
+	g, err := c.activeGoalByID(orgID, live, id)
 	if err != nil {
 		return err
 	}
@@ -132,8 +135,8 @@ func (c *AppController) CompleteGoal(id int64) error {
 
 // activeGoalByID returns the current live's active goal with the given id,
 // or nil when there is no such active goal.
-func (c *AppController) activeGoalByID(id int64) (*model.GiftGoal, error) {
-	ref, err := c.activeLiveRef()
+func (c *AppController) activeGoalByID(orgID, live string, id int64) (*model.GiftGoal, error) {
+	ref, err := c.activeLiveRef(orgID, live)
 	if err != nil {
 		return nil, nil
 	}
@@ -151,8 +154,8 @@ func (c *AppController) activeGoalByID(id int64) (*model.GiftGoal, error) {
 
 // GetGoalsState returns the current live's active goals (each with progress),
 // its goal history, and the legacy Active alias (first active goal).
-func (c *AppController) GetGoalsState() (GoalsState, error) {
-	ref, err := c.activeLiveRef()
+func (c *AppController) GetGoalsState(orgID, live string) (GoalsState, error) {
+	ref, err := c.activeLiveRef(orgID, live)
 	out := GoalsState{LiveName: ref.Name, Actives: []GoalProgress{}, History: []model.GiftGoal{}}
 	if err != nil {
 		return out, nil
@@ -205,13 +208,13 @@ func (c *AppController) checkGoalProgress(ref model.LiveRef) {
 		if goals[i].Status != model.GoalStatusActive {
 			continue
 		}
-		c.checkSingleGoal(&goals[i])
+		c.checkSingleGoal(ref.OrgID, &goals[i])
 	}
 }
 
 // checkSingleGoal advances one active goal: crossed milestones, completion at
 // target, persistence and the goal-update emission.
-func (c *AppController) checkSingleGoal(active *model.GiftGoal) {
+func (c *AppController) checkSingleGoal(orgID string, active *model.GiftGoal) {
 	// An empty GiftName counts every gift; a per-gift goal only counts its gift.
 	units, _, err := c.repo.GetGiftUnits(model.LiveRef{ID: active.LiveID, Name: active.LiveName}, goalGiftNames(active.GiftName)...)
 	if err != nil {
@@ -236,7 +239,7 @@ func (c *AppController) checkSingleGoal(active *model.GiftGoal) {
 	// Emit whenever the units moved, so the UI progress bar/percent tracks
 	// every gift even without milestones or completion.
 	if c.unitsChanged(active.ID, units) || completedNow {
-		c.emitGoalUpdate(*active, units, completedNow, newlyUnlocked)
+		c.emitGoalUpdate(orgID, *active, units, completedNow, newlyUnlocked)
 	}
 }
 
@@ -277,7 +280,7 @@ func (c *AppController) crossMilestones(active *model.GiftGoal, units int) (bool
 }
 
 // emitGoalUpdate fires the goal callback (if registered) with the new state.
-func (c *AppController) emitGoalUpdate(goal model.GiftGoal, units int, completedNow bool, newlyUnlocked []model.GoalMilestone) {
+func (c *AppController) emitGoalUpdate(orgID string, goal model.GiftGoal, units int, completedNow bool, newlyUnlocked []model.GoalMilestone) {
 	c.goals.mu.Lock()
 	fn := c.goals.callback
 	c.goals.mu.Unlock()
@@ -292,6 +295,7 @@ func (c *AppController) emitGoalUpdate(goal model.GiftGoal, units int, completed
 		}
 	}
 	fn(GoalUpdate{
+		OrgID: orgID,
 		Progress: GoalProgress{
 			Goal:    goal,
 			Units:   units,

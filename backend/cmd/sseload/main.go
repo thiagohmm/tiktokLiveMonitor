@@ -1,7 +1,8 @@
 // Command sseload is a load-test tool for the SSE fan-out: starts the full
 // backend (with an in-memory repository, no PostgreSQL/TikTok needed) and
-// runs a configurable event storm via monitor.Emit (the view layer
-// broadcasts every monitor event to all SSE clients).
+// runs a configurable event storm via monitor.Emit (the view layer delivers
+// each monitor event to the SSE clients of its orgId; with auth disabled every
+// client belongs to the default organization).
 //
 // It runs as a SEPARATE process from the test client on purpose: macOS caps
 // each process at ~10240 open files, and 10k loopback connections would
@@ -83,7 +84,7 @@ func main() {
 				return
 			case <-ticker.C:
 				n++
-				mon.Emit("load-test", monitor.EventData{"n": n})
+				mon.Emit("load-test", monitor.EventData{"orgId": model.DefaultOrgID, "n": n})
 			}
 		}
 	}()

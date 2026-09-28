@@ -33,12 +33,16 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -o /tiktok-live-monitor
 
 # Stage 2: Minimal runtime (multi-arch). Sem Python/llama/GGUF: apenas a API
 # Go + a bridge Node (tiktok-live-connector).
+# tesseract-ocr (+por) faz o OCR dos comprovantes JPG da Fila PIX; é chamado
+# via exec, então o binário Go continua CGO_ENABLED=0.
 FROM --platform=$TARGETPLATFORM node:22-bookworm-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        tesseract-ocr \
+        tesseract-ocr-por \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

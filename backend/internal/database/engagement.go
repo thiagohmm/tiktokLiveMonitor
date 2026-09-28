@@ -68,20 +68,24 @@ func (db *DB) UpsertRoomLikeTotal(ref model.LiveRef, total int64) error {
 // LikeTotals returns the room-level cumulative like total (as reported by the
 // stream) and the sum of per-event likes delivered by the stream for a live.
 // roomTotal is 0 when the stream never reported one.
-func (db *DB) LikeTotals(liveName string) (int64, int64, error) {
+func (db *DB) LikeTotals(orgID, liveName string) (int64, int64, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return 0, 0, err
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	var roomTotal int64
 	if err := db.queryRow(
-		"SELECT COALESCE(MAX(total), 0) FROM room_like_totals WHERE live_name = ?", liveName,
+		"SELECT COALESCE(MAX(total), 0) FROM room_like_totals WHERE "+orgSessions+" AND live_name = ?", orgID, liveName,
 	).Scan(&roomTotal); err != nil {
 		return 0, 0, fmt.Errorf("query room like total: %w", err)
 	}
 
 	var delivered int64
 	if err := db.queryRow(
-		"SELECT COALESCE(SUM(like_count), 0) FROM likes WHERE live_name = ?", liveName,
+		"SELECT COALESCE(SUM(like_count), 0) FROM likes WHERE "+orgSessions+" AND live_name = ?", orgID, liveName,
 	).Scan(&delivered); err != nil {
 		return 0, 0, fmt.Errorf("query delivered likes: %w", err)
 	}
@@ -89,7 +93,11 @@ func (db *DB) LikeTotals(liveName string) (int64, int64, error) {
 }
 
 // GetUserShareCount returns the total number of share events made by a user.
-func (db *DB) GetUserShareCount(uniqueID string) (int, error) {
+func (db *DB) GetUserShareCount(orgID, uniqueID string) (int, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return 0, err
+	}
 	uniqueID = strings.ToLower(strings.TrimSpace(uniqueID))
 	if uniqueID == "" {
 		return 0, model.ErrUniqueIDRequired
@@ -98,9 +106,9 @@ func (db *DB) GetUserShareCount(uniqueID string) (int, error) {
 	defer db.mu.Unlock()
 
 	var count int
-	err := db.queryRow(
-		"SELECT COUNT(*) FROM shares WHERE LOWER(uniqueId) = ?",
-		uniqueID,
+	err = db.queryRow(
+		"SELECT COUNT(*) FROM shares WHERE "+orgSessions+" AND LOWER(uniqueId) = ?",
+		orgID, uniqueID,
 	).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("count user shares: %w", err)
@@ -109,7 +117,11 @@ func (db *DB) GetUserShareCount(uniqueID string) (int, error) {
 }
 
 // GetUserLikeTotal returns the sum of like_count over all like events of a user.
-func (db *DB) GetUserLikeTotal(uniqueID string) (int64, error) {
+func (db *DB) GetUserLikeTotal(orgID, uniqueID string) (int64, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return 0, err
+	}
 	uniqueID = strings.ToLower(strings.TrimSpace(uniqueID))
 	if uniqueID == "" {
 		return 0, model.ErrUniqueIDRequired
@@ -118,9 +130,9 @@ func (db *DB) GetUserLikeTotal(uniqueID string) (int64, error) {
 	defer db.mu.Unlock()
 
 	var total int64
-	err := db.queryRow(
-		"SELECT COALESCE(SUM(like_count), 0) FROM likes WHERE LOWER(uniqueId) = ?",
-		uniqueID,
+	err = db.queryRow(
+		"SELECT COALESCE(SUM(like_count), 0) FROM likes WHERE "+orgSessions+" AND LOWER(uniqueId) = ?",
+		orgID, uniqueID,
 	).Scan(&total)
 	if err != nil {
 		return 0, fmt.Errorf("sum user likes: %w", err)

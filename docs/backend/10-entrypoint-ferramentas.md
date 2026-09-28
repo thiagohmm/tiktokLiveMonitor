@@ -9,7 +9,7 @@
 Wiring (composição) de todas as camadas, na ordem:
 
 ```text
-repo (PostgreSQL/Supabase)
+repo (PostgreSQL do compose)
    └─> monitor (bridge Node)
           └─> MessageCache (write-behind) → repo
                  └─> AppController (monitor + repo + cache + report + ranking)

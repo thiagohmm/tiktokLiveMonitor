@@ -31,6 +31,11 @@ func sseMaxClientsFromEnv() int {
 }
 
 type sseClient struct {
+	// orgID is the organization of the authenticated client: it only
+	// receives that organization's events.
+	orgID string
+	// userID lets a removed member be disconnected right away.
+	userID   string
 	w        http.ResponseWriter
 	flusher  http.Flusher
 	ch       chan []byte
@@ -39,8 +44,9 @@ type sseClient struct {
 	doneOnce sync.Once
 }
 
-func newSSEClient(w http.ResponseWriter, flusher http.Flusher) *sseClient {
+func newSSEClient(orgID string, w http.ResponseWriter, flusher http.Flusher) *sseClient {
 	return &sseClient{
+		orgID:   orgID,
 		w:       w,
 		flusher: flusher,
 		ch:      make(chan []byte, sseEventBuffer),
@@ -120,6 +126,24 @@ func (s *HTTPServer) dropSSEClient(c *sseClient, reason string) {
 	c.finish()
 }
 
+// kickSSE closes the streams of an organization (userID empty) or of one
+// user, after a membership removal or an organization being disabled. The
+// client reconnects and is then rejected by tenantMiddleware.
+func (s *HTTPServer) kickSSE(orgID, userID string) {
+	s.sseMu.Lock()
+	kicked := make([]*sseClient, 0)
+	for c := range s.sseClients {
+		if (orgID != "" && c.orgID == orgID) || (userID != "" && c.userID == userID) {
+			delete(s.sseClients, c)
+			kicked = append(kicked, c)
+		}
+	}
+	s.sseMu.Unlock()
+	for _, c := range kicked {
+		c.finish()
+	}
+}
+
 func (s *HTTPServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -127,7 +151,12 @@ func (s *HTTPServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := newSSEClient(w, flusher)
+	t, ok := requestTenant(w, r)
+	if !ok {
+		return
+	}
+	client := newSSEClient(t.OrgID, w, flusher)
+	client.userID = t.UserID
 
 	// Teto de clientes SSE simultâneos (proteção contra esgotamento de
 	// conexões): acima do limite, novos clientes recebem 503 e podem
@@ -158,7 +187,7 @@ func (s *HTTPServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	// Envio do estado inicial (antes do writer começar, para não intercalar).
-	state := s.controller.GetState()
+	state := s.controller.GetState(t.OrgID)
 	initial := map[string]interface{}{
 		"connected": state.Connected,
 		"username":  state.Username,
@@ -190,7 +219,13 @@ func (s *HTTPServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 	<-stopped
 }
 
-func (s *HTTPServer) broadcastSSE(eventType string, data interface{}) {
+// publishSSE delivers an event to the clients of one organization only. An
+// event without organization is dropped: there is no global broadcast.
+func (s *HTTPServer) publishSSE(orgID, eventType string, data interface{}) {
+	if orgID == "" {
+		log.Printf("[View] SSE: evento %q sem organização descartado", eventType)
+		return
+	}
 	payload, err := json.Marshal(data)
 	if err != nil {
 		return
@@ -199,6 +234,9 @@ func (s *HTTPServer) broadcastSSE(eventType string, data interface{}) {
 
 	s.sseMu.Lock()
 	for c := range s.sseClients {
+		if c.orgID != orgID {
+			continue
+		}
 		select {
 		case c.ch <- msg:
 		default:

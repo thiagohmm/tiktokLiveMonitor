@@ -75,13 +75,27 @@ func LoadConfigFromEnv() Config {
 	}
 }
 
+// CheckConfigFromEnv reports an auth setup that would silently disable
+// authentication: AUTH_ENABLED is not "0" but SUPABASE_URL/SUPABASE_ANON_KEY
+// are missing. Running without auth must be an explicit AUTH_ENABLED=0.
+func CheckConfigFromEnv() error {
+	if strings.TrimSpace(os.Getenv("AUTH_ENABLED")) == "0" {
+		return nil
+	}
+	if strings.TrimSpace(os.Getenv("SUPABASE_URL")) == "" || strings.TrimSpace(os.Getenv("SUPABASE_ANON_KEY")) == "" {
+		return errors.New("SUPABASE_URL e SUPABASE_ANON_KEY são obrigatórios (use AUTH_ENABLED=0 apenas em desenvolvimento local)")
+	}
+	return nil
+}
+
 // PublicPath reports whether a request path can be accessed without a token.
 // O backend é uma API pura: apenas a configuração pública de login e o
 // readiness são acessíveis sem token; todo o resto (/api/* e /events) exige
 // autenticação. Os arquivos da UI não são mais servidos pelo backend.
 func PublicPath(path string) bool {
 	if path == "/api/auth/config" || path == "/api/auth/login" || path == "/api/auth/signup" ||
-		path == "/api/auth/recover" || path == "/api/auth/reset-password" || path == "/api/readiness" {
+		path == "/api/auth/recover" || path == "/api/auth/reset-password" || path == "/api/readiness" ||
+		path == "/api/webhooks/whatsapp" {
 		return true
 	}
 	if path == "/events" || strings.HasPrefix(path, "/api/") {

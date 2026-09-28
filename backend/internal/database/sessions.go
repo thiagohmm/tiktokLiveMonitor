@@ -18,7 +18,7 @@ import (
 const liveSessionReuseMaxAge = 10 * time.Hour
 
 // liveSessionSelect is the column list shared by every session read.
-const liveSessionSelect = `SELECT id, live_name, day, started_at, last_seen_at, ended_at FROM live_sessions`
+const liveSessionSelect = `SELECT id, org_id, live_name, day, started_at, last_seen_at, ended_at FROM live_sessions`
 
 // newLiveSessionID returns a random session id (16 bytes, hex).
 func newLiveSessionID() (string, error) {
@@ -37,7 +37,7 @@ func scanLiveSession(row interface{ Scan(...any) error }) (model.LiveSession, er
 		lastSeen time.Time
 		ended    sql.NullTime
 	)
-	if err := row.Scan(&s.ID, &s.LiveName, &s.Day, &started, &lastSeen, &ended); err != nil {
+	if err := row.Scan(&s.ID, &s.OrgID, &s.LiveName, &s.Day, &started, &lastSeen, &ended); err != nil {
 		return model.LiveSession{}, err
 	}
 	s.Day = normalizeDate(s.Day)
@@ -49,15 +49,20 @@ func scanLiveSession(row interface{ Scan(...any) error }) (model.LiveSession, er
 	return s, nil
 }
 
-// BeginLiveSession opens the monitoring session for liveName.
+// BeginLiveSession opens the monitoring session of one organization for liveName.
 //
-// A session that is still open (ended_at IS NULL) and was touched on the same
-// UTC day less than liveSessionReuseMaxAge ago is resumed, so a backend restart
-// mid-live continues the same session instead of splitting one live in two.
-// Otherwise a brand new id is created and any leftover open session of that
-// streamer is closed with its real last_seen_at — that is what finally closes a
-// live that ended without StopMonitoring. Nothing is ever deleted here.
-func (db *DB) BeginLiveSession(liveName string, now time.Time) (model.LiveSession, error) {
+// A session of the organization that is still open (ended_at IS NULL) and was
+// touched on the same UTC day less than liveSessionReuseMaxAge ago is resumed,
+// so a backend restart mid-live continues the same session instead of splitting
+// one live in two. Otherwise a brand new id is created and any leftover open
+// session of that streamer in the organization is closed with its real
+// last_seen_at. Sessions of other organizations are never touched. Nothing is
+// ever deleted here.
+func (db *DB) BeginLiveSession(orgID, liveName string, now time.Time) (model.LiveSession, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return model.LiveSession{}, err
+	}
 	liveName = strings.TrimSpace(liveName)
 	if liveName == "" {
 		return model.LiveSession{}, fmt.Errorf("live name is required")
@@ -72,9 +77,9 @@ func (db *DB) BeginLiveSession(liveName string, now time.Time) (model.LiveSessio
 	defer db.mu.Unlock()
 
 	open, err := scanLiveSession(db.queryRow(
-		liveSessionSelect+` WHERE live_name = ? AND ended_at IS NULL AND day = ?
+		liveSessionSelect+` WHERE org_id = ? AND live_name = ? AND ended_at IS NULL AND day = ?
 		 ORDER BY started_at DESC LIMIT 1`,
-		liveName, day,
+		orgID, liveName, day,
 	))
 	switch {
 	case err == nil:
@@ -102,14 +107,14 @@ func (db *DB) BeginLiveSession(liveName string, now time.Time) (model.LiveSessio
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.Exec(db.bind(
-		`UPDATE live_sessions SET ended_at = last_seen_at WHERE live_name = ? AND ended_at IS NULL`),
-		liveName,
+		`UPDATE live_sessions SET ended_at = last_seen_at WHERE org_id = ? AND live_name = ? AND ended_at IS NULL`),
+		orgID, liveName,
 	); err != nil {
 		return model.LiveSession{}, fmt.Errorf("close previous live sessions: %w", err)
 	}
 	if _, err := tx.Exec(db.bind(
-		`INSERT INTO live_sessions (id, live_name, day, started_at, last_seen_at) VALUES (?, ?, ?, ?, ?)`),
-		newID, liveName, day, now, now,
+		`INSERT INTO live_sessions (id, org_id, live_name, day, started_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)`),
+		newID, orgID, liveName, day, now, now,
 	); err != nil {
 		return model.LiveSession{}, fmt.Errorf("insert live session: %w", err)
 	}
@@ -176,7 +181,8 @@ func (db *DB) touchLiveSessionLocked(id string, at time.Time) error {
 	return nil
 }
 
-// GetLiveSession returns one session by id.
+// GetLiveSession returns one session by id. Callers acting for a tenant must
+// compare the returned OrgID with their own.
 func (db *DB) GetLiveSession(id string) (model.LiveSession, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -198,10 +204,15 @@ func (db *DB) getLiveSessionLocked(id string) (model.LiveSession, error) {
 	return s, nil
 }
 
-// LatestLiveSession resolves the session of a streamer when the caller only has
-// the name: the open session first, then the most recent one. Used for events
-// that arrive without a liveId (the caller must not create a session here).
-func (db *DB) LatestLiveSession(liveName string) (model.LiveSession, error) {
+// LatestLiveSession resolves the session of a streamer in one organization when
+// the caller only has the name: the open session first, then the most recent
+// one. Used for events that arrive without a liveId (the caller must not create
+// a session here).
+func (db *DB) LatestLiveSession(orgID, liveName string) (model.LiveSession, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return model.LiveSession{}, err
+	}
 	liveName = strings.TrimSpace(liveName)
 	if liveName == "" {
 		return model.LiveSession{}, model.ErrLiveSessionNotFound
@@ -210,9 +221,9 @@ func (db *DB) LatestLiveSession(liveName string) (model.LiveSession, error) {
 	defer db.mu.Unlock()
 
 	s, err := scanLiveSession(db.queryRow(
-		liveSessionSelect+` WHERE live_name = ?
+		liveSessionSelect+` WHERE org_id = ? AND live_name = ?
 		 ORDER BY (ended_at IS NULL) DESC, started_at DESC LIMIT 1`,
-		liveName,
+		orgID, liveName,
 	))
 	if err == sql.ErrNoRows {
 		return model.LiveSession{}, model.ErrLiveSessionNotFound

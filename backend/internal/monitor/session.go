@@ -22,14 +22,15 @@ const sessionTouchMinInterval = time.Minute
 func (m *Monitor) beginOrResumeSession() {
 	m.mu.Lock()
 	liveName := m.currentUsername
+	orgID := m.orgID
 	repo := m.repo
 	m.mu.Unlock()
 
-	if repo == nil || liveName == "" {
+	if repo == nil || liveName == "" || orgID == "" {
 		return
 	}
 
-	session, err := repo.BeginLiveSession(liveName, time.Now())
+	session, err := repo.BeginLiveSession(orgID, liveName, time.Now())
 	if err != nil {
 		log.Printf("[Monitor] Error starting live session for %s: %v", liveName, err)
 		return

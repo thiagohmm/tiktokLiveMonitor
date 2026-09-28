@@ -4,21 +4,21 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/ranking"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/report"
 )
-
-// settingsKey is the settings table key under which the app settings are stored.
-const settingsKey = "app"
 
 // MessageCache is an in-memory write-behind buffer for user messages.
 type MessageCache interface {
@@ -26,7 +26,9 @@ type MessageCache interface {
 	Snapshot() []model.UserMessage
 }
 
-// AppController orchestrates all application services.
+// AppController orchestrates all application services. Every tenant-facing
+// method takes the organization id (orgID) of the caller: settings, lives,
+// history and events of one organization are never visible to another.
 type AppController struct {
 	monitor        *monitor.Monitor
 	monitorManager *monitor.Manager
@@ -34,135 +36,169 @@ type AppController struct {
 	msgCache       MessageCache
 	reportGen      *report.Generator
 	ranker         *ranking.Ranker
-	monCancel      context.CancelFunc
-	monCancelMu    sync.Mutex
 	flagSeen       map[string]struct{}
 	flagSeenMu     sync.Mutex
+	settingsMu     sync.Mutex
+	settings       map[string]monitor.Settings
 	goals          goalState
+	attachments    *MonitorAttachmentStore
+	pixQueue       *PixQueueService
 }
 
-// SetMonitorManager enables concurrent monitoring of independent lives.
+// SetMonitorManager replaces the concurrent monitor manager.
 func (c *AppController) SetMonitorManager(manager *monitor.Manager) {
-	c.monitorManager = manager
+	if manager != nil {
+		c.monitorManager = manager
+	}
 }
 
-// NewAppController creates a new application controller.
+// maxMonitorsFromEnv reads the global live cap (env MAX_MONITORS, default 20).
+func maxMonitorsFromEnv() int {
+	if v := strings.TrimSpace(os.Getenv("MAX_MONITORS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 20
+}
+
+// NewAppController creates a new application controller. mon only carries
+// events derived by the controller itself (external moderation flags); every
+// live runs in the monitor manager.
 func NewAppController(
 	mon *monitor.Monitor,
 	repo model.Repository,
 ) *AppController {
 	mon.SetRepo(repo)
-	c := &AppController{
-		monitor:   mon,
-		repo:      repo,
-		reportGen: report.New(repo),
-		ranker:    ranking.New(ranking.DefaultWeights),
-		flagSeen:  make(map[string]struct{}),
+	return &AppController{
+		monitor:        mon,
+		monitorManager: monitor.NewManager(repo, maxMonitorsFromEnv()),
+		repo:           repo,
+		reportGen:      report.New(repo),
+		ranker:         ranking.New(ranking.DefaultWeights),
+		flagSeen:       make(map[string]struct{}),
+		settings:       make(map[string]monitor.Settings),
 		goals: goalState{
 			lastUnits: make(map[int64]int),
 		},
+		attachments: NewMonitorAttachmentStore(),
 	}
-	// Restore persisted settings (target gifts, moderation toggles, etc.) so
-	// they survive app restarts.
-	if raw, err := repo.GetSetting(settingsKey); err == nil && raw != "" {
-		var s monitor.Settings
-		if err := json.Unmarshal([]byte(raw), &s); err == nil {
-			mon.SetSettings(s)
-		} else {
-			log.Printf("[Controller] Failed to parse persisted settings: %v", err)
-		}
-	}
-	return c
 }
 
 // --- Monitor Actions ---
 
-// StartMonitoring starts monitoring the given username.
-func (c *AppController) StartMonitoring(ctx context.Context, username string) error {
-	if c.monitorManager != nil {
-		return c.monitorManager.StartMonitoring(ctx, username)
+// StartMonitoring starts monitoring username for the organization, within the
+// organization's live quota.
+func (c *AppController) StartMonitoring(ctx context.Context, orgID, username string) error {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return model.ErrOrgRequired
 	}
-	c.monCancelMu.Lock()
-	monCtx, cancel := context.WithCancel(context.Background())
-	c.monCancel = cancel
-	c.monCancelMu.Unlock()
-
-	return c.monitor.StartMonitoring(monCtx, username)
+	maxLives := 0
+	org, err := c.repo.GetOrganization(orgID)
+	switch {
+	case err == nil:
+		if !org.Active {
+			return fmt.Errorf("organização desativada")
+		}
+		maxLives = org.MaxLives
+	case !errors.Is(err, model.ErrOrgNotFound):
+		return fmt.Errorf("load organization: %w", err)
+	}
+	return c.monitorManager.StartMonitoring(ctx, orgID, username, c.GetSettings(orgID), maxLives)
 }
 
-// StopMonitoring stops the current monitoring session.
+// StopMonitoring stops every live of every organization (shutdown).
 func (c *AppController) StopMonitoring() {
-	if c.monitorManager != nil {
-		c.monitorManager.StopMonitoring("")
-		return
-	}
-	c.monCancelMu.Lock()
-	defer c.monCancelMu.Unlock()
-	if c.monCancel != nil {
-		c.monCancel()
-	}
-	c.monitor.StopMonitoring()
+	c.monitorManager.StopAll()
 }
 
-// StopMonitoringLive stops only the requested live.
-func (c *AppController) StopMonitoringLive(username string) {
-	if c.monitorManager != nil {
-		c.monitorManager.StopMonitoring(username)
-		return
-	}
-	c.StopMonitoring()
+// StopMonitoringLive stops one live of the organization (every live when
+// username is empty).
+func (c *AppController) StopMonitoringLive(orgID, username string) {
+	c.monitorManager.StopMonitoring(orgID, username)
 }
 
-// GetLiveStates returns the state of every concurrently monitored live.
-func (c *AppController) GetLiveStates() []monitor.LiveState {
-	if c.monitorManager == nil {
-		state := c.monitor.GetState()
-		if state.Username == "" {
-			return []monitor.LiveState{}
-		}
-		return []monitor.LiveState{{Live: state.Username, State: state}}
-	}
-	return c.monitorManager.States()
+// GetLiveStates returns the state of every live monitored by the organization.
+func (c *AppController) GetLiveStates(orgID string) []monitor.LiveState {
+	return c.monitorManager.States(orgID)
 }
 
-// GetState returns the current monitor state.
-func (c *AppController) GetState() monitor.State {
-	if c.monitorManager != nil {
-		return c.monitorManager.CurrentState()
-	}
-	return c.monitor.GetState()
+// GetState returns the state of the organization's first monitored live.
+func (c *AppController) GetState(orgID string) monitor.State {
+	state := c.monitorManager.CurrentState(orgID)
+	state.Settings = c.GetSettings(orgID)
+	return state
 }
 
-// GetSettings returns the current monitor settings.
-func (c *AppController) GetSettings() monitor.Settings {
-	if c.monitorManager != nil {
-		return c.monitorManager.GetSettings()
+// ResolveLive returns live when given, otherwise the organization's current
+// live (empty when it monitors none).
+func (c *AppController) ResolveLive(orgID, live string) string {
+	if live = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(live), "@")); live != "" {
+		return live
 	}
-	return c.monitor.GetSettings()
+	return c.monitorManager.CurrentState(orgID).Username
 }
 
-// SetSettings updates the monitor settings and persists them so the
-// configuration (including target gifts) survives app restarts.
-func (c *AppController) SetSettings(settings monitor.Settings) {
-	if c.monitorManager != nil {
-		c.monitorManager.SetSettings(settings)
-	} else {
-		c.monitor.SetSettings(settings)
+// GetSettings returns the organization's settings (defaults when none were saved).
+func (c *AppController) GetSettings(orgID string) monitor.Settings {
+	c.settingsMu.Lock()
+	defer c.settingsMu.Unlock()
+	if s, ok := c.settings[orgID]; ok {
+		return s
 	}
-	if data, err := json.Marshal(settings); err == nil {
-		if err := c.repo.SetSetting(settingsKey, string(data)); err != nil {
-			log.Printf("[Controller] Failed to persist settings: %v", err)
+	s := defaultSettings()
+	if raw, err := c.repo.GetSetting(database.OrgSettingsKey(orgID)); err == nil && raw != "" {
+		if err := json.Unmarshal([]byte(raw), &s); err != nil {
+			log.Printf("[Controller] Failed to parse settings of organization %s: %v", orgID, err)
+			s = defaultSettings()
 		}
 	}
+	if s.TargetGifts == nil {
+		s.TargetGifts = []string{}
+	}
+	c.settings[orgID] = s
+	return s
 }
 
-// FetchAvailableGifts fetches the available gifts from TikTok.
-func (c *AppController) FetchAvailableGifts() ([]string, error) {
-	if c.monitorManager != nil {
-		state := c.monitorManager.CurrentState()
-		return c.monitorManager.FetchAvailableGifts(state.Username)
+func defaultSettings() monitor.Settings {
+	return monitor.Settings{
+		ModerationEnabled:    true,
+		LogLevel:             "info",
+		TargetGifts:          []string{},
+		TargetGiftPriorities: map[string]bool{},
+		TargetGiftTags:       map[string]string{},
 	}
-	gifts, err := c.monitor.FetchAvailableGifts()
+}
+
+// SetSettings updates the organization's settings on its monitors and
+// persists them so the configuration survives app restarts.
+func (c *AppController) SetSettings(orgID string, settings monitor.Settings) error {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return model.ErrOrgRequired
+	}
+	data, err := json.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("marshal settings: %w", err)
+	}
+	if err := c.repo.SetSetting(database.OrgSettingsKey(orgID), string(data)); err != nil {
+		return fmt.Errorf("persist settings: %w", err)
+	}
+	c.settingsMu.Lock()
+	c.settings[orgID] = settings
+	c.settingsMu.Unlock()
+	c.monitorManager.SetSettings(orgID, settings)
+	return nil
+}
+
+// FetchAvailableGifts fetches the available gifts of one of the organization's lives.
+func (c *AppController) FetchAvailableGifts(orgID, live string) ([]string, error) {
+	live = c.ResolveLive(orgID, live)
+	if live == "" {
+		return []string{}, nil
+	}
+	gifts, err := c.monitorManager.FetchAvailableGifts(orgID, live)
 	if err != nil {
 		return nil, err
 	}
@@ -175,9 +211,14 @@ func (c *AppController) FetchAvailableGifts() ([]string, error) {
 // --- Moderation Actions ---
 
 // ReportExternalFlag ingests a moderation flag and surfaces it through the
-// existing flagged-message pipeline (UI + anomaly log). Plumbing only.
+// existing flagged-message pipeline (UI + anomaly log). The flag must carry
+// the organization (orgId) and live (liveName) it belongs to.
 func (c *AppController) ReportExternalFlag(data monitor.EventData) {
-	settings := c.GetSettings()
+	orgID := eventString(data, "orgId")
+	if orgID == "" {
+		return
+	}
+	settings := c.GetSettings(orgID)
 	if !settings.ModerationEnabled {
 		return
 	}
@@ -193,7 +234,7 @@ func (c *AppController) ReportExternalFlag(data monitor.EventData) {
 		reason = category
 	}
 
-	key := strings.ToLower(uniqueID) + "|" + foldComment(comment)
+	key := orgID + "|" + strings.ToLower(uniqueID) + "|" + foldComment(comment)
 	c.flagSeenMu.Lock()
 	if _, ok := c.flagSeen[key]; ok {
 		c.flagSeenMu.Unlock()
@@ -210,6 +251,8 @@ func (c *AppController) ReportExternalFlag(data monitor.EventData) {
 
 	liveName := c.eventLiveName(data)
 	c.monitor.Emit(monitor.EventFlaggedMessage, monitor.EventData{
+		"orgId":     orgID,
+		"liveName":  liveName,
 		"uniqueId":  uniqueID,
 		"nickname":  nickname,
 		"comment":   comment,
@@ -242,50 +285,99 @@ func foldComment(s string) string {
 
 // --- Repository Actions ---
 
-// GetRecentModerations returns recent moderation history.
-func (c *AppController) GetRecentModerations(limit int) ([]model.AnomalyLog, error) {
-	return c.repo.GetRecentModerations(limit)
+// GetRecentModerations returns the organization's recent moderation history.
+func (c *AppController) GetRecentModerations(orgID string, limit int) ([]model.AnomalyLog, error) {
+	return c.repo.GetRecentModerations(orgID, limit)
 }
 
-// DeleteModeration deletes a moderation record by ID.
-func (c *AppController) DeleteModeration(id int64) (int64, error) {
-	return c.repo.DeleteModeration(id)
+// DeleteModeration deletes one of the organization's moderation records.
+func (c *AppController) DeleteModeration(orgID string, id int64) (int64, error) {
+	return c.repo.DeleteModeration(orgID, id)
 }
 
-// ClearHistory clears all moderation history.
-func (c *AppController) ClearHistory() (int64, error) {
-	return c.repo.ClearHistory()
+// ClearHistory clears the organization's moderation history.
+func (c *AppController) ClearHistory(orgID string) (int64, error) {
+	return c.repo.ClearHistory(orgID)
 }
 
-// GetLives returns one row per live session for the admin tab.
-func (c *AppController) GetLives(limit int) ([]model.Live, error) {
-	return c.repo.ListLives(limit)
+// GetLives returns one row per live session of the organization.
+func (c *AppController) GetLives(orgID string, limit int) ([]model.Live, error) {
+	return c.repo.ListLives(orgID, limit)
 }
 
-// GetLiveSession returns one live session by id (admin delete guard).
-func (c *AppController) GetLiveSession(id string) (model.LiveSession, error) {
-	return c.repo.GetLiveSession(id)
+// GetLiveSession returns one live session of the organization. A session of
+// another organization is reported as not found.
+func (c *AppController) GetLiveSession(orgID, id string) (model.LiveSession, error) {
+	session, err := c.repo.GetLiveSession(id)
+	if err != nil {
+		return model.LiveSession{}, err
+	}
+	if session.OrgID != strings.TrimSpace(orgID) {
+		return model.LiveSession{}, model.ErrLiveSessionNotFound
+	}
+	return session, nil
 }
 
-// DeleteLive removes all stored data of one live session (id), never the whole
-// history of the streamer.
-func (c *AppController) DeleteLive(id string) (int64, error) {
+// DeleteLive removes all stored data of one live session (id) of the
+// organization, never the whole history of the streamer.
+func (c *AppController) DeleteLive(orgID, id string) (int64, error) {
+	if _, err := c.GetLiveSession(orgID, id); err != nil {
+		return 0, err
+	}
 	return c.repo.DeleteLiveSession(id)
 }
 
-// GetRecentGifts returns recent gifts for the current live.
-func (c *AppController) GetRecentGifts(liveName string, limit int) ([]model.Gift, error) {
-	return c.repo.GetRecentGifts(liveName, limit)
+// AssignLegacyLives moves sessions of the legacy organization into a customer
+// organization. A live the legacy organization is still monitoring is refused:
+// its monitor would keep writing into a session that no longer belongs to it.
+// When the legacy settings are copied, the destination's cached settings are
+// dropped and pushed to its running monitors.
+func (c *AppController) AssignLegacyLives(a model.LiveAssignment) (model.LiveAssignResult, error) {
+	monitored := make(map[string]struct{})
+	for _, st := range c.GetLiveStates(model.DefaultOrgID) {
+		monitored[strings.ToLower(strings.TrimSpace(st.Live))] = struct{}{}
+	}
+	if len(monitored) > 0 {
+		names := append([]string{}, a.LiveNames...)
+		for _, id := range a.SessionIDs {
+			if s, err := c.repo.GetLiveSession(id); err == nil {
+				names = append(names, s.LiveName)
+			}
+		}
+		for _, n := range names {
+			if _, ok := monitored[strings.ToLower(strings.TrimSpace(n))]; ok {
+				return model.LiveAssignResult{}, model.ErrLiveBeingMonitored
+			}
+		}
+	}
+
+	result, err := c.repo.AssignLegacyLives(a)
+	if err != nil {
+		return model.LiveAssignResult{}, err
+	}
+	if result.SettingsCopied {
+		orgID := strings.TrimSpace(a.OrgID)
+		c.settingsMu.Lock()
+		delete(c.settings, orgID)
+		c.settingsMu.Unlock()
+		c.monitorManager.SetSettings(orgID, c.GetSettings(orgID))
+	}
+	return result, nil
 }
 
-// GetGiftsByUser returns gifts for a specific user.
-func (c *AppController) GetGiftsByUser(userID string) ([]model.Gift, error) {
-	return c.repo.GetGiftsByUser(userID)
+// GetRecentGifts returns recent gifts of one of the organization's lives.
+func (c *AppController) GetRecentGifts(orgID, liveName string, limit int) ([]model.Gift, error) {
+	return c.repo.GetRecentGifts(orgID, liveName, limit)
 }
 
-// ClearGifts clears all gift records.
-func (c *AppController) ClearGifts() (int64, error) {
-	return c.repo.ClearGifts()
+// GetGiftsByUser returns the gifts a participant sent in the organization's lives.
+func (c *AppController) GetGiftsByUser(orgID, userID string) ([]model.Gift, error) {
+	return c.repo.GetGiftsByUser(orgID, userID)
+}
+
+// ClearGifts clears the organization's gift records.
+func (c *AppController) ClearGifts(orgID string) (int64, error) {
+	return c.repo.ClearGifts(orgID)
 }
 
 // RecordTargetGiftReceived stores a pending target gift history entry and returns its id.
@@ -335,16 +427,16 @@ func eventBool(data monitor.EventData, key string) bool {
 	}
 }
 
-// AnswerTargetGift marks a target gift history entry as answered.
-func (c *AppController) AnswerTargetGift(id int64, responseType string) error {
-	return c.repo.MarkTargetGiftAnswered(id, responseType, time.Now())
+// AnswerTargetGift marks one of the organization's target gift entries as answered.
+func (c *AppController) AnswerTargetGift(orgID string, id int64, responseType string) error {
+	return c.repo.MarkTargetGiftAnswered(orgID, id, responseType, time.Now())
 }
 
 // SetTargetGiftPriority promotes (priority=true) or demotes (priority=false)
-// a pending target gift in the queue.
-func (c *AppController) SetTargetGiftPriority(id int64, priority bool) (*time.Time, error) {
+// a pending target gift of the organization in the queue.
+func (c *AppController) SetTargetGiftPriority(orgID string, id int64, priority bool) (*time.Time, error) {
 	at := time.Now().UTC().Truncate(time.Microsecond)
-	if err := c.repo.SetTargetGiftPriority(id, priority, at); err != nil {
+	if err := c.repo.SetTargetGiftPriority(orgID, id, priority, at); err != nil {
 		return nil, err
 	}
 	if !priority {
@@ -353,18 +445,20 @@ func (c *AppController) SetTargetGiftPriority(id int64, priority bool) (*time.Ti
 	return &at, nil
 }
 
-// GetRecentTargetGiftHistory returns recent target gift history for the current live.
-func (c *AppController) GetRecentTargetGiftHistory(limit int) ([]model.TargetGiftHistory, error) {
-	return c.repo.GetRecentTargetGiftHistory(c.GetState().Username, limit)
+// GetRecentTargetGiftHistory returns recent target gift history of one of the
+// organization's lives (the current one when live is empty).
+func (c *AppController) GetRecentTargetGiftHistory(orgID, live string, limit int) ([]model.TargetGiftHistory, error) {
+	return c.repo.GetRecentTargetGiftHistory(orgID, c.ResolveLive(orgID, live), limit)
 }
 
-// GetPendingTargetGiftHistory returns unanswered target gifts for the current live.
-func (c *AppController) GetPendingTargetGiftHistory(limit int) ([]model.TargetGiftHistory, error) {
-	liveName := c.GetState().Username
-	if strings.TrimSpace(liveName) == "" {
+// GetPendingTargetGiftHistory returns unanswered target gifts of one of the
+// organization's lives (the current one when live is empty).
+func (c *AppController) GetPendingTargetGiftHistory(orgID, live string, limit int) ([]model.TargetGiftHistory, error) {
+	liveName := c.ResolveLive(orgID, live)
+	if liveName == "" {
 		return []model.TargetGiftHistory{}, nil
 	}
-	return c.repo.GetPendingTargetGiftHistory(liveName, limit)
+	return c.repo.GetPendingTargetGiftHistory(orgID, liveName, limit)
 }
 
 // RecordPinnedComment stores a pinned comment from a live event.
@@ -400,23 +494,23 @@ func (c *AppController) RecordPinnedComment(data monitor.EventData) (int64, erro
 	return c.repo.AddPinnedComment(ref, uniqueID, nickname, comment, pinID, eventBoolPtr(data, "isFollower"), at)
 }
 
-// GetRecentPinnedComments returns recent pinned comments for the current live.
-func (c *AppController) GetRecentPinnedComments(limit int) ([]model.PinnedComment, error) {
-	state := c.GetState()
-	return c.repo.GetRecentPinnedComments(state.Username, limit)
+// GetRecentPinnedComments returns recent pinned comments of one of the
+// organization's lives (the current one when live is empty).
+func (c *AppController) GetRecentPinnedComments(orgID, live string, limit int) ([]model.PinnedComment, error) {
+	return c.repo.GetRecentPinnedComments(orgID, c.ResolveLive(orgID, live), limit)
 }
 
 // --- Ranking, Report & Profile Actions ---
 
-// GetLiveRanking returns the ranking for the given live. mode selects the
-// criterion: "tiktok" reproduces the TikTok in-room ranking (pure gift value)
-// while any other value keeps the default weighted engagement score.
-func (c *AppController) GetLiveRanking(liveName, mode string) (model.LiveRanking, error) {
+// GetLiveRanking returns the ranking for one of the organization's lives. mode
+// selects the criterion: "tiktok" reproduces the TikTok in-room ranking (pure
+// gift value) while any other value keeps the default weighted engagement score.
+func (c *AppController) GetLiveRanking(orgID, liveName, mode string) (model.LiveRanking, error) {
 	out := model.LiveRanking{LiveName: liveName, UpdatedAt: time.Now().Format(time.RFC3339)}
 	if strings.TrimSpace(liveName) == "" {
 		return out, nil
 	}
-	stats, err := c.repo.LiveStatsByUser(liveName)
+	stats, err := c.repo.LiveStatsByUser(orgID, liveName)
 	if err != nil {
 		return out, err
 	}
@@ -429,7 +523,7 @@ func (c *AppController) GetLiveRanking(liveName, mode string) (model.LiveRanking
 	// exibido com a soma dos eventos de like efetivamente entregues ao
 	// monitor; TotalLikes mostra o contador oficial da sala.
 	var roomTotal int64
-	if rt, _, err := c.repo.LikeTotals(liveName); err == nil {
+	if rt, _, err := c.repo.LikeTotals(orgID, liveName); err == nil {
 		roomTotal = rt
 	}
 	out.TotalLikes = roomTotal
@@ -440,7 +534,7 @@ func (c *AppController) GetLiveRanking(liveName, mode string) (model.LiveRanking
 		return out, nil
 	}
 	anomaliesByUser := map[string]int{}
-	if logs, err := c.repo.GetAnomalyLogsByLiveName(liveName); err == nil {
+	if logs, err := c.repo.GetAnomalyLogsByLiveName(orgID, liveName); err == nil {
 		for _, l := range logs {
 			if l.IsAnomaly {
 				anomaliesByUser[l.UniqueID]++
@@ -452,23 +546,25 @@ func (c *AppController) GetLiveRanking(liveName, mode string) (model.LiveRanking
 	return out, nil
 }
 
-// GenerateReport produces the deterministic post-live report.
-func (c *AppController) GenerateReport(ctx context.Context, liveName string) (model.LiveReport, error) {
+// GenerateReport produces the deterministic post-live report of one of the
+// organization's lives.
+func (c *AppController) GenerateReport(ctx context.Context, orgID, liveName string) (model.LiveReport, error) {
 	if c.reportGen == nil {
 		return model.LiveReport{}, fmt.Errorf("report generator unavailable")
 	}
-	return c.reportGen.Generate(ctx, liveName)
+	return c.reportGen.Generate(ctx, orgID, liveName)
 }
 
-// GetUserProfile returns the historical profile for a participant.
-func (c *AppController) GetUserProfile(uniqueID string) (model.UserProfile, error) {
+// GetUserProfile returns the historical profile of a participant within the
+// organization's lives.
+func (c *AppController) GetUserProfile(orgID, uniqueID string) (model.UserProfile, error) {
 	out := model.UserProfile{UniqueID: uniqueID}
 	if strings.TrimSpace(uniqueID) == "" {
 		return out, nil
 	}
-	out.Messages, _ = c.repo.GetUserMessagesRecent(uniqueID, 10)
-	out.Gifts, _ = c.repo.GetGiftsByUser(uniqueID)
-	out.LastLives, _ = c.repo.RecentLivesForUser(uniqueID, 10)
+	out.Messages, _ = c.repo.GetUserMessagesRecent(orgID, uniqueID, 10)
+	out.Gifts, _ = c.repo.GetGiftsByUser(orgID, uniqueID)
+	out.LastLives, _ = c.repo.RecentLivesForUser(orgID, uniqueID, 10)
 
 	// Aggregate totals.
 	out.TotalMessages = len(out.Messages)
@@ -477,10 +573,10 @@ func (c *AppController) GetUserProfile(uniqueID string) (model.UserProfile, erro
 		out.TotalGiftUnits += g.RepeatCount
 		out.TotalGiftValue += g.RepeatCount * model.GiftValue(g.GiftName)
 	}
-	if total, err := c.repo.GetUserLikeTotal(uniqueID); err == nil {
+	if total, err := c.repo.GetUserLikeTotal(orgID, uniqueID); err == nil {
 		out.TotalLikes = int(total)
 	}
-	if count, err := c.repo.GetUserShareCount(uniqueID); err == nil {
+	if count, err := c.repo.GetUserShareCount(orgID, uniqueID); err == nil {
 		out.TotalShares = count
 	}
 
@@ -499,7 +595,7 @@ func (c *AppController) GetUserProfile(uniqueID string) (model.UserProfile, erro
 	}
 
 	// Derive a risk level from the user's anomaly history.
-	alerts, err := c.repo.GetAnomalyLogsByUser(uniqueID, 50)
+	alerts, err := c.repo.GetAnomalyLogsByUser(orgID, uniqueID, 50)
 	if err != nil {
 		log.Printf("[Controller] Error fetching user alerts: %v", err)
 	} else {
@@ -668,12 +764,12 @@ func (c *AppController) HandleLikeEvent(data monitor.EventData) {
 	}
 }
 
-// GetMonitor returns the underlying monitor for event registration.
+// GetMonitor returns the controller's own event emitter (derived events).
 func (c *AppController) GetMonitor() *monitor.Monitor {
 	return c.monitor
 }
 
-// GetMonitorManager returns the concurrent monitor manager, when configured.
+// GetMonitorManager returns the concurrent monitor manager.
 func (c *AppController) GetMonitorManager() *monitor.Manager { return c.monitorManager }
 
 // SetMessageCache enables write-behind caching for chat messages.
@@ -681,58 +777,85 @@ func (c *AppController) SetMessageCache(mc MessageCache) {
 	c.msgCache = mc
 }
 
+// SetPixQueueService enables the Fila PIX (WhatsApp/WAHA + MinIO).
+func (c *AppController) SetPixQueueService(svc *PixQueueService) {
+	c.pixQueue = svc
+}
+
+// GetPixQueueService returns the Fila PIX service, when configured.
+func (c *AppController) GetPixQueueService() *PixQueueService { return c.pixQueue }
+
 func (c *AppController) eventLiveName(data monitor.EventData) string {
 	if liveName := eventString(data, "liveName"); liveName != "" {
 		return liveName
 	}
-	return c.GetState().Username
+	if orgID := eventString(data, "orgId"); orgID != "" {
+		return c.monitorManager.CurrentState(orgID).Username
+	}
+	return ""
 }
 
-// activeLiveRef returns the session of the live currently being monitored.
+// activeLiveRef returns the session of one live monitored by the organization
+// (its current live when live is empty).
 //
 // When the monitor has no session id (a start that could not open one, or a
 // test harness that did not go through StartMonitoring) the latest session of
-// that streamer is used, so an event or goal is never written without a live.
-func (c *AppController) activeLiveRef() (model.LiveRef, error) {
-	state := c.GetState()
+// that streamer in the organization is used, so an event or goal is never
+// written without a live.
+func (c *AppController) activeLiveRef(orgID, live string) (model.LiveRef, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return model.LiveRef{}, model.ErrOrgRequired
+	}
+	state := c.monitorManager.CurrentState(orgID)
+	if live = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(live), "@")); live != "" {
+		st, ok := c.monitorManager.StateFor(orgID, live)
+		if !ok {
+			st = monitor.State{Username: live}
+		}
+		state = st
+	}
 	if state.Username == "" {
 		return model.LiveRef{}, fmt.Errorf("no live is being monitored")
 	}
 	if state.LiveID != "" {
-		return model.LiveRef{ID: state.LiveID, Name: state.Username}, nil
+		return model.LiveRef{ID: state.LiveID, Name: state.Username, OrgID: orgID}, nil
 	}
-	session, err := c.repo.LatestLiveSession(state.Username)
+	session, err := c.repo.LatestLiveSession(orgID, state.Username)
 	if err != nil {
 		return model.LiveRef{}, fmt.Errorf("resolve live session for %s: %w", state.Username, err)
 	}
-	return model.LiveRef{ID: session.ID, Name: state.Username}, nil
+	return model.LiveRef{ID: session.ID, Name: state.Username, OrgID: orgID}, nil
 }
 
 // eventLiveRef resolves the session an event belongs to.
 //
-// Events coming from the bridge carry liveId (injected by the manager). Events
-// arriving without it are resolved from the streamer name — and never create a
-// session, so an unknown source cannot spawn a session that owns no live.
+// Events coming from the bridge carry orgId and liveId (injected by the
+// manager). Events arriving without liveId are resolved from the streamer name
+// inside the organization — and never create a session, so an unknown source
+// cannot spawn a session that owns no live.
 func (c *AppController) eventLiveRef(data monitor.EventData) (model.LiveRef, error) {
+	orgID := strings.TrimSpace(eventString(data, "orgId"))
+	if orgID == "" {
+		return model.LiveRef{}, model.ErrOrgRequired
+	}
 	liveName := strings.TrimSpace(c.eventLiveName(data))
 	if liveName == "" {
 		return model.LiveRef{}, fmt.Errorf("live name is required")
 	}
 	if id := strings.TrimSpace(eventString(data, "liveId")); id != "" {
-		return model.LiveRef{ID: id, Name: liveName}, nil
+		return model.LiveRef{ID: id, Name: liveName, OrgID: orgID}, nil
 	}
-	session, err := c.repo.LatestLiveSession(liveName)
+	session, err := c.repo.LatestLiveSession(orgID, liveName)
 	if err != nil {
 		return model.LiveRef{}, fmt.Errorf("resolve live session for %s: %w", liveName, err)
 	}
-	return model.LiveRef{ID: session.ID, Name: liveName}, nil
+	return model.LiveRef{ID: session.ID, Name: liveName, OrgID: orgID}, nil
 }
 
-// Stop shuts down the bridge child process.
+// Stop shuts down every bridge child process.
 func (c *AppController) Stop() {
-	if c.monitorManager != nil {
-		c.monitorManager.Close()
-	}
+	c.monitorManager.Close()
 	if c.monitor != nil {
 		c.monitor.Close()
 	}
@@ -854,3 +977,6 @@ func resolveGiftName(data monitor.EventData) string {
 	}
 	return "Presente"
 }
+
+// Repository exposes the repository (the view resolves organizations with it).
+func (c *AppController) Repository() model.Repository { return c.repo }

@@ -9,19 +9,23 @@ import (
 )
 
 // LiveFirstSeen returns the earliest recorded timestamp for a live.
-func (db *DB) LiveFirstSeen(liveName string) (string, error) {
+func (db *DB) LiveFirstSeen(orgID, liveName string) (string, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return "", err
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	var ts sql.NullString
 	query := `SELECT MIN(timestamp) FROM (
-		SELECT timestamp FROM user_messages WHERE live_name = ?
-		UNION ALL SELECT timestamp FROM gifts WHERE live_name = ?
-		UNION ALL SELECT timestamp FROM likes WHERE live_name = ?
-		UNION ALL SELECT received_at FROM target_gift_history WHERE live_name = ?
-		UNION ALL SELECT timestamp FROM anomaly_logs WHERE live_name = ?
+		SELECT timestamp FROM user_messages WHERE ` + orgSessions + ` AND live_name = ?
+		UNION ALL SELECT timestamp FROM gifts WHERE ` + orgSessions + ` AND live_name = ?
+		UNION ALL SELECT timestamp FROM likes WHERE ` + orgSessions + ` AND live_name = ?
+		UNION ALL SELECT received_at FROM target_gift_history WHERE ` + orgSessions + ` AND live_name = ?
+		UNION ALL SELECT timestamp FROM anomaly_logs WHERE ` + orgSessions + ` AND live_name = ?
 	)`
-	err := db.queryRow(query, liveName, liveName, liveName, liveName, liveName).Scan(&ts)
+	err = db.queryRow(query, orgID, liveName, orgID, liveName, orgID, liveName, orgID, liveName, orgID, liveName).Scan(&ts)
 	if err != nil {
 		return "", fmt.Errorf("query live first seen: %w", err)
 	}
@@ -41,7 +45,11 @@ func (db *DB) LiveFirstSeen(liveName string) (string, error) {
 // pre-session schema also shows up here and can be deleted like any other. No
 // "in progress" filter: an idle session that was never closed must stay
 // visible, otherwise it would be impossible to delete from the UI.
-func (db *DB) ListLives(limit int) ([]model.Live, error) {
+func (db *DB) ListLives(orgID string, limit int) ([]model.Live, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -66,10 +74,11 @@ func (db *DB) ListLives(limit int) ([]model.Live, error) {
 			) ev
 			GROUP BY live_id
 		) e ON e.live_id = s.id
+		WHERE s.org_id = ?
 		ORDER BY s.day DESC, s.started_at DESC
 		LIMIT ?`
 
-	rows, err := db.query(query, limit)
+	rows, err := db.query(query, orgID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query lives: %w", err)
 	}
@@ -169,7 +178,11 @@ func normalizeDate(day string) string {
 }
 
 // LiveStatsByUser returns per-user aggregated stats for a live.
-func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
+func (db *DB) LiveStatsByUser(orgID, liveName string) ([]model.LiveStat, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -186,7 +199,7 @@ func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
 			  OR lower(message) LIKE 'pode%' OR lower(message) LIKE 'poderia%'
 			THEN 1 ELSE 0 END) AS questions,
 		MIN(timestamp) AS first, MAX(timestamp) AS last
-		FROM user_messages WHERE live_name = ? GROUP BY uniqueId`, liveName)
+		FROM user_messages WHERE `+orgSessions+` AND live_name = ? GROUP BY uniqueId`, orgID, liveName)
 	if err != nil {
 		return nil, fmt.Errorf("query live stats messages: %w", err)
 	}
@@ -219,7 +232,7 @@ func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
 	giftRows, err := db.query(`
 		SELECT uniqueId, COALESCE((array_agg(nickname ORDER BY timestamp DESC))[1], '') AS nickname, gift_name, COUNT(*) AS n, SUM(repeat_count) AS total,
 			MIN(timestamp) AS first, MAX(timestamp) AS last
-		FROM gifts WHERE live_name = ? GROUP BY uniqueId, gift_name`, liveName)
+		FROM gifts WHERE `+orgSessions+` AND live_name = ? GROUP BY uniqueId, gift_name`, orgID, liveName)
 	if err != nil {
 		return nil, fmt.Errorf("query live stats gifts: %w", err)
 	}
@@ -261,7 +274,7 @@ func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
 	shareRows, err := db.query(`
 		SELECT uniqueId, COALESCE((array_agg(nickname ORDER BY timestamp DESC))[1], '') AS nickname, COUNT(*) AS n,
 			MIN(timestamp) AS first, MAX(timestamp) AS last
-		FROM shares WHERE live_name = ? GROUP BY uniqueId`, liveName)
+		FROM shares WHERE `+orgSessions+` AND live_name = ? GROUP BY uniqueId`, orgID, liveName)
 	if err != nil {
 		return nil, fmt.Errorf("query live stats shares: %w", err)
 	}
@@ -297,7 +310,7 @@ func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
 	likeRows, err := db.query(`
 		SELECT uniqueId, COALESCE((array_agg(nickname ORDER BY timestamp DESC))[1], '') AS nickname, SUM(like_count) AS n,
 			MIN(timestamp) AS first, MAX(timestamp) AS last
-		FROM likes WHERE live_name = ? GROUP BY uniqueId`, liveName)
+		FROM likes WHERE `+orgSessions+` AND live_name = ? GROUP BY uniqueId`, orgID, liveName)
 	if err != nil {
 		return nil, fmt.Errorf("query live stats likes: %w", err)
 	}
@@ -337,7 +350,11 @@ func (db *DB) LiveStatsByUser(liveName string) ([]model.LiveStat, error) {
 }
 
 // RecentLivesForUser returns the last N lives a participant appeared in.
-func (db *DB) RecentLivesForUser(uniqueID string, limit int) ([]model.UserLiveSummary, error) {
+func (db *DB) RecentLivesForUser(orgID, uniqueID string, limit int) ([]model.UserLiveSummary, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
 	uniqueID = strings.ToLower(strings.TrimSpace(uniqueID))
 	if uniqueID == "" {
 		return []model.UserLiveSummary{}, nil
@@ -358,15 +375,15 @@ func (db *DB) RecentLivesForUser(uniqueID string, limit int) ([]model.UserLiveSu
 			MIN(ts) AS first_seen, MAX(ts) AS last_seen
 		FROM (
 			SELECT live_name, 'msg' AS tbl, uniqueId AS uid, timestamp AS ts
-			FROM user_messages WHERE LOWER(uniqueId) = ?
+			FROM user_messages WHERE `+orgSessions+` AND LOWER(uniqueId) = ?
 			UNION ALL
 			SELECT live_name, 'gift' AS tbl, uniqueId AS uid, timestamp AS ts
-			FROM gifts WHERE LOWER(uniqueId) = ?
+			FROM gifts WHERE `+orgSessions+` AND LOWER(uniqueId) = ?
 			UNION ALL
 			SELECT live_name, 'gift' AS tbl, uniqueId AS uid, received_at AS ts
-			FROM target_gift_history WHERE LOWER(uniqueId) = ?
+			FROM target_gift_history WHERE `+orgSessions+` AND LOWER(uniqueId) = ?
 		) GROUP BY live_name ORDER BY MAX(ts) DESC LIMIT ?`,
-		uniqueID, uniqueID, uniqueID, limit)
+		orgID, uniqueID, orgID, uniqueID, orgID, uniqueID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query recent lives: %w", err)
 	}
@@ -399,13 +416,18 @@ func (db *DB) RecentLivesForUser(uniqueID string, limit int) ([]model.UserLiveSu
 }
 
 // TotalDistinctUsers counts distinct users across all stored messages.
-func (db *DB) TotalDistinctUsers() (int, error) {
+func (db *DB) TotalDistinctUsers(orgID string) (int, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return 0, err
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	var count int
-	err := db.queryRow(
-		"SELECT COUNT(DISTINCT uniqueId) FROM user_messages",
+	err = db.queryRow(
+		"SELECT COUNT(DISTINCT uniqueId) FROM user_messages WHERE "+orgSessions,
+		orgID,
 	).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("query distinct users: %w", err)

@@ -87,7 +87,7 @@ func (db *DB) GetGiftGoals(ref model.LiveRef) ([]model.GiftGoal, error) {
 // SaveGiftGoal persists an existing goal's mutable fields (title, target,
 // status, milestones, completed_at).
 func (db *DB) SaveGiftGoal(g model.GiftGoal) error {
-	if g.ID <= 0 {
+	if g.ID <= 0 || strings.TrimSpace(g.LiveID) == "" {
 		return model.ErrInvalidID
 	}
 	milestonesJSON, err := json.Marshal(g.Milestones)
@@ -101,8 +101,8 @@ func (db *DB) SaveGiftGoal(g model.GiftGoal) error {
 	_, err = db.exec(
 		`UPDATE gift_goals
 		 SET title = ?, gift_name = ?, target_units = ?, status = ?, milestones = ?, completed_at = ?
-		 WHERE id = ?`,
-		g.Title, g.GiftName, g.TargetUnits, g.Status, string(milestonesJSON), nullTime(g.CompletedAt), g.ID,
+		 WHERE id = ? AND live_id = ?`,
+		g.Title, g.GiftName, g.TargetUnits, g.Status, string(milestonesJSON), nullTime(g.CompletedAt), g.ID, g.LiveID,
 	)
 	if err != nil {
 		return fmt.Errorf("save gift goal: %w", err)

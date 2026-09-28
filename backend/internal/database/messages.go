@@ -137,7 +137,11 @@ func (db *DB) BatchAddUserMessages(entries []UserMessageEntry) error {
 }
 
 // GetUserMessages returns all unique messages for a specific user.
-func (db *DB) GetUserMessages(uniqueID string) ([]model.UserMessage, error) {
+func (db *DB) GetUserMessages(orgID, uniqueID string) ([]model.UserMessage, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
 	uniqueID = strings.ToLower(strings.TrimSpace(uniqueID))
 	if uniqueID == "" {
 		return nil, model.ErrUniqueIDRequired
@@ -146,8 +150,8 @@ func (db *DB) GetUserMessages(uniqueID string) ([]model.UserMessage, error) {
 	defer db.mu.Unlock()
 
 	rows, err := db.query(
-		"SELECT id, live_name, uniqueId, username, message, timestamp FROM user_messages WHERE LOWER(uniqueId) = ? ORDER BY timestamp DESC",
-		uniqueID,
+		"SELECT id, live_name, uniqueId, username, message, timestamp FROM user_messages WHERE "+orgSessions+" AND LOWER(uniqueId) = ? ORDER BY timestamp DESC",
+		orgID, uniqueID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query user messages: %w", err)
@@ -165,13 +169,18 @@ func (db *DB) GetUserMessages(uniqueID string) ([]model.UserMessage, error) {
 	return out, rows.Err()
 }
 
-// GetAllUserMessages returns all user messages grouped by user.
-func (db *DB) GetAllUserMessages() (map[string][]model.UserMessage, error) {
+// GetAllUserMessages returns all user messages of an organization grouped by user.
+func (db *DB) GetAllUserMessages(orgID string) (map[string][]model.UserMessage, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	rows, err := db.query(
-		"SELECT id, live_name, uniqueId, username, message, timestamp FROM user_messages ORDER BY uniqueId, timestamp DESC",
+		"SELECT id, live_name, uniqueId, username, message, timestamp FROM user_messages WHERE "+orgSessions+" ORDER BY uniqueId, timestamp DESC",
+		orgID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query all user messages: %w", err)
@@ -225,7 +234,11 @@ func (db *DB) GetSessionUserMessages(liveID string) ([]model.UserMessage, error)
 
 // GetUserMessagesRecent returns the last `limit` messages of a user, newest
 // first. A limit <= 0 returns all messages.
-func (db *DB) GetUserMessagesRecent(uniqueID string, limit int) ([]model.UserMessage, error) {
+func (db *DB) GetUserMessagesRecent(orgID, uniqueID string, limit int) ([]model.UserMessage, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
 	uniqueID = strings.ToLower(strings.TrimSpace(uniqueID))
 	if uniqueID == "" {
 		return nil, model.ErrUniqueIDRequired
@@ -233,11 +246,11 @@ func (db *DB) GetUserMessagesRecent(uniqueID string, limit int) ([]model.UserMes
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	query := "SELECT id, live_name, uniqueId, username, message, timestamp FROM user_messages WHERE LOWER(uniqueId) = ? ORDER BY timestamp DESC"
+	query := "SELECT id, live_name, uniqueId, username, message, timestamp FROM user_messages WHERE " + orgSessions + " AND LOWER(uniqueId) = ? ORDER BY timestamp DESC"
 	if limit > 0 {
 		query += " LIMIT ?"
 	}
-	args := []any{uniqueID}
+	args := []any{orgID, uniqueID}
 	if limit > 0 {
 		args = append(args, limit)
 	}

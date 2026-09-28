@@ -13,6 +13,8 @@
 #   postgres  — banco local
 #   backend   — API Go (SSE + REST) em :3001 (interna)
 #   frontend  — nginx com a UI em :${FRONTEND_PORT:-8080}, faz proxy p/ backend
+#   waha      — gateway WhatsApp (Fila PIX) — opcional
+#   minio     — storage dos comprovantes PIX — opcional
 
 services:
   postgres:
@@ -58,11 +60,30 @@ services:
       # Origem pública do frontend (redirect_to do link de redefinição de senha).
       SITE_URL: ${SITE_URL:-}
       MAIL_RESET_SUBJECT: ${MAIL_RESET_SUBJECT:-}
+      # ── Fila PIX (WhatsApp/WAHA + MinIO) ─────────────────────────────
+      # Sem estas chaves o recurso fica indisponível e o monitor de lives
+      # continua funcionando normalmente.
+      WAHA_ENABLED: ${WAHA_ENABLED:-1}
+      WAHA_URL: ${WAHA_URL:-http://waha:3000}
+      WAHA_API_KEY: ${WAHA_API_KEY:-tlm-local-waha-key}
+      WAHA_WEBHOOK_SECRET: ${WAHA_WEBHOOK_SECRET:-tlm-local-waha-secret}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-tlm-local-minio}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-tlm-local-minio-secret}
+      MINIO_BUCKET: ${MINIO_BUCKET:-tlm-pix-media}
+      MINIO_USE_SSL: ${MINIO_USE_SSL:-0}
+      PIX_MEDIA_MAX_BYTES: ${PIX_MEDIA_MAX_BYTES:-16777216}
+      # OCR dos comprovantes (filtro de valores). O binário vem na imagem.
+      TESSERACT_BIN: ${TESSERACT_BIN:-tesseract}
     ports:
       - "${TLM_BACKEND_PORT:-3001}:3001"
     depends_on:
       postgres:
         condition: service_healthy
+      waha:
+        condition: service_started
+      minio:
+        condition: service_started
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3001/api/readiness || exit 1"]
@@ -70,6 +91,36 @@ services:
       timeout: 5s
       start_period: 45s
       retries: 5
+
+  waha:
+    image: ${WAHA_IMAGE:-devlikeapro/waha:latest}
+    restart: unless-stopped
+    environment:
+      WHATSAPP_API_PORT: "3000"
+      WAHA_API_KEY: ${WAHA_API_KEY:-tlm-local-waha-key}
+      # Crítico: o webhook entrega payload.media.url montada com esta base.
+      WAHA_BASE_URL: http://waha:3000
+      WHATSAPP_HOOK_URL: http://backend:3001/api/webhooks/whatsapp
+      WHATSAPP_HOOK_EVENTS: message
+      WHATSAPP_HOOK_HMAC_KEY: ${WAHA_WEBHOOK_SECRET:-tlm-local-waha-secret}
+      TZ: ${TZ:-America/Sao_Paulo}
+    ports:
+      - "127.0.0.1:${WAHA_PORT:-3210}:3000"
+    volumes:
+      - waha_sessions:/app/.sessions
+
+  minio:
+    image: ${MINIO_IMAGE:-bitnamilegacy/minio:2025.7.23}
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-tlm-local-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-tlm-local-minio-secret}
+      MINIO_DEFAULT_BUCKETS: ${MINIO_BUCKET:-tlm-pix-media}
+    ports:
+      - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/bitnami/minio/data
 
   frontend:
     build:
@@ -90,3 +141,5 @@ services:
 
 volumes:
   postgres-data:
+  waha_sessions:
+  minio_data:

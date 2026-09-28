@@ -2,9 +2,12 @@
 
 > Diretório: `backend/internal/auth/`
 
-O pacote `auth` implementa **autenticação baseada no Supabase Auth**:
+O pacote `auth` implementa **autenticação baseada no Supabase Auth**. O projeto
+Supabase continua hospedado (usuários, senhas, claims e `public.profiles`),
+mesmo com o banco operacional no PostgreSQL do compose:
 
-- **Validação de JWT** local (HS256) dos access tokens emitidos pelo Supabase e
+- **Validação de JWT** dos access tokens emitidos pelo Supabase — local (HS256)
+  quando há `SUPABASE_JWT_SECRET`, senão remota em `GET /auth/v1/user` — e
   middleware HTTP que protege `/api/*` e `/events` (`auth.go`);
 - **Proteção contra brute-force** no login/cadastro com lockout em memória e
   honra de `X-Forwarded-For` apenas de proxies confiáveis (`lockout.go`);
@@ -39,7 +42,7 @@ Arquivos:
 
 | Função | Descrição |
 |---|---|
-| `LoadConfigFromEnv() Config` | Monta a config. **Auth desligada** quando `AUTH_ENABLED=0` ou `SUPABASE_JWT_SECRET` vazio. Defaults: `audience="authenticated"`, `issuer="<SUPABASE_URL>/auth/v1"`. |
+| `LoadConfigFromEnv() Config` | Monta a config. **Auth desligada** quando `AUTH_ENABLED=0` ou quando `SUPABASE_URL`/`SUPABASE_ANON_KEY` estão vazios (`SUPABASE_JWT_SECRET` é opcional). Defaults: `audience="authenticated"`, `issuer="<SUPABASE_URL>/auth/v1"`. |
 | `PublicPath(path string) bool` | Caminhos **sem** token: `/api/auth/config`, `/api/auth/login`, `/api/auth/signup`, `/api/readiness`. Tudo em `/events` e `/api/*` exige autenticação. Demais (raiz) são públicos. |
 | `TokenFromRequest(r) string` | Bearer do header `Authorization`; fallback para o cookie `tlm_access_token`. **Rejeita** tokens em query string (evita vazamento em logs/Referer). |
 | `ValidateToken(tokenString) (*User, error)` | Parse/validação do JWT HS256 (iss/aud, exp). Lê claims: `role`/`active`/`subscription_expires_at` de `app_metadata`. Regras: sem claim de role → `subscriber`; sem `active` explícito → **inativo** (pendente); `subscriber` com assinatura expirada → erro. |

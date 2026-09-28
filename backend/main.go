@@ -6,15 +6,24 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/thiagohmm/tiktok-live-monitor/internal/auth"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/media"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/view"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/whatsapp"
 )
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.SetPrefix("[tiktok-live-monitor] ")
+
+	// Fail closed: with AUTH_ENABLED on but Supabase unset, auth would be
+	// silently off and every request would act as platform admin.
+	if err := auth.CheckConfigFromEnv(); err != nil {
+		log.Fatalf("Configuração de autenticação inválida: %v", err)
+	}
 
 	// Model layer: open the PostgreSQL (Supabase) repository.
 	repo, err := database.OpenFromEnv()
@@ -41,11 +50,34 @@ func main() {
 	defer msgCache.Stop()
 
 	// Controller layer: orchestrate services
+	// The controller owns the monitor manager (one monitor per organization
+	// and live; global cap in MAX_MONITORS, per-org cap in organizations).
 	ctrl := controller.NewAppController(mon, repo)
-	monitorManager := monitor.NewManager(repo, 10)
-	monitorManager.SetSettings(ctrl.GetSettings())
-	ctrl.SetMonitorManager(monitorManager)
 	ctrl.SetMessageCache(msgCache)
+
+	// Fila PIX: WAHA (WhatsApp) + MinIO (comprovantes). Best-effort: sem as
+	// envs o recurso fica indisponível, mas o monitor de lives continua normal.
+	wahaCfg := whatsapp.LoadConfigFromEnv()
+	wahaClient := whatsapp.NewClient(wahaCfg)
+	var mediaStore media.Store
+	mediaCfg := media.LoadConfigFromEnv()
+	if mediaCfg.Configured() {
+		store, err := media.NewMinIOStorage(mediaCfg)
+		if err != nil {
+			log.Printf("Fila PIX: MinIO indisponível: %v", err)
+		} else {
+			mediaStore = store
+			go func() {
+				if err := store.EnsureBucket(context.Background()); err != nil {
+					log.Printf("Fila PIX: não foi possível garantir o bucket MinIO: %v", err)
+				}
+			}()
+		}
+	}
+	if mediaStore != nil {
+		ctrl.SetPixQueueService(controller.NewPixQueueService(repo, wahaClient, mediaStore))
+	}
+	log.Printf("Fila PIX: %v", pixStatus(wahaCfg.Configured() && mediaStore != nil))
 
 	// View layer: HTTP API server (SSE + REST). O frontend é servido
 	// separadamente (frontend/) e faz proxy/rewrite para esta API.
@@ -66,4 +98,11 @@ func main() {
 	if err := srv.Start(ctx); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}
+}
+
+func pixStatus(ok bool) string {
+	if ok {
+		return "habilitada"
+	}
+	return "desabilitada (configure WAHA_URL/WAHA_API_KEY/WAHA_WEBHOOK_SECRET e MINIO_*)"
 }

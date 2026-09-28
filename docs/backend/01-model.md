@@ -152,7 +152,7 @@ das tabelas que carregam `live_name` (`user_messages`, `gifts`, `shares`,
 ## `repository.go` — Contratos de acesso a dados
 
 Define **interfaces** consumidas por `controller`, `monitor`, `ranking` e
-`report`. A implementação concreta é o pacote `database` (PostgreSQL/Supabase).
+`report`. A implementação concreta é o pacote `database` (PostgreSQL).
 Centralizar os contratos aqui permite testar a lógica de negócio com repositórios
 falsos (ex.: `cmd/sseload`).
 

@@ -20,9 +20,19 @@ import (
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 )
 
+// testOrg is the organization of the test harness (auth disabled resolves to it).
+const testOrg = model.DefaultOrgID
+
 // testRef builds a live reference for tests that do not need a real session row.
 func testRef(name string) model.LiveRef {
-	return model.LiveRef{ID: name + "-session", Name: name}
+	return model.LiveRef{ID: name + "-session", Name: name, OrgID: testOrg}
+}
+
+// liveEvent returns a monitor event of the harness organization for live.
+func liveEvent(live string, data monitor.EventData) monitor.EventData {
+	data["orgId"] = testOrg
+	data["liveName"] = live
+	return data
 }
 
 // testDB exposes the concrete repository for test-only SQL.
@@ -41,8 +51,8 @@ func openTestSession(t *testing.T, repo model.Repository, name string) {
 	t.Helper()
 	now := time.Now().UTC()
 	if err := testDB(t, repo).ExecSQL(
-		`INSERT INTO live_sessions (id, live_name, day, started_at, last_seen_at) VALUES (?, ?, ?, ?, ?)`,
-		testRef(name).ID, name, now.Format("2006-01-02"), now, now,
+		`INSERT INTO live_sessions (id, org_id, live_name, day, started_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		testRef(name).ID, testOrg, name, now.Format("2006-01-02"), now, now,
 	); err != nil {
 		t.Fatalf("open test session %s: %v", name, err)
 	}
@@ -74,11 +84,13 @@ func setupTestServer(t *testing.T) (*HTTPServer, model.Repository, string, *moni
 
 	ctrl := controller.NewAppController(mon, repo)
 
-	// StartMonitoring is what opens the session in production; the harness sets a
-	// live and opens its session so the event/goal handlers resolve one.
-	mon.SetCurrentLive("live1")
+	// StartMonitoring is what opens the session in production; the harness opens
+	// a session of live1 in the default organization so the event/goal handlers
+	// resolve one (requests and events name the live explicitly).
 	openTestSession(t, repo, "live1")
 
+	// Auth disabled: the tenant middleware resolves every request to testOrg.
+	t.Setenv("AUTH_ENABLED", "0")
 	srv := New(Config{
 		Host: "127.0.0.1",
 		Port: 0,
@@ -90,7 +102,7 @@ func setupTestServer(t *testing.T) (*HTTPServer, model.Repository, string, *moni
 func TestHandleState(t *testing.T) {
 	srv, _, _, _ := setupTestServer(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/state", nil)
+	req := newOrgRequest(http.MethodGet, "/api/state", nil)
 	rec := httptest.NewRecorder()
 
 	srv.handleState(rec, req)
@@ -112,7 +124,7 @@ func TestHandleSettings(t *testing.T) {
 	srv, _, _, _ := setupTestServer(t)
 
 	t.Run("GET", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+		req := newOrgRequest(http.MethodGet, "/api/settings", nil)
 		rec := httptest.NewRecorder()
 		srv.handleSettings(rec, req)
 		if rec.Code != http.StatusOK {
@@ -127,7 +139,7 @@ func TestHandleSettings(t *testing.T) {
 			"logLevel":            "debug",
 		}
 		data, _ := json.Marshal(body)
-		req := httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewReader(data))
+		req := newOrgRequest(http.MethodPost, "/api/settings", bytes.NewReader(data))
 		rec := httptest.NewRecorder()
 		srv.handleSettings(rec, req)
 		if rec.Code != http.StatusOK {
@@ -136,7 +148,7 @@ func TestHandleSettings(t *testing.T) {
 	})
 
 	t.Run("PUT rejected", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPut, "/api/settings", nil)
+		req := newOrgRequest(http.MethodPut, "/api/settings", nil)
 		rec := httptest.NewRecorder()
 		srv.handleSettings(rec, req)
 		if rec.Code != http.StatusMethodNotAllowed {
@@ -153,7 +165,7 @@ func TestHandleHistory(t *testing.T) {
 		t.Fatalf("log anomaly: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/history", nil)
+	req := newOrgRequest(http.MethodGet, "/api/history", nil)
 	rec := httptest.NewRecorder()
 	srv.handleHistory(rec, req)
 
@@ -178,13 +190,13 @@ func TestHandleHistoryDelete(t *testing.T) {
 		t.Fatalf("log anomaly: %v", err)
 	}
 
-	logs, err := db.GetRecentModerations(10)
+	logs, err := db.GetRecentModerations(testOrg, 10)
 	if err != nil || len(logs) == 0 {
 		t.Fatalf("no logs to delete: err=%v, len=%d", err, len(logs))
 	}
 	id := logs[0].ID
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/history/"+fmt.Sprintf("%d", id), nil)
+	req := newOrgRequest(http.MethodDelete, "/api/history/"+fmt.Sprintf("%d", id), nil)
 	rec := httptest.NewRecorder()
 	srv.handleHistory(rec, req)
 
@@ -199,7 +211,7 @@ func TestHandleConnect(t *testing.T) {
 	t.Run("missing username", func(t *testing.T) {
 		body := map[string]string{}
 		data, _ := json.Marshal(body)
-		req := httptest.NewRequest(http.MethodPost, "/api/connect", bytes.NewReader(data))
+		req := newOrgRequest(http.MethodPost, "/api/connect", bytes.NewReader(data))
 		rec := httptest.NewRecorder()
 		srv.handleConnect(rec, req)
 		if rec.Code != http.StatusBadRequest {
@@ -208,7 +220,7 @@ func TestHandleConnect(t *testing.T) {
 	})
 
 	t.Run("wrong method", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/connect", nil)
+		req := newOrgRequest(http.MethodGet, "/api/connect", nil)
 		rec := httptest.NewRecorder()
 		srv.handleConnect(rec, req)
 		if rec.Code != http.StatusMethodNotAllowed {
@@ -220,7 +232,7 @@ func TestHandleConnect(t *testing.T) {
 func TestHandleDisconnect(t *testing.T) {
 	srv, _, _, _ := setupTestServer(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/disconnect", nil)
+	req := newOrgRequest(http.MethodPost, "/api/disconnect", nil)
 	rec := httptest.NewRecorder()
 	srv.handleDisconnect(rec, req)
 
@@ -236,7 +248,7 @@ func TestHandleClearHistory(t *testing.T) {
 		_ = db.LogAnomaly(testRef("live1"), "msg", false, "OK", "user1")
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/clear-history", nil)
+	req := newOrgRequest(http.MethodPost, "/api/clear-history", nil)
 	rec := httptest.NewRecorder()
 	srv.handleClearHistory(rec, req)
 
@@ -255,14 +267,13 @@ func TestHandleClearHistory(t *testing.T) {
 }
 
 func TestHandleGifts(t *testing.T) {
-	srv, db, _, mon := setupTestServer(t)
+	srv, db, _, _ := setupTestServer(t)
 
 	_, _ = db.AddGift(testRef("live1"), "user1", "User One", "Rose", 3, 0)
 	_, _ = db.AddGift(testRef("live1"), "user2", "User Two", "Tiger", 1, 1)
 
 	t.Run("GET all", func(t *testing.T) {
-		mon.SetCurrentLive("live1")
-		req := httptest.NewRequest(http.MethodGet, "/api/gifts", nil)
+		req := newOrgRequest(http.MethodGet, "/api/gifts?live=live1", nil)
 		rec := httptest.NewRecorder()
 		srv.handleGifts(rec, req)
 		if rec.Code != http.StatusOK {
@@ -278,7 +289,7 @@ func TestHandleGifts(t *testing.T) {
 	})
 
 	t.Run("GET with limit", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/gifts?limit=1", nil)
+		req := newOrgRequest(http.MethodGet, "/api/gifts?live=live1&limit=1", nil)
 		rec := httptest.NewRecorder()
 		srv.handleGifts(rec, req)
 		if rec.Code != http.StatusOK {
@@ -294,7 +305,7 @@ func TestHandleGifts(t *testing.T) {
 	})
 
 	t.Run("GET by user", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/gifts?user=user1", nil)
+		req := newOrgRequest(http.MethodGet, "/api/gifts?user=user1", nil)
 		rec := httptest.NewRecorder()
 		srv.handleGifts(rec, req)
 		if rec.Code != http.StatusOK {
@@ -313,7 +324,7 @@ func TestHandleGifts(t *testing.T) {
 	})
 
 	t.Run("DELETE", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodDelete, "/api/gifts", nil)
+		req := newOrgRequest(http.MethodDelete, "/api/gifts", nil)
 		rec := httptest.NewRecorder()
 		srv.handleGifts(rec, req)
 		if rec.Code != http.StatusOK {
@@ -322,7 +333,7 @@ func TestHandleGifts(t *testing.T) {
 	})
 
 	t.Run("PUT rejected", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPut, "/api/gifts", nil)
+		req := newOrgRequest(http.MethodPut, "/api/gifts", nil)
 		rec := httptest.NewRecorder()
 		srv.handleGifts(rec, req)
 		if rec.Code != http.StatusMethodNotAllowed {
@@ -332,10 +343,9 @@ func TestHandleGifts(t *testing.T) {
 }
 
 func TestHandleGiftsEmptyReturnsArray(t *testing.T) {
-	srv, _, _, mon := setupTestServer(t)
-	mon.SetCurrentLive("nobody")
+	srv, _, _, _ := setupTestServer(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/gifts", nil)
+	req := newOrgRequest(http.MethodGet, "/api/gifts?live=nobody", nil)
 	rec := httptest.NewRecorder()
 	srv.handleGifts(rec, req)
 	if rec.Code != http.StatusOK {
@@ -357,7 +367,7 @@ func TestHandleGiftsEmptyReturnsArray(t *testing.T) {
 func TestHandleAvailableGiftsWithoutBridgeReturnsArray(t *testing.T) {
 	srv, _, _, _ := setupTestServer(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/available-gifts", nil)
+	req := newOrgRequest(http.MethodGet, "/api/available-gifts", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAvailableGifts(rec, req)
 	if rec.Code != http.StatusOK {
@@ -373,27 +383,26 @@ func TestHandleAvailableGiftsWithoutBridgeReturnsArray(t *testing.T) {
 }
 
 func TestHandleGiftEventStoresJSONNumbersAndNestedName(t *testing.T) {
-	srv, db, _, mon := setupTestServer(t)
-	mon.SetCurrentLive("live1")
+	srv, db, _, _ := setupTestServer(t)
 
-	srv.controller.HandleGiftEvent(monitor.EventData{
+	srv.controller.HandleGiftEvent(liveEvent("live1", monitor.EventData{
 		"uniqueId":    "user1",
 		"nickname":    "User One",
 		"giftName":    "Rose",
 		"repeatCount": float64(5),
 		"giftType":    float64(1),
 		"repeatEnd":   true,
-	})
-	srv.controller.HandleGiftEvent(monitor.EventData{
+	}))
+	srv.controller.HandleGiftEvent(liveEvent("live1", monitor.EventData{
 		"uniqueId": nil,
 		"nickname": nil,
 		"giftDetails": map[string]interface{}{
 			"giftName": "Dino",
 		},
 		"repeatCount": float64(2),
-	})
+	}))
 
-	gifts, err := db.GetRecentGifts("live1", 10)
+	gifts, err := db.GetRecentGifts(testOrg, "live1", 10)
 	if err != nil {
 		t.Fatalf("get gifts: %v", err)
 	}
@@ -414,27 +423,26 @@ func TestHandleGiftEventStoresJSONNumbersAndNestedName(t *testing.T) {
 }
 
 func TestHandleGiftEventSkipsStreakInProgress(t *testing.T) {
-	srv, db, _, mon := setupTestServer(t)
-	mon.SetCurrentLive("live1")
+	srv, db, _, _ := setupTestServer(t)
 
-	srv.controller.HandleGiftEvent(monitor.EventData{
+	srv.controller.HandleGiftEvent(liveEvent("live1", monitor.EventData{
 		"uniqueId":    "user1",
 		"nickname":    "User One",
 		"giftName":    "Rose",
 		"repeatCount": float64(3),
 		"giftType":    float64(1),
 		"repeatEnd":   false,
-	})
-	srv.controller.HandleGiftEvent(monitor.EventData{
+	}))
+	srv.controller.HandleGiftEvent(liveEvent("live1", monitor.EventData{
 		"uniqueId":    "user1",
 		"nickname":    "User One",
 		"giftName":    "Rose",
 		"repeatCount": float64(3),
 		"giftType":    float64(1),
 		"repeatEnd":   true,
-	})
+	}))
 
-	gifts, err := db.GetRecentGifts("live1", 10)
+	gifts, err := db.GetRecentGifts(testOrg, "live1", 10)
 	if err != nil {
 		t.Fatalf("get gifts: %v", err)
 	}
@@ -447,10 +455,10 @@ func TestHandleGiftEventSkipsStreakInProgress(t *testing.T) {
 }
 
 func TestHandlePinnedComments(t *testing.T) {
-	srv, db, _, mon := setupTestServer(t)
+	srv, db, _, _ := setupTestServer(t)
 
 	t.Run("empty array", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/pinned-comments", nil)
+		req := newOrgRequest(http.MethodGet, "/api/pinned-comments", nil)
 		rec := httptest.NewRecorder()
 		srv.handlePinnedComments(rec, req)
 		if rec.Code != http.StatusOK {
@@ -469,7 +477,7 @@ func TestHandlePinnedComments(t *testing.T) {
 	})
 
 	t.Run("wrong method", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/pinned-comments", nil)
+		req := newOrgRequest(http.MethodPost, "/api/pinned-comments", nil)
 		rec := httptest.NewRecorder()
 		srv.handlePinnedComments(rec, req)
 		if rec.Code != http.StatusMethodNotAllowed {
@@ -478,7 +486,7 @@ func TestHandlePinnedComments(t *testing.T) {
 	})
 
 	t.Run("GET recent for live", func(t *testing.T) {
-		mon.SetCurrentLive("live1")
+		openTestSession(t, db, "live2")
 		if _, err := db.AddPinnedComment(testRef("live1"), "user1", "User One", "olá", "pin-1", nil, time.Now()); err != nil {
 			t.Fatalf("add pinned: %v", err)
 		}
@@ -486,7 +494,7 @@ func TestHandlePinnedComments(t *testing.T) {
 			t.Fatalf("add other live: %v", err)
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/api/pinned-comments?limit=15", nil)
+		req := newOrgRequest(http.MethodGet, "/api/pinned-comments?live=live1&limit=15", nil)
 		rec := httptest.NewRecorder()
 		srv.handlePinnedComments(rec, req)
 		if rec.Code != http.StatusOK {
@@ -503,17 +511,16 @@ func TestHandlePinnedComments(t *testing.T) {
 }
 
 func TestRecordPinnedCommentStoresEvent(t *testing.T) {
-	srv, db, _, mon := setupTestServer(t)
-	mon.SetCurrentLive("live1")
+	srv, db, _, _ := setupTestServer(t)
 
-	id, err := srv.controller.RecordPinnedComment(monitor.EventData{
+	id, err := srv.controller.RecordPinnedComment(liveEvent("live1", monitor.EventData{
 		"uniqueId":   "user1",
 		"nickname":   "User One",
 		"comment":    "fixado",
 		"pinId":      "abc",
 		"isFollower": true,
 		"timestamp":  float64(1750000000000),
-	})
+	}))
 	if err != nil {
 		t.Fatalf("record pinned: %v", err)
 	}
@@ -521,7 +528,7 @@ func TestRecordPinnedCommentStoresEvent(t *testing.T) {
 		t.Fatalf("expected positive id, got %d", id)
 	}
 
-	items, err := db.GetRecentPinnedComments("live1", 10)
+	items, err := db.GetRecentPinnedComments(testOrg, "live1", 10)
 	if err != nil {
 		t.Fatalf("get pinned: %v", err)
 	}
@@ -537,8 +544,7 @@ func TestRecordPinnedCommentStoresEvent(t *testing.T) {
 }
 
 func TestHandleTargetGiftHistoryPending(t *testing.T) {
-	srv, db, _, mon := setupTestServer(t)
-	mon.SetCurrentLive("live1")
+	srv, db, _, _ := setupTestServer(t)
 
 	pendingID, err := db.AddTargetGiftHistory(testRef("live1"), "user1", "User One", "Rosa", time.Now(), false)
 	if err != nil {
@@ -548,11 +554,11 @@ func TestHandleTargetGiftHistoryPending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("add answered: %v", err)
 	}
-	if err := db.MarkTargetGiftAnswered(answeredID, model.TargetGiftResponseManual, time.Now()); err != nil {
+	if err := db.MarkTargetGiftAnswered(testOrg, answeredID, model.TargetGiftResponseManual, time.Now()); err != nil {
 		t.Fatalf("mark answered: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/target-gift-history?pending=1", nil)
+	req := newOrgRequest(http.MethodGet, "/api/target-gift-history?pending=1&live=live1", nil)
 	rec := httptest.NewRecorder()
 	srv.handleTargetGiftHistory(rec, req)
 	if rec.Code != http.StatusOK {
@@ -568,8 +574,7 @@ func TestHandleTargetGiftHistoryPending(t *testing.T) {
 }
 
 func TestHandleTargetGiftHistoryPriority(t *testing.T) {
-	srv, db, _, mon := setupTestServer(t)
-	mon.SetCurrentLive("live1")
+	srv, db, _, _ := setupTestServer(t)
 
 	id, err := db.AddTargetGiftHistory(testRef("live1"), "user1", "User One", "Rosa", time.Now(), false)
 	if err != nil {
@@ -577,7 +582,7 @@ func TestHandleTargetGiftHistoryPriority(t *testing.T) {
 	}
 
 	post := func(body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, "/api/target-gift-history/priority", strings.NewReader(body))
+		req := newOrgRequest(http.MethodPost, "/api/target-gift-history/priority", strings.NewReader(body))
 		rec := httptest.NewRecorder()
 		srv.handleTargetGiftHistoryPriority(rec, req)
 		return rec
@@ -615,7 +620,7 @@ func TestHandleTargetGiftHistoryPriority(t *testing.T) {
 	}
 
 	// Flag persistida (sobrevive a re-query / reconexão).
-	items, err := db.GetPendingTargetGiftHistory("live1", 50)
+	items, err := db.GetPendingTargetGiftHistory(testOrg, "live1", 50)
 	if err != nil {
 		t.Fatalf("pending: %v", err)
 	}
@@ -635,7 +640,7 @@ func TestHandleTargetGiftHistoryPriority(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil || !result.Success || result.IsPriority || result.PriorityAt != nil {
 		t.Fatalf("expected demotion with null priorityAt, got %s", rec.Body.String())
 	}
-	items, err = db.GetPendingTargetGiftHistory("live1", 50)
+	items, err = db.GetPendingTargetGiftHistory(testOrg, "live1", 50)
 	if err != nil {
 		t.Fatalf("pending: %v", err)
 	}
@@ -652,7 +657,7 @@ func TestHandleTargetGiftHistoryPriority(t *testing.T) {
 	}
 
 	// Linha já respondida não pode ser promovida → 404.
-	if err := db.MarkTargetGiftAnswered(id, model.TargetGiftResponseManual, time.Now()); err != nil {
+	if err := db.MarkTargetGiftAnswered(testOrg, id, model.TargetGiftResponseManual, time.Now()); err != nil {
 		t.Fatalf("mark answered: %v", err)
 	}
 	if rec := post(`{"id": ` + strconv.FormatInt(id, 10) + `, "priority": true}`); rec.Code != http.StatusNotFound {
@@ -660,7 +665,7 @@ func TestHandleTargetGiftHistoryPriority(t *testing.T) {
 	}
 
 	// Método não permitido.
-	req := httptest.NewRequest(http.MethodGet, "/api/target-gift-history/priority", nil)
+	req := newOrgRequest(http.MethodGet, "/api/target-gift-history/priority", nil)
 	rec = httptest.NewRecorder()
 	srv.handleTargetGiftHistoryPriority(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -671,7 +676,7 @@ func TestHandleTargetGiftHistoryPriority(t *testing.T) {
 func TestHandleReadiness(t *testing.T) {
 	srv, _, _, _ := setupTestServer(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/readiness", nil)
+	req := newOrgRequest(http.MethodGet, "/api/readiness", nil)
 	rec := httptest.NewRecorder()
 	srv.handleReadiness(rec, req)
 
@@ -706,7 +711,7 @@ func TestServerStartPortEnv(t *testing.T) {
 func TestHandleAdminLives(t *testing.T) {
 	srv, repo, _, _ := setupTestServer(t)
 
-	session, err := repo.BeginLiveSession("liveA", time.Now())
+	session, err := repo.BeginLiveSession(testOrg, "liveA", time.Now())
 	if err != nil {
 		t.Fatalf("begin session: %v", err)
 	}
@@ -714,7 +719,7 @@ func TestHandleAdminLives(t *testing.T) {
 		t.Fatalf("seed gift: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/admin/lives", nil)
+	req := newOrgRequest(http.MethodGet, "/api/admin/lives", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAdminLives(rec, req)
 
@@ -754,7 +759,7 @@ func TestHandleAdminLives(t *testing.T) {
 func TestHandleAdminLivesMethodNotAllowed(t *testing.T) {
 	srv, _, _, _ := setupTestServer(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/admin/lives", nil)
+	req := newOrgRequest(http.MethodPost, "/api/admin/lives", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAdminLives(rec, req)
 
@@ -771,7 +776,7 @@ func TestHandleAdminLivesEmptyDB(t *testing.T) {
 		t.Fatalf("clear sessions: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/admin/lives", nil)
+	req := newOrgRequest(http.MethodGet, "/api/admin/lives", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAdminLives(rec, req)
 
@@ -797,14 +802,14 @@ func TestHandleAdminLivesSessionDelete(t *testing.T) {
 	srv, repo, _, _ := setupTestServer(t)
 
 	now := time.Now()
-	target, err := repo.BeginLiveSession("liveA", now)
+	target, err := repo.BeginLiveSession(testOrg, "liveA", now)
 	if err != nil {
 		t.Fatalf("begin target: %v", err)
 	}
 	if err := repo.EndLiveSession(target.ID, now.Add(time.Minute)); err != nil {
 		t.Fatalf("end target: %v", err)
 	}
-	kept, err := repo.BeginLiveSession("liveA", now.Add(2*time.Minute))
+	kept, err := repo.BeginLiveSession(testOrg, "liveA", now.Add(2*time.Minute))
 	if err != nil {
 		t.Fatalf("begin kept: %v", err)
 	}
@@ -827,7 +832,7 @@ func TestHandleAdminLivesSessionDelete(t *testing.T) {
 		"id=" + target.ID + "&live=liveA",
 	} {
 		rec := httptest.NewRecorder()
-		srv.handleAdminLivesSessionDelete(rec, httptest.NewRequest(http.MethodPost, deleteURL(query), nil))
+		srv.handleAdminLivesSessionDelete(rec, newOrgRequest(http.MethodPost, deleteURL(query), nil))
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("query %q: expected 400, got %d", query, rec.Code)
 		}
@@ -835,7 +840,7 @@ func TestHandleAdminLivesSessionDelete(t *testing.T) {
 
 	// unknown id -> 404
 	rec := httptest.NewRecorder()
-	srv.handleAdminLivesSessionDelete(rec, httptest.NewRequest(
+	srv.handleAdminLivesSessionDelete(rec, newOrgRequest(
 		http.MethodPost, deleteURL("id=does-not-exist&live=liveA&day="+target.Day), nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
@@ -847,7 +852,7 @@ func TestHandleAdminLivesSessionDelete(t *testing.T) {
 		"id=" + target.ID + "&live=liveA&day=1999-01-01",
 	} {
 		rec := httptest.NewRecorder()
-		srv.handleAdminLivesSessionDelete(rec, httptest.NewRequest(http.MethodPost, deleteURL(query), nil))
+		srv.handleAdminLivesSessionDelete(rec, newOrgRequest(http.MethodPost, deleteURL(query), nil))
 		if rec.Code != http.StatusConflict {
 			t.Fatalf("query %q: expected 409, got %d", query, rec.Code)
 		}
@@ -858,7 +863,7 @@ func TestHandleAdminLivesSessionDelete(t *testing.T) {
 
 	// wrong method -> 405
 	rec = httptest.NewRecorder()
-	srv.handleAdminLivesSessionDelete(rec, httptest.NewRequest(
+	srv.handleAdminLivesSessionDelete(rec, newOrgRequest(
 		http.MethodGet, deleteURL("id="+target.ID+"&live=liveA&day="+target.Day), nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", rec.Code)
@@ -866,7 +871,7 @@ func TestHandleAdminLivesSessionDelete(t *testing.T) {
 
 	// happy path -> 200, deleting the target session (gift + session row)
 	rec = httptest.NewRecorder()
-	srv.handleAdminLivesSessionDelete(rec, httptest.NewRequest(
+	srv.handleAdminLivesSessionDelete(rec, newOrgRequest(
 		http.MethodPost, deleteURL("id="+target.ID+"&live=liveA&day="+target.Day), nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
@@ -892,7 +897,7 @@ func TestHandleAdminLivesSessionDelete(t *testing.T) {
 	if _, err := repo.GetLiveSession(kept.ID); err != nil {
 		t.Fatalf("expected the kept session to survive: %v", err)
 	}
-	gifts, err := repo.GetRecentGifts("liveA", 10)
+	gifts, err := repo.GetRecentGifts(testOrg, "liveA", 10)
 	if err != nil {
 		t.Fatalf("gifts: %v", err)
 	}
@@ -906,7 +911,7 @@ func TestHandleAdminLivesSessionDelete(t *testing.T) {
 func TestHandleAdminLivesDeleteIsGone(t *testing.T) {
 	srv, repo, _, _ := setupTestServer(t)
 
-	session, err := repo.BeginLiveSession("liveA", time.Now())
+	session, err := repo.BeginLiveSession(testOrg, "liveA", time.Now())
 	if err != nil {
 		t.Fatalf("begin session: %v", err)
 	}
@@ -915,7 +920,7 @@ func TestHandleAdminLivesDeleteIsGone(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	srv.handleAdminLivesDelete(rec, httptest.NewRequest(http.MethodPost, "/api/admin/lives/delete?live=liveA", nil))
+	srv.handleAdminLivesDelete(rec, newOrgRequest(http.MethodPost, "/api/admin/lives/delete?live=liveA", nil))
 	if rec.Code != http.StatusGone {
 		t.Fatalf("expected 410, got %d", rec.Code)
 	}
@@ -923,7 +928,7 @@ func TestHandleAdminLivesDeleteIsGone(t *testing.T) {
 	if _, err := repo.GetLiveSession(session.ID); err != nil {
 		t.Fatalf("expected nothing to be deleted, got %v", err)
 	}
-	gifts, err := repo.GetRecentGifts("liveA", 10)
+	gifts, err := repo.GetRecentGifts(testOrg, "liveA", 10)
 	if err != nil {
 		t.Fatalf("gifts: %v", err)
 	}
@@ -934,7 +939,6 @@ func TestHandleAdminLivesDeleteIsGone(t *testing.T) {
 
 func TestReportExternalFlagPipeline(t *testing.T) {
 	srv, db, _, mon := setupTestServer(t)
-	mon.SetCurrentLive("live1")
 
 	var gotType string
 	var gotData monitor.EventData
@@ -946,33 +950,38 @@ func TestReportExternalFlagPipeline(t *testing.T) {
 	})
 
 	t.Run("emit flag", func(t *testing.T) {
-		srv.controller.ReportExternalFlag(monitor.EventData{
+		srv.controller.ReportExternalFlag(liveEvent("live1", monitor.EventData{
 			"comment":  "vai embora seu lixo",
 			"uniqueId": "user1",
 			"nickname": "User One",
 			"category": "ODIO",
 			"reason":   "Odio",
-		})
+		}))
 		if gotType != monitor.EventFlaggedMessage {
 			t.Fatalf("expected flagged-message event, got %q", gotType)
 		}
 		if gotData["category"] != "ODIO" {
 			t.Fatalf("expected ODIO, got %v", gotData["category"])
 		}
-		logs, err := db.GetRecentModerations(10)
+		if gotData["orgId"] != testOrg {
+			t.Fatalf("expected flag scoped to %s, got %v", testOrg, gotData["orgId"])
+		}
+		logs, err := db.GetRecentModerations(testOrg, 10)
 		if err != nil || len(logs) != 1 {
 			t.Fatalf("expected 1 anomaly log, got %d err=%v", len(logs), err)
 		}
 	})
 
 	t.Run("ignored when moderation disabled", func(t *testing.T) {
-		srv.controller.SetSettings(monitor.Settings{ModerationEnabled: false})
-		srv.controller.ReportExternalFlag(monitor.EventData{
+		if err := srv.controller.SetSettings(testOrg, monitor.Settings{ModerationEnabled: false}); err != nil {
+			t.Fatalf("set settings: %v", err)
+		}
+		srv.controller.ReportExternalFlag(liveEvent("live1", monitor.EventData{
 			"comment":  "outra msg",
 			"uniqueId": "user2",
 			"category": "SPAM",
-		})
-		logs, err := db.GetRecentModerations(10)
+		}))
+		logs, err := db.GetRecentModerations(testOrg, 10)
 		if err != nil || len(logs) != 1 {
 			t.Fatalf("expected flag ignored, got %d logs err=%v", len(logs), err)
 		}
@@ -986,15 +995,14 @@ func postJSON(t *testing.T, handler func(http.ResponseWriter, *http.Request), pa
 	if err != nil {
 		t.Fatalf("marshal body: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(data))
+	req := newOrgRequest(http.MethodPost, path, bytes.NewReader(data))
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 	return rec
 }
 
 func TestHandleGoals(t *testing.T) {
-	srv, repo, _, mon := setupTestServer(t)
-	mon.SetCurrentLive("live1")
+	srv, repo, _, _ := setupTestServer(t)
 
 	t.Run("POST create", func(t *testing.T) {
 		body := map[string]interface{}{
@@ -1004,7 +1012,7 @@ func TestHandleGoals(t *testing.T) {
 				{"atUnits": 50, "reward": "música especial"},
 			},
 		}
-		rec := postJSON(t, srv.handleGoals, "/api/goals", body)
+		rec := postJSON(t, srv.handleGoals, "/api/goals?live=live1", body)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 		}
@@ -1024,7 +1032,7 @@ func TestHandleGoals(t *testing.T) {
 		if _, err := repo.AddGift(testRef("live1"), "u1", "User One", "Rosa", 60, 0); err != nil {
 			t.Fatalf("seed gift: %v", err)
 		}
-		req := httptest.NewRequest(http.MethodGet, "/api/goals", nil)
+		req := newOrgRequest(http.MethodGet, "/api/goals?live=live1", nil)
 		rec := httptest.NewRecorder()
 		srv.handleGoals(rec, req)
 		if rec.Code != http.StatusOK {
@@ -1043,7 +1051,7 @@ func TestHandleGoals(t *testing.T) {
 	})
 
 	t.Run("POST update", func(t *testing.T) {
-		st, err := srv.controller.GetGoalsState()
+		st, err := srv.controller.GetGoalsState(testOrg, "live1")
 		if err != nil || st.Active == nil {
 			t.Fatalf("expected active goal: %v", err)
 		}
@@ -1052,7 +1060,7 @@ func TestHandleGoals(t *testing.T) {
 			"title":       "Meta editada",
 			"targetUnits": 200,
 		}
-		rec := postJSON(t, srv.handleGoals, "/api/goals", body)
+		rec := postJSON(t, srv.handleGoals, "/api/goals?live=live1", body)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 		}
@@ -1066,7 +1074,7 @@ func TestHandleGoals(t *testing.T) {
 	})
 
 	t.Run("POST complete", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/goals", nil)
+		req := newOrgRequest(http.MethodGet, "/api/goals?live=live1", nil)
 		rec := httptest.NewRecorder()
 		srv.handleGoals(rec, req)
 		var st controller.GoalsState
@@ -1076,13 +1084,13 @@ func TestHandleGoals(t *testing.T) {
 		if st.Active == nil {
 			t.Fatalf("expected an active goal to complete: %+v", st)
 		}
-		req = httptest.NewRequest(http.MethodPost, "/api/goals/complete?id="+strconv.FormatInt(st.Active.Goal.ID, 10), nil)
+		req = newOrgRequest(http.MethodPost, "/api/goals/complete?live=live1&id="+strconv.FormatInt(st.Active.Goal.ID, 10), nil)
 		rec = httptest.NewRecorder()
 		srv.handleGoalComplete(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 		}
-		req = httptest.NewRequest(http.MethodGet, "/api/goals", nil)
+		req = newOrgRequest(http.MethodGet, "/api/goals?live=live1", nil)
 		rec = httptest.NewRecorder()
 		srv.handleGoals(rec, req)
 		st = controller.GoalsState{}
@@ -1096,7 +1104,7 @@ func TestHandleGoals(t *testing.T) {
 
 	t.Run("POST cancel", func(t *testing.T) {
 		body := map[string]interface{}{"title": "nova meta", "targetUnits": 10}
-		createRec := postJSON(t, srv.handleGoals, "/api/goals", body)
+		createRec := postJSON(t, srv.handleGoals, "/api/goals?live=live1", body)
 		if createRec.Code != http.StatusOK {
 			t.Fatalf("create: expected 200, got %d body=%s", createRec.Code, createRec.Body.String())
 		}
@@ -1104,13 +1112,13 @@ func TestHandleGoals(t *testing.T) {
 		if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
 			t.Fatalf("decode JSON: %v", err)
 		}
-		req := httptest.NewRequest(http.MethodPost, "/api/goals/cancel?id="+strconv.FormatInt(created.ID, 10), nil)
+		req := newOrgRequest(http.MethodPost, "/api/goals/cancel?live=live1&id="+strconv.FormatInt(created.ID, 10), nil)
 		rec := httptest.NewRecorder()
 		srv.handleGoalCancel(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 		}
-		req = httptest.NewRequest(http.MethodGet, "/api/goals", nil)
+		req = newOrgRequest(http.MethodGet, "/api/goals?live=live1", nil)
 		rec = httptest.NewRecorder()
 		srv.handleGoals(rec, req)
 		var st controller.GoalsState
@@ -1126,25 +1134,25 @@ func TestHandleGoals(t *testing.T) {
 	})
 
 	t.Run("validation errors", func(t *testing.T) {
-		if rec := postJSON(t, srv.handleGoals, "/api/goals", map[string]interface{}{"title": " ", "targetUnits": 10}); rec.Code != http.StatusBadRequest {
+		if rec := postJSON(t, srv.handleGoals, "/api/goals?live=live1", map[string]interface{}{"title": " ", "targetUnits": 10}); rec.Code != http.StatusBadRequest {
 			t.Fatalf("empty title: expected 400, got %d", rec.Code)
 		}
-		if rec := postJSON(t, srv.handleGoals, "/api/goals", map[string]interface{}{"title": "m", "targetUnits": 0}); rec.Code != http.StatusBadRequest {
+		if rec := postJSON(t, srv.handleGoals, "/api/goals?live=live1", map[string]interface{}{"title": "m", "targetUnits": 0}); rec.Code != http.StatusBadRequest {
 			t.Fatalf("zero target: expected 400, got %d", rec.Code)
 		}
-		req := httptest.NewRequest(http.MethodPost, "/api/goals/cancel", nil)
+		req := newOrgRequest(http.MethodPost, "/api/goals/cancel", nil)
 		rec := httptest.NewRecorder()
 		srv.handleGoalCancel(rec, req)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("cancel without active: expected 400, got %d", rec.Code)
 		}
-		req = httptest.NewRequest(http.MethodGet, "/api/goals/cancel", nil)
+		req = newOrgRequest(http.MethodGet, "/api/goals/cancel", nil)
 		rec = httptest.NewRecorder()
 		srv.handleGoalCancel(rec, req)
 		if rec.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("wrong method: expected 405, got %d", rec.Code)
 		}
-		req = httptest.NewRequest(http.MethodDelete, "/api/goals", nil)
+		req = newOrgRequest(http.MethodDelete, "/api/goals?live=live1", nil)
 		rec = httptest.NewRecorder()
 		srv.handleGoals(rec, req)
 		if rec.Code != http.StatusMethodNotAllowed {
@@ -1157,8 +1165,7 @@ func TestGoalSSEBroadcast(t *testing.T) {
 	_ = os.Setenv("PORT", "19855")
 	defer os.Unsetenv("PORT")
 
-	srv, _, _, mon := setupTestServer(t)
-	mon.SetCurrentLive("live1")
+	srv, _, _, _ := setupTestServer(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1219,17 +1226,20 @@ func TestGoalSSEBroadcast(t *testing.T) {
 		t.Fatal("expected initial server-state SSE event")
 	}
 
-	resp, err := http.Post(base+"/api/goals", "application/json",
+	resp, err := http.Post(base+"/api/goals?live=live1", "application/json",
 		strings.NewReader(`{"title":"meta","targetUnits":100,"milestones":[{"atUnits":50,"reward":"prêmio"}]}`))
 	if err != nil {
 		t.Fatalf("create goal: %v", err)
 	}
 	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create goal: expected 200, got %d", resp.StatusCode)
+	}
 
-	srv.controller.HandleGiftEvent(monitor.EventData{
+	srv.controller.HandleGiftEvent(liveEvent("live1", monitor.EventData{
 		"uniqueId": "u1", "nickname": "User", "giftName": "Rose",
 		"repeatCount": 150, "repeatEnd": true,
-	})
+	}))
 
 	seen := map[string]bool{}
 	for !seen["goal-completed"] {

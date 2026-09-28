@@ -21,17 +21,17 @@ func New(repo model.Repository) *Generator {
 }
 
 // Generate builds a report for the given live name.
-func (g *Generator) Generate(ctx context.Context, liveName string) (model.LiveReport, error) {
+func (g *Generator) Generate(ctx context.Context, orgID, liveName string) (model.LiveReport, error) {
 	var report model.LiveReport
 	report.LiveName = liveName
 
-	firstSeen, err := g.repo.LiveFirstSeen(liveName)
+	firstSeen, err := g.repo.LiveFirstSeen(orgID, liveName)
 	if err == nil {
 		report.StartedAt = firstSeen
 	}
 	report.EndedAt = time.Now().Format(time.RFC3339)
 
-	stats, err := g.repo.LiveStatsByUser(liveName)
+	stats, err := g.repo.LiveStatsByUser(orgID, liveName)
 	if err != nil {
 		log.Printf("[Report] Error fetching live stats: %v", err)
 	} else {
@@ -45,17 +45,17 @@ func (g *Generator) Generate(ctx context.Context, liveName string) (model.LiveRe
 		report.TopSupporters = topSupporters(stats)
 	}
 
-	gifts, _ := g.repo.GetRecentGifts(liveName, 1000)
+	gifts, _ := g.repo.GetRecentGifts(orgID, liveName, 1000)
 	report.GiftTotal = giftTotal(gifts)
 	report.GiftValue = giftValueTotal(gifts)
 	report.GiftCount = len(gifts)
 
-	byLive, _ := g.repo.GetAllUserMessages()
+	byLive, _ := g.repo.GetAllUserMessages(orgID)
 	report.FrequentQuestions = frequentQuestions(byLive)
 
 	// Anomaly summary for moderation issues.
 	var issues []model.AnomalySummary
-	if logs, err := g.repo.GetAnomalyLogsByLiveName(liveName); err == nil {
+	if logs, err := g.repo.GetAnomalyLogsByLiveName(orgID, liveName); err == nil {
 		issues = anomalySummary(logs)
 	}
 	report.ModerationIssues = issues

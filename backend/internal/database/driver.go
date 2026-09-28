@@ -8,6 +8,19 @@ import (
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 )
 
+// orgSessions restricts an event table (every table with live_id) to the
+// sessions of one organization. It takes the organization id as its argument.
+const orgSessions = "live_id IN (SELECT id FROM live_sessions WHERE org_id = ?)"
+
+// requireOrg normalizes a tenant id; tenant-scoped queries never run without one.
+func requireOrg(orgID string) (string, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return "", model.ErrOrgRequired
+	}
+	return orgID, nil
+}
+
 // rebindQuery converts '?' placeholders into PostgreSQL '$n' parameters,
 // ignoring '?' characters that appear inside single-quoted string literals.
 func rebindQuery(query string) string {
