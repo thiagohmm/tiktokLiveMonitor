@@ -20,6 +20,13 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    # Também hospeda o database do Sigmenta. O alias db-primary é o host que a
+    # API dele já usa; sem essa rede, recriar este container tira o Sigmenta do ar.
+    networks:
+      default: {}
+      sigmenta_data:
+        aliases:
+          - db-primary
 
   backend:
     build:
@@ -158,6 +165,9 @@ networks:
     name: tiktok-live-monitor_default
   sigmenta_edge:
     external: true
+  sigmenta_data:
+    external: true
+    name: sigmenta_data
 
 volumes:
   postgres-data:

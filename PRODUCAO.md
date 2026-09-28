@@ -372,6 +372,12 @@ Vercel e Railway foram desligados. O único deploy é o docker compose no VPS
   repositório. Links antigos para *.vercel.app não levam mais ao sistema; o
   endereço oficial é https://livemonitortk.com.br.
 
+## Postgres compartilhado
+
+O container `postgres` (PostgreSQL 17) hospeda os dois databases: `tiktok_live_monitor` (usuário `tlm`) e `prontuario` (usuário `prontuario`, sem superuser). O Sigmenta chega nele pela rede `sigmenta_data`, no host `db-primary`, que é um alias desse container. Recriar o Postgres sem essa rede na declaração do compose tira o Sigmenta do ar.
+
+O usuário `prontuario` não tem `CONNECT` no database do Live Monitor. O Postgres 16 antigo (primary e réplica) está parado, com os volumes intactos e `restart` desligado. Não há réplica no 17.
+
 ## Schema e rollback
 
 O backend migra as tabelas operacionais e da Fila PIX ao iniciar
