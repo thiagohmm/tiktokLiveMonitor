@@ -1,0 +1,22 @@
+# Fila PIX com MinIO externo (ex.: o cluster do Sigmenta no mesmo VPS).
+# Liga o backend a uma rede Docker externa onde o MinIO responde, sem subir o
+# serviço minio deste compose. Sempre em conjunto com o arquivo principal:
+#
+#   docker compose -f docker-compose.production.yml \
+#     -f deploy/compose.minio-externo.yml up -d --build backend
+#
+# No .env: MINIO_EXTERNAL_NETWORK (rede onde o MinIO está), MINIO_ENDPOINT
+# (host:porta nessa rede) e a chave de um usuário restrito ao bucket
+# MINIO_BUCKET — nunca a credencial root do cluster externo.
+# Use uma rede dedicada ao MinIO: numa rede compartilhada com o banco ou a API
+# do outro app, o backend também alcançaria esses serviços.
+services:
+  backend:
+    networks:
+      default: {}
+      minio_externo: {}
+
+networks:
+  minio_externo:
+    external: true
+    name: ${MINIO_EXTERNAL_NETWORK:?MINIO_EXTERNAL_NETWORK obrigatório com MinIO externo}
