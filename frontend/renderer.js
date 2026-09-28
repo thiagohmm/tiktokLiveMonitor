@@ -1197,6 +1197,88 @@ async function renderPinnedCommentHistory() {
     }));
 }
 
+// Renderiza o modal com o histórico de atendimentos PIX encerrados.
+async function renderPixHistory() {
+    historyModalTitle.textContent = 'Histórico PIX (WhatsApp)';
+    historyModalBody.replaceChildren();
+
+    const loading = document.createElement('p');
+    loading.className = 'modal-empty';
+    loading.textContent = 'Carregando histórico...';
+    historyModalBody.appendChild(loading);
+
+    let tickets = [];
+    try {
+        if (!window.TLMAuth) {
+            throw new Error('sessão indisponível');
+        }
+        const response = await window.TLMAuth.authFetch('/api/pix/tickets?status=answered&limit=100');
+        if (!response.ok) {
+            throw new Error(`status ${response.status}`);
+        }
+        const data = await response.json();
+        tickets = Array.isArray(data) ? data : [];
+    } catch (error) {
+        console.error('[Frontend] Falha ao carregar histórico PIX:', error);
+    }
+    if (activeModalType !== 'pix-history') {
+        return;
+    }
+
+    const helpers = window.PixQueue || {};
+    historyModalBody.replaceChildren(createModalList(tickets, (row, ticket) => {
+        const label = typeof helpers.contactLabel === 'function'
+            ? helpers.contactLabel(ticket.contact)
+            : 'Atendimento';
+        const name = document.createElement('strong');
+        name.textContent = label;
+        row.appendChild(name);
+
+        if (ticket.hasReceipt) {
+            const receipt = document.createElement('span');
+            receipt.className = 'pix-badge';
+            receipt.textContent = '📎';
+            receipt.title = 'Tem comprovante';
+            row.appendChild(receipt);
+        }
+
+        const subline = typeof helpers.contactSubline === 'function'
+            ? helpers.contactSubline(ticket.contact)
+            : '';
+        if (subline) {
+            const sub = document.createElement('div');
+            sub.className = 'modal-item-meta';
+            const phone = document.createElement('span');
+            phone.textContent = subline;
+            sub.appendChild(phone);
+            row.appendChild(sub);
+        }
+
+        const meta = document.createElement('div');
+        meta.className = 'modal-item-meta';
+
+        if (ticket.paidTotalCents > 0 && typeof helpers.formatBRL === 'function') {
+            const paid = document.createElement('span');
+            paid.textContent = `Total: ${helpers.formatBRL(ticket.paidTotalCents)}`;
+            meta.appendChild(paid);
+        }
+
+        const received = document.createElement('span');
+        received.textContent = `Recebido: ${formatSaoPauloDateTime(ticket.receivedAt)} (SP)`;
+        meta.appendChild(received);
+
+        const answered = document.createElement('span');
+        answered.textContent = `Respondido: ${formatSaoPauloDateTime(ticket.answeredAt)} (SP)`;
+        meta.appendChild(answered);
+        row.appendChild(meta);
+
+        const status = document.createElement('span');
+        status.className = 'pix-chip pix-chip-done';
+        status.textContent = 'Encerrado';
+        row.appendChild(status);
+    }));
+}
+
 // Define o usuário em escuta, limpando as mensagens se o usuário mudar.
 function setListenedUser(value) {
     const nextUserId = normalizeListenUser(value);
@@ -1312,6 +1394,8 @@ function renderActiveModal() {
         renderGiftHistory();
     } else if (activeModalType === 'pinned-comments') {
         renderPinnedCommentHistory();
+    } else if (activeModalType === 'pix-history') {
+        renderPixHistory();
     } else if (activeModalType === 'listen') {
         renderListenModal();
     }
@@ -2659,6 +2743,8 @@ function setupEventStream() {
     const eventSource = window.TLMAuth
         ? window.TLMAuth.createEventStream()
         : new EventSource('/events');
+    // A Fila PIX (pix.js) assina os próprios eventos neste mesmo stream.
+    window.__tlmEventStream = eventSource;
 
     eventSource.addEventListener('server-state', event => {
         const data = JSON.parse(event.data);
@@ -4174,12 +4260,18 @@ async function deleteAdminUser(user) {
 function setupAuthUI(user) {
     if (window.TLMAuth && window.TLMAuth.getAccessToken()) {
         if (authUserBar) authUserBar.style.display = 'flex';
-        if (authUserEmail) authUserEmail.textContent = user?.email || 'Usuário';
+        if (authUserEmail) {
+            const email = user?.email || 'Usuário';
+            authUserEmail.textContent = user?.orgName ? `${email} · ${user.orgName}` : email;
+        }
     }
-    const isAdmin = window.TLMAuth && window.TLMAuth.isAuthEnabled() && window.TLMAuth.isAdmin();
-    if (adminPageBtn) adminPageBtn.style.display = isAdmin ? 'inline-block' : 'none';
+    const authOn = window.TLMAuth && window.TLMAuth.isAuthEnabled();
+    const isAdmin = authOn && window.TLMAuth.isAdmin();
+    // Dono da organização administra lives e equipe da própria organização.
+    const canManage = authOn && window.TLMAuth.canManageOrg();
+    if (adminPageBtn) adminPageBtn.style.display = (isAdmin || canManage) ? 'inline-block' : 'none';
     if (adminUsersSection) adminUsersSection.style.display = isAdmin ? 'block' : 'none';
-    if (adminLivesSection) adminLivesSection.style.display = isAdmin ? 'block' : 'none';
+    if (adminLivesSection) adminLivesSection.style.display = canManage ? 'block' : 'none';
 }
 
 if (adminUsersRefreshBtn) {
@@ -4372,8 +4464,10 @@ async function bootstrap() {
 
     await loadInitialState();
     setupEventStream();
-    if (window.TLMAuth.isAdmin()) {
+    if (window.TLMAuth.canManageOrg()) {
         loadAdminLives();
+    }
+    if (window.TLMAuth.isAdmin()) {
         loadAdminUsers();
     }
 }

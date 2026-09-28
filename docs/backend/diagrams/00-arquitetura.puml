@@ -6,7 +6,7 @@ caption Backend Go (API SSE + REST) + ponte Node + Supabase (Postgres/Auth)
 skinparam componentStyle rectangle
 skinparam defaultFontName "Helvetica"
 
-actor "Frontend (nginx / Vercel / dev)" as FE
+actor "Frontend (nginx do compose / dev)" as FE
 
 package "Backend (Go) — internal/" {
     component "view\nHTTP SSE + REST + handlers" as VIEW

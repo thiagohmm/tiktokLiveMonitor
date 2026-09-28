@@ -1,12 +1,14 @@
-# Pacote `database` — Persistência PostgreSQL (Supabase)
+# Pacote `database` — Persistência PostgreSQL
 
 > Diretório: `backend/internal/database/`
 
 O pacote `database` **implementa a interface `model.Repository`** sobre o
-PostgreSQL (Supabase), usando `database/sql` + driver `pgx` (stdlib). Além das
-consultas, ele é responsável por:
+PostgreSQL do Docker Compose (serviço `postgres`), usando `database/sql` +
+driver `pgx` (stdlib). Além das consultas, ele é responsável por:
 
-- **Migrar/garantir o schema** na subida (`migratePostgres`);
+- **Migrar/garantir o schema** na subida (`migratePostgres`) — é o único
+  mecanismo de migração em uso; os SQLs de `supabase/migrations/` são histórico
+  do Supabase;
 - **Traduzir queries com placeholder `?`** para o formato `$n` do Postgres
   (`driver.go`);
 - **Cache write-behind de mensagens** para reduzir escrita no banco

@@ -26,12 +26,13 @@ type HTTPServer struct {
 	maxSSEClients int
 	cfg           Config
 	auth          auth.Config
-	admin         *auth.AdminClient
+	admin         auth.AccountDirectory
 	lockout       *auth.LoginLockout
 	proxyTrust    auth.ProxyTrust
 	theme         auth.ThemeColors
 	mailer        *mail.Mailer
 	corsOrigins   []string
+	tenants       *tenantResolver
 }
 
 // Config holds server configuration.
@@ -55,6 +56,7 @@ func New(cfg Config, ctrl *controller.AppController) *HTTPServer {
 		theme:         auth.LoadThemeFromEnv(),
 		mailer:        mail.NewMailer(mail.LoadConfigFromEnv()),
 		corsOrigins:   LoadCORSOriginsFromEnv(),
+		tenants:       newTenantResolver(ctrl.Repository()),
 	}
 }
 
@@ -80,6 +82,8 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// deadline curto por escrita (sseWriteTimeout): clientes presos são
 	// ejetados em segundos.
 
+	go s.bootstrapMemberships()
+
 	mux := http.NewServeMux()
 
 	// SSE endpoint.
@@ -94,6 +98,18 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/history/", s.handleHistory)
 	mux.HandleFunc("/api/connect", s.handleConnect)
 	mux.HandleFunc("/api/disconnect", s.handleDisconnect)
+	mux.HandleFunc("/api/monitoring/attach", s.handleMonitoringAttach)
+	mux.HandleFunc("/api/monitoring/beacon-disconnect", s.handleBeaconDisconnect)
+	mux.HandleFunc("/api/pix/whatsapp/connect", s.handlePixWhatsAppConnect)
+	mux.HandleFunc("/api/pix/whatsapp/qr", s.handlePixWhatsAppQR)
+	mux.HandleFunc("/api/pix/whatsapp/status", s.handlePixWhatsAppStatus)
+	mux.HandleFunc("/api/pix/whatsapp/disconnect", s.handlePixWhatsAppDisconnect)
+	mux.HandleFunc("/api/pix/tickets", s.handlePixTickets)
+	mux.HandleFunc("/api/pix/tickets/", s.handlePixTicketSubtree)
+	mux.HandleFunc("/api/pix/values", s.handlePixValues)
+	mux.HandleFunc("/api/pix/contacts/", s.handlePixContactHistory)
+	mux.HandleFunc("/api/pix/media/", s.handlePixMedia)
+	mux.HandleFunc("/api/webhooks/whatsapp", s.handleWhatsAppWebhook)
 	mux.HandleFunc("/api/clear-history", s.handleClearHistory)
 	mux.HandleFunc("/api/readiness", s.handleReadiness)
 	mux.HandleFunc("/api/gifts", s.handleGifts)
@@ -111,6 +127,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/admin/lives", s.handleAdminLives)
 	mux.HandleFunc("/api/admin/lives/session/delete", s.handleAdminLivesSessionDelete)
 	mux.HandleFunc("/api/admin/lives/delete", s.handleAdminLivesDelete)
+	mux.HandleFunc("/api/admin/lives/assign", s.handleAdminLivesAssign)
 	mux.HandleFunc("/api/auth/config", s.handleAuthConfig)
 	mux.HandleFunc("/api/auth/login", s.handleAuthLogin)
 	mux.HandleFunc("/api/auth/signup", s.handleAuthSignup)
@@ -121,6 +138,13 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/admin/users", s.handleAdminUsers)
 	mux.HandleFunc("/api/admin/users/update", s.handleAdminUsersUpdate)
 	mux.HandleFunc("/api/admin/users/delete", s.handleAdminUsersDelete)
+	mux.HandleFunc("/api/admin/orgs", s.handleAdminOrgs)
+	mux.HandleFunc("/api/admin/orgs/update", s.handleAdminOrgsUpdate)
+	mux.HandleFunc("/api/admin/orgs/members", s.handleAdminOrgMembers)
+	mux.HandleFunc("/api/org", s.handleOrg)
+	mux.HandleFunc("/api/org/members", s.handleOrgMembers)
+	mux.HandleFunc("/api/org/members/update", s.handleOrgMembersUpdate)
+	mux.HandleFunc("/api/org/members/delete", s.handleOrgMembersDelete)
 
 	// Rota raiz: apenas um aviso de que este é o backend (a UI vive em /frontend).
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -134,7 +158,8 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 		}
 	})
 
-	handler := s.auth.Middleware(mux)
+	handler := s.tenantMiddleware(mux)
+	handler = s.auth.Middleware(handler)
 	handler = s.cors(handler)
 	handler = limitBody(handler)
 	handler = securityHeaders(handler)
@@ -165,21 +190,27 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 				log.Printf("[View] Error recording pinned comment: %v", err)
 			}
 		}
-		s.broadcastSSE(eventType, data)
+		orgID, _ := data["orgId"].(string)
+		s.publishSSE(orgID, eventType, data)
 	}
 	s.controller.GetMonitor().OnEvent(eventHandler)
 	if manager := s.controller.GetMonitorManager(); manager != nil {
 		manager.OnEvent(eventHandler)
 	}
 
+	// Fila PIX events reuse the SSE fan-out, scoped to the organization.
+	if pix := s.controller.GetPixQueueService(); pix != nil {
+		pix.SetBroadcaster(s.publishSSE)
+	}
+
 	// Goal progress updates (fired by the controller after gift events).
 	s.controller.SetGoalCallback(func(update controller.GoalUpdate) {
-		s.broadcastSSE("goal-update", update)
+		s.publishSSE(update.OrgID, "goal-update", update)
 		if len(update.NewlyUnlockedMilestones) > 0 {
-			s.broadcastSSE("goal-unlocked", update)
+			s.publishSSE(update.OrgID, "goal-unlocked", update)
 		}
 		if update.Completed {
-			s.broadcastSSE("goal-completed", update)
+			s.publishSSE(update.OrgID, "goal-completed", update)
 		}
 	})
 
@@ -219,8 +250,8 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 
 //
 // Fan-out projetado para milhares de conexões simultâneas: cada cliente tem
-// um canal próprio com buffer e uma goroutine de escrita dedicada. broadcastSSE
-// enfileira de forma não-bloqueante; um cliente cujo buffer estoura (lento ou
+// um canal próprio com buffer e uma goroutine de escrita dedicada. publishSSE
+// enfileira de forma não-bloqueante (só para os clientes da organização do evento); um cliente cujo buffer estoura (lento ou
 // morto) é ejetado em vez de segurar o broadcast dos demais. Antes, um único
 // lock global + escrita direta fazia UM cliente lento congelar TODOS os
 // clientes (head-of-line blocking) e, sem deadline de escrita, um peer

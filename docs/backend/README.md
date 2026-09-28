@@ -6,7 +6,8 @@ partir da leitura do código em `backend/`. Escrita em PT-BR.
 > O que é: um monitor de lives do TikTok que se conecta ao stream de um
 > usuário via `tiktok-live-connector` (Node), converte os eventos em tempo real
 > (mensagens, presentes, curtidas, shares, pins), persiste em PostgreSQL
-> (Supabase) e entrega tudo para uma UI via **SSE** e **REST API**.
+> (Docker Compose, no VPS) e entrega tudo para uma UI via **SSE** e **REST API**.
+> Autenticação e perfis de usuário continuam no Supabase Auth hospedado.
 
 ---
 
@@ -26,8 +27,8 @@ partir da leitura do código em `backend/`. Escrita em PT-BR.
 
 Fluxo em uma frase: **TikTok → bridge.js (Node) → monitor → controller →
 database (Postgres)**, e tudo que acontece também é **difundido por SSE** à UI
-pela camada `view`. A UI (`frontend/`) é servida em separado e faz proxy para
-`/api/*` e `/events`.
+pela camada `view`. A UI (`frontend/`) é servida em separado pelo nginx do
+compose, que faz proxy para `/api/*` e `/events`.
 
 ---
 

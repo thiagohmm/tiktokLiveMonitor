@@ -157,6 +157,8 @@ func TestCoalesce(t *testing.T) {
 	}
 }
 
+const testOrgID = "org-test"
+
 func newMonitorWithDB(t *testing.T) (*Monitor, *database.DB) {
 	t.Helper()
 	baseDSN := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
@@ -178,6 +180,7 @@ func newMonitorWithDB(t *testing.T) (*Monitor, *database.DB) {
 		t.Fatalf("new monitor: %v", err)
 	}
 	m.SetRepo(db)
+	m.SetOrgID(testOrgID)
 	m.SetCurrentLive("live1")
 	return m, db
 }
@@ -185,7 +188,7 @@ func newMonitorWithDB(t *testing.T) (*Monitor, *database.DB) {
 func TestBeginOrResumeSessionRestoresBuffer(t *testing.T) {
 	m, db := newMonitorWithDB(t)
 
-	session, err := db.BeginLiveSession("live1", time.Now())
+	session, err := db.BeginLiveSession(testOrgID, "live1", time.Now())
 	if err != nil {
 		t.Fatalf("begin session: %v", err)
 	}
@@ -211,7 +214,7 @@ func TestBeginOrResumeSessionRestoresBuffer(t *testing.T) {
 	if !m.IsPinnedUser("user1") {
 		t.Fatal("expected pinned user to be restored")
 	}
-	gifts, err := db.GetRecentGifts("live1", 10)
+	gifts, err := db.GetRecentGifts(testOrgID, "live1", 10)
 	if err != nil {
 		t.Fatalf("gifts: %v", err)
 	}
@@ -226,7 +229,7 @@ func TestBeginOrResumeSessionKeepsPreviousHistory(t *testing.T) {
 	m, db := newMonitorWithDB(t)
 
 	oldAt := time.Now().UTC().Add(-25 * time.Hour)
-	oldSession, err := db.BeginLiveSession("live1", oldAt)
+	oldSession, err := db.BeginLiveSession(testOrgID, "live1", oldAt)
 	if err != nil {
 		t.Fatalf("begin old session: %v", err)
 	}
@@ -252,7 +255,7 @@ func TestBeginOrResumeSessionKeepsPreviousHistory(t *testing.T) {
 	}
 
 	// Nothing was deleted.
-	gifts, err := db.GetRecentGifts("live1", 10)
+	gifts, err := db.GetRecentGifts(testOrgID, "live1", 10)
 	if err != nil {
 		t.Fatalf("gifts: %v", err)
 	}
@@ -322,8 +325,36 @@ func TestEmitInjectsLiveID(t *testing.T) {
 	if got["liveId"] != want {
 		t.Fatalf("expected liveId %q in %#v", want, got)
 	}
+	if got["orgId"] != testOrgID {
+		t.Fatalf("expected orgId %q in %#v", testOrgID, got)
+	}
 	if _, exists := src["liveId"]; exists {
 		t.Fatal("emit must not mutate the caller's payload")
+	}
+}
+
+func TestEmitInjectsOrgIDWithoutOverwriting(t *testing.T) {
+	m, _ := New()
+	m.SetOrgID("org-a")
+	var got []EventData
+	m.OnEvent(func(eventType string, data EventData) {
+		got = append(got, data)
+	})
+
+	m.emit("test-event", EventData{"comment": "oi"})
+	m.emit("test-event", EventData{"orgId": "org-explicit"})
+
+	if len(got) != 2 {
+		t.Fatalf("expected two events, got %d", len(got))
+	}
+	if got[0]["orgId"] != "org-a" {
+		t.Fatalf("expected orgId org-a, got %#v", got[0])
+	}
+	if got[1]["orgId"] != "org-explicit" {
+		t.Fatalf("emit must keep an explicit orgId, got %#v", got[1])
+	}
+	if m.OrgID() != "org-a" {
+		t.Fatalf("OrgID() = %q", m.OrgID())
 	}
 }
 

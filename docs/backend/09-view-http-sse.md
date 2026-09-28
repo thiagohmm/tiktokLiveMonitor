@@ -10,8 +10,8 @@ que expõe:
   relatório, perfil, admin, auth);
 - **middlewares** de autenticação, CORS, limite de corpo e headers de segurança.
 
-A UI estática vive em `frontend/` (servida por nginx/Vercel/dev server), que faz
-proxy para `/api/*` e `/events`.
+A UI estática vive em `frontend/` (servida pelo nginx do Docker Compose ou pelo
+dev server), que faz proxy para `/api/*` e `/events`.
 
 Arquivos:
 | Arquivo | Papel |
@@ -74,6 +74,7 @@ sseWriteTimeout      = 5s      // deadline por escrita
 | `/api/admin/lives` | GET | listar lives (uma linha por sessão, com `id`) | Sim + admin |
 | `/api/admin/lives/session/delete` | POST | apagar **uma** live (`?id=&live=&day=`) | Sim + admin |
 | `/api/admin/lives/delete` | POST | aposentado — responde 410 | Sim + admin |
+| `/api/admin/lives/assign` | GET/POST | GET: sessões da org de legado; POST `{orgId, sessionIds?, liveNames?, copySettings?}`: move sessões **do legado** para uma org ativa (transação; eventos acompanham via `live_id`; sessões movidas ficam encerradas) → `{moved, liveNames, settingsCopied}`. 409 para org inativa, sessão fora do legado ou live ainda monitorada no legado | Sim + admin da plataforma |
 | `/api/auth/config` | GET | config pública de auth | **Público** |
 | `/api/auth/login` | GET/POST | estado/login | **Público** |
 | `/api/auth/signup` | POST | cadastro | **Público** |

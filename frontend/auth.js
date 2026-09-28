@@ -13,6 +13,18 @@
     let supabaseClient = null;
     let currentUser = null;
 
+    // Sem autenticação (dev local), o backend usa a organização padrão com
+    // permissões de dono e de admin da plataforma.
+    const LOCAL_USER = Object.freeze({
+        role: 'admin', active: true, authenticated: true,
+        orgId: 'default', orgRole: 'owner', canManageOrg: true, platformAdmin: true,
+    });
+
+    const ORG_ERRORS = {
+        no_organization: 'Sua conta ainda não está vinculada a nenhuma organização. Peça ao administrador para adicioná-la.',
+        organization_disabled: 'A organização desta conta está desativada. Fale com o administrador.',
+    };
+
     function readSession() {
         try {
             const raw = sessionStorage.getItem(SESSION_KEY);
@@ -64,7 +76,7 @@
     async function refreshMe() {
         const token = getAccessToken();
         if (!authConfig.enabled) {
-            currentUser = { role: 'admin', active: true, authenticated: true };
+            currentUser = LOCAL_USER;
             return currentUser;
         }
         const headers = {};
@@ -94,6 +106,10 @@
             if (!String(input).includes('/api/auth/')) {
                 window.location.href = '/login.html';
             }
+        }
+        if (response.status === 403 && authConfig.enabled) {
+            const payload = await response.clone().json().catch(() => ({}));
+            if (ORG_ERRORS[payload.code]) notifyOrgError(payload.code);
         }
         return response;
     }
@@ -286,10 +302,26 @@
         window.location.href = '/login.html';
     }
 
+    let orgErrorShown = false;
+
+    // Conta sem organização (ou org desativada): avisa uma vez e encerra a
+    // sessão. O admin da plataforma vai para a administração, que funciona
+    // sem organização.
+    function notifyOrgError(code) {
+        if (orgErrorShown) return;
+        orgErrorShown = true;
+        if (currentUser && currentUser.role === 'admin') {
+            if (window.location.pathname !== '/admin.html') window.location.href = '/admin.html';
+            return;
+        }
+        alert(ORG_ERRORS[code] || ORG_ERRORS.no_organization);
+        void signOut();
+    }
+
     async function requireSession() {
         await loadAuthConfig();
         if (!authConfig.enabled) {
-            currentUser = { role: 'admin', active: true, authenticated: true };
+            currentUser = LOCAL_USER;
             return currentUser;
         }
 
@@ -303,6 +335,10 @@
             await signOut();
             return null;
         }
+        if (me.orgError) {
+            notifyOrgError(me.orgError);
+            return null;
+        }
         return me;
     }
 
@@ -312,6 +348,31 @@
 
     function isAuthEnabled() {
         return !!authConfig.enabled;
+    }
+
+    // Dono da organização (ou admin da plataforma).
+    function canManageOrg() {
+        return !!currentUser && !!currentUser.canManageOrg;
+    }
+
+    // Página de administração: admin da plataforma ou dono da organização.
+    async function requireOrgManager() {
+        await loadAuthConfig();
+        if (!authConfig.enabled) {
+            currentUser = LOCAL_USER;
+            return currentUser;
+        }
+        const me = await refreshMe();
+        if (!me || !me.authenticated) {
+            window.location.href = '/login.html?next=' + encodeURIComponent('/admin.html');
+            return null;
+        }
+        if (!me.active || (me.role !== 'admin' && !me.canManageOrg)) {
+            alert('Acesso exclusivo para administradores e donos de organização.');
+            window.location.href = '/index.html';
+            return null;
+        }
+        return me;
     }
 
     async function requireAdmin() {
@@ -339,11 +400,13 @@
         createEventStream,
         getAccessToken,
         getUser: () => currentUser,
+        canManageOrg,
         isAdmin,
         isAuthEnabled,
         loadAuthConfig,
         refreshMe,
         requireAdmin,
+        requireOrgManager,
         requireSession,
         requestPasswordReset,
         resetPassword,

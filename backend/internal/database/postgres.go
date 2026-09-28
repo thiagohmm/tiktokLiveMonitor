@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+
+	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 )
 
 // OpenPostgres connects to a PostgreSQL database (Supabase) using DATABASE_URL.
@@ -152,6 +155,112 @@ func (db *DB) migratePostgres() error {
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
 		)`,
+		// ── Organizações (tenants) ───────────────────────────────────────
+		// user_id é TEXT (UUID do Supabase Auth) sem FK para auth.users: o
+		// Postgres local do compose não tem o schema auth do Supabase. Cada
+		// usuário pertence a exatamente uma organização (PK user_id).
+		`CREATE TABLE IF NOT EXISTS organizations (
+			id         TEXT PRIMARY KEY,
+			name       TEXT NOT NULL,
+			max_lives  INTEGER NOT NULL DEFAULT 3 CHECK (max_lives >= 1),
+			active     BOOLEAN NOT NULL DEFAULT TRUE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS organization_members (
+			user_id    TEXT PRIMARY KEY,
+			org_id     TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+			email      TEXT NOT NULL DEFAULT '',
+			role       TEXT NOT NULL DEFAULT 'operator' CHECK (role IN ('owner', 'operator')),
+			created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_organization_members_org ON organization_members (org_id)`,
+		// Organização de legado: guarda os dados sem dono identificável
+		// (anteriores ao multi-tenant). Não aceita membros; só o admin da
+		// plataforma a acessa (tenant.go).
+		`INSERT INTO organizations (id, name, max_lives) VALUES ('` + model.DefaultOrgID + `', '` + model.LegacyOrgName + `', 10)
+			ON CONFLICT (id) DO NOTHING`,
+		`UPDATE organizations SET name = '` + model.LegacyOrgName + `'
+			WHERE id = '` + model.DefaultOrgID + `' AND name = 'Organização padrão'`,
+		`DELETE FROM organization_members WHERE org_id = '` + model.DefaultOrgID + `'`,
+		`ALTER TABLE organizations        ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE organization_members ENABLE ROW LEVEL SECURITY`,
+		// ── fim da fase 1: migrateLegacyPixOwners roda aqui (antes dos
+		// índices pix_* em org_id) ──
+		phaseSplit,
+		// ── Fila PIX (WhatsApp/WAHA) ─────────────────────────────────────
+		// org_id é o id da organização (organizations.id): a fila, o número
+		// de WhatsApp e os comprovantes são compartilhados pelos membros.
+		`CREATE TABLE IF NOT EXISTS pix_whatsapp_sessions (
+			id            BIGSERIAL PRIMARY KEY,
+			org_id TEXT NOT NULL UNIQUE,
+			session_name  TEXT NOT NULL UNIQUE,
+			status        TEXT NOT NULL DEFAULT 'disconnected',
+			me_phone      TEXT NOT NULL DEFAULT '',
+			me_jid        TEXT NOT NULL DEFAULT '',
+			connected_at  TIMESTAMPTZ,
+			created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS pix_contacts (
+			id               BIGSERIAL PRIMARY KEY,
+			org_id    TEXT NOT NULL,
+			phone_e164       TEXT NOT NULL DEFAULT '',
+			whatsapp_jid     TEXT NOT NULL,
+			push_name        TEXT NOT NULL DEFAULT '',
+			first_contact_at TIMESTAMPTZ NOT NULL,
+			last_contact_at  TIMESTAMPTZ NOT NULL,
+			UNIQUE (org_id, whatsapp_jid)
+		)`,
+		`CREATE TABLE IF NOT EXISTS pix_tickets (
+			id                 BIGSERIAL PRIMARY KEY,
+			org_id      TEXT NOT NULL,
+			contact_id         BIGINT NOT NULL REFERENCES pix_contacts(id) ON DELETE CASCADE,
+			status             TEXT NOT NULL DEFAULT 'pending',
+			has_receipt        BOOLEAN NOT NULL DEFAULT FALSE,
+			auto_reply_sent_at TIMESTAMPTZ,
+			received_at        TIMESTAMPTZ NOT NULL,
+			last_message_at    TIMESTAMPTZ NOT NULL,
+			answered_at        TIMESTAMPTZ,
+			answered_by        TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_pix_tickets_owner_status_received
+			ON pix_tickets (org_id, status, received_at ASC, id ASC)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_pix_tickets_one_pending_per_contact
+			ON pix_tickets (contact_id) WHERE status = 'pending'`,
+		`CREATE TABLE IF NOT EXISTS pix_messages (
+			id                  BIGSERIAL PRIMARY KEY,
+			org_id       TEXT NOT NULL,
+			ticket_id           BIGINT NOT NULL REFERENCES pix_tickets(id) ON DELETE CASCADE,
+			contact_id          BIGINT NOT NULL REFERENCES pix_contacts(id) ON DELETE CASCADE,
+			whatsapp_message_id TEXT NOT NULL,
+			direction           TEXT NOT NULL,
+			type                TEXT NOT NULL,
+			body                TEXT NOT NULL DEFAULT '',
+			media_path          TEXT NOT NULL DEFAULT '',
+			media_mime          TEXT NOT NULL DEFAULT '',
+			media_filename      TEXT NOT NULL DEFAULT '',
+			media_deleted_at    TIMESTAMPTZ,
+			media_delete_reason TEXT NOT NULL DEFAULT '',
+			created_at          TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE (org_id, whatsapp_message_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_pix_messages_ticket_created
+			ON pix_messages (ticket_id, created_at ASC, id ASC)`,
+		`CREATE INDEX IF NOT EXISTS idx_pix_messages_media_active
+			ON pix_messages (org_id, id)
+			WHERE media_path != '' AND media_deleted_at IS NULL`,
+		// Valor extraído do comprovante (cents). -1 = sem extração (texto ou
+		// comprovante aceito com o filtro de valores desligado).
+		`ALTER TABLE pix_messages ADD COLUMN IF NOT EXISTS media_value_cents BIGINT NOT NULL DEFAULT -1`,
+		// Valores PIX que o dono aceita: o comprovante só libera o ticket na
+		// fila quando a soma dos valores extraídos iguala um deles.
+		`CREATE TABLE IF NOT EXISTS pix_value_rules (
+			id            BIGSERIAL PRIMARY KEY,
+			org_id TEXT NOT NULL,
+			value_cents   BIGINT NOT NULL CHECK (value_cents > 0),
+			created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE (org_id, value_cents)
+		)`,
 		// Sessões de live (uma por conexão de monitor). O delete da administração
 		// apaga por live_sessions.id — live_name é o username do streamer e não
 		// identifica uma sessão. Idempotente; espelha supabase/migrations/004
@@ -167,6 +276,12 @@ func (db *DB) migratePostgres() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_live_sessions_name_day
 			ON live_sessions(live_name, day DESC)`,
+		// Cada sessão pertence a uma organização; as tabelas de eventos
+		// herdam o tenant pela sessão (live_id). '' só existe até o backfill
+		// de migrateOrganizations.
+		`ALTER TABLE live_sessions ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT ''`,
+		`CREATE INDEX IF NOT EXISTS idx_live_sessions_org_name_day
+			ON live_sessions(org_id, live_name, day DESC)`,
 		`ALTER TABLE live_sessions ENABLE ROW LEVEL SECURITY`,
 		// live_id nas tabelas operacionais que guardam live_name.
 		`ALTER TABLE user_messages        ADD COLUMN IF NOT EXISTS live_id TEXT`,
@@ -197,14 +312,172 @@ func (db *DB) migratePostgres() error {
 		`ALTER TABLE gift_goals           ENABLE ROW LEVEL SECURITY`,
 		`ALTER TABLE pinned_comments      ENABLE ROW LEVEL SECURITY`,
 		`ALTER TABLE settings             ENABLE ROW LEVEL SECURITY`,
+		// Fila PIX: RLS default deny (sem políticas de cliente), espelhando
+		// supabase/migrations/005_pix_queue.sql.
+		`ALTER TABLE pix_whatsapp_sessions ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE pix_contacts          ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE pix_tickets           ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE pix_messages          ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE pix_value_rules       ENABLE ROW LEVEL SECURITY`,
 	}
 
 	for _, s := range stmts {
+		if s == phaseSplit {
+			// Bancos anteriores ao multi-tenant têm owner_user_id nas pix_*:
+			// precisa virar org_id antes de criar os índices por org_id.
+			if err := db.migrateLegacyPixOwners(); err != nil {
+				return err
+			}
+			continue
+		}
 		if _, err := db.conn.Exec(s); err != nil {
 			return fmt.Errorf("exec migration: %w", err)
 		}
 	}
-	return db.migrateLiveSessions()
+	if err := db.migrateLiveSessions(); err != nil {
+		return err
+	}
+	return db.migrateOrganizations()
+}
+
+// phaseSplit marks where migratePostgres runs migrateLegacyPixOwners.
+const phaseSplit = "-- phase split: legacy pix owners"
+
+// migrateOrganizations moves what was written before multi-tenancy to the
+// legacy organization, in one transaction: sessions without org_id (and so
+// every event row that points at them) and the global settings blob. Nothing
+// there has an identifiable owner (before the upgrade all data was global), so
+// it must never land in a customer organization; the legacy organization
+// has no members and is reachable only by platform admins. Idempotent.
+func (db *DB) migrateOrganizations() error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("begin organizations migration: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock(7007)`); err != nil {
+		return fmt.Errorf("lock organizations migration: %w", err)
+	}
+	if _, err := tx.Exec(
+		`UPDATE live_sessions SET org_id = $1 WHERE org_id = ''`, model.DefaultOrgID); err != nil {
+		return fmt.Errorf("backfill live_sessions.org_id: %w", err)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO settings (key, value)
+		 SELECT $1, value FROM settings WHERE key = 'app'
+		 ON CONFLICT (key) DO NOTHING`, OrgSettingsKey(model.DefaultOrgID)); err != nil {
+		return fmt.Errorf("copy legacy settings to legacy organization: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit organizations migration: %w", err)
+	}
+	return nil
+}
+
+// legacyPixTables are the Fila PIX tables that had owner_user_id (a user)
+// before multi-tenancy.
+var legacyPixTables = []string{"pix_whatsapp_sessions", "pix_contacts", "pix_tickets", "pix_messages", "pix_value_rules"}
+
+// migrateLegacyPixOwners converts pix_*.owner_user_id (user) into org_id
+// (organization), in one transaction: every owner without membership first
+// gets its own organization (1 user = 1 org, the user as owner), then each
+// row takes its owner's organization. Two users therefore never share
+// receipts, contacts or WhatsApp numbers. Idempotent: once the column is
+// renamed nothing runs again.
+func (db *DB) migrateLegacyPixOwners() error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("begin pix owners migration: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock(7008)`); err != nil {
+		return fmt.Errorf("lock pix owners migration: %w", err)
+	}
+
+	legacy := make([]string, 0, len(legacyPixTables))
+	for _, t := range legacyPixTables {
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM information_schema.columns
+			WHERE table_schema = current_schema() AND table_name = $1 AND column_name = 'owner_user_id'`, t).Scan(&n); err != nil {
+			return fmt.Errorf("inspect %s: %w", t, err)
+		}
+		if n > 0 {
+			legacy = append(legacy, t)
+		}
+	}
+	if len(legacy) == 0 {
+		return tx.Commit()
+	}
+
+	owners := make(map[string]struct{})
+	for _, t := range legacy {
+		rows, err := tx.Query(`SELECT DISTINCT owner_user_id FROM ` + t + ` WHERE owner_user_id <> ''`)
+		if err != nil {
+			return fmt.Errorf("list owners of %s: %w", t, err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("scan owner of %s: %w", t, err)
+			}
+			owners[id] = struct{}{}
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("list owners of %s: %w", t, err)
+		}
+	}
+	for userID := range owners {
+		var orgID string
+		err := tx.QueryRow(`SELECT org_id FROM organization_members WHERE user_id = $1`, userID).Scan(&orgID)
+		if err == nil && orgID != model.DefaultOrgID {
+			continue
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("membership of %s: %w", userID, err)
+		}
+		orgID, err = newOrgID()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO organizations (id, name, max_lives) VALUES ($1, $2, $3)`,
+			orgID, legacyUserOrgName(userID), model.DefaultOrgMaxLives); err != nil {
+			return fmt.Errorf("create organization for %s: %w", userID, err)
+		}
+		if _, err := tx.Exec(`INSERT INTO organization_members (user_id, org_id, role) VALUES ($1, $2, 'owner')
+			ON CONFLICT (user_id) DO UPDATE SET org_id = EXCLUDED.org_id, role = 'owner'`, userID, orgID); err != nil {
+			return fmt.Errorf("create membership for %s: %w", userID, err)
+		}
+	}
+	for _, t := range legacy {
+		if _, err := tx.Exec(`ALTER TABLE ` + t + ` RENAME COLUMN owner_user_id TO org_id`); err != nil {
+			return fmt.Errorf("rename %s.owner_user_id: %w", t, err)
+		}
+		// Rows without owner go to the legacy organization (admin only).
+		if _, err := tx.Exec(`UPDATE `+t+` p SET org_id = COALESCE(
+			(SELECT m.org_id FROM organization_members m WHERE m.user_id = p.org_id), $1)`, model.DefaultOrgID); err != nil {
+			return fmt.Errorf("map %s owners to organizations: %w", t, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit pix owners migration: %w", err)
+	}
+	return nil
+}
+
+// legacyUserOrgName names the organization created for a pre-multi-tenant
+// user; the platform admin can rename it.
+func legacyUserOrgName(userID string) string {
+	short := userID
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	return "Organização " + short
+}
+
+// OrgSettingsKey is the settings row that stores one organization's settings.
+func OrgSettingsKey(orgID string) string {
+	return "app:" + orgID
 }
 
 // liveMigrationBatchSize bounds how many rows each backfill statement rewrites,

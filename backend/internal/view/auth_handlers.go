@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/auth"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 )
 
 func (s *HTTPServer) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
@@ -395,6 +396,24 @@ func (s *HTTPServer) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		"active":        user.Active,
 	}
 
+	if s.tenants != nil && user.ID != "" {
+		if t, code, err := s.tenants.resolve(user); err == nil {
+			resp["orgId"] = t.OrgID
+			resp["orgRole"] = t.Role
+			resp["canManageOrg"] = t.OrgID != "" && t.CanManageOrg()
+			resp["platformAdmin"] = t.PlatformAdmin
+			if code != "" {
+				resp["orgError"] = code
+			}
+			if t.OrgID != "" {
+				if org, err := s.controller.Repository().GetOrganization(t.OrgID); err == nil {
+					resp["orgName"] = org.Name
+					resp["orgMaxLives"] = org.MaxLives
+				}
+			}
+		}
+	}
+
 	if s.admin != nil && user.ID != "" {
 		if profile, err := s.admin.GetProfileByID(user.ID); err == nil {
 			resp["displayName"] = profile.DisplayName
@@ -425,28 +444,76 @@ func (s *HTTPServer) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 			writeInternalError(w, r, err)
 			return
 		}
-		visibleUsers := make([]auth.SubscriberProfile, 0, len(users))
+		memberships, err := s.allMemberships()
+		if err != nil {
+			writeInternalError(w, r, err)
+			return
+		}
+		type userWithOrg struct {
+			auth.SubscriberProfile
+			OrgID   string `json:"orgId"`
+			OrgName string `json:"orgName"`
+			OrgRole string `json:"orgRole"`
+		}
+		visibleUsers := make([]userWithOrg, 0, len(users))
 		pendingCount := 0
 		for _, u := range users {
 			if u.ID == adminUser.ID {
 				continue
 			}
-			visibleUsers = append(visibleUsers, u)
+			entry := userWithOrg{SubscriberProfile: u}
+			if m, ok := memberships[u.ID]; ok {
+				entry.OrgID, entry.OrgName, entry.OrgRole = m.OrgID, m.orgName, m.Role
+			}
+			visibleUsers = append(visibleUsers, entry)
 			if !u.Active && u.Role != "admin" {
 				pendingCount++
 			}
 		}
 		writeJSON(w, map[string]any{"users": visibleUsers, "pendingCount": pendingCount})
 	case http.MethodPost:
-		var body auth.CreateSubscriberRequest
+		var body struct {
+			auth.CreateSubscriberRequest
+			OrgID   string `json:"orgId"`
+			OrgRole string `json:"orgRole"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid body")
 			return
 		}
-		user, err := s.admin.CreateSubscriber(body)
+		if strings.TrimSpace(body.OrgID) != "" {
+			role := body.OrgRole
+			if role == "" {
+				role = model.OrgRoleOperator
+			}
+			if !model.ValidOrgRole(role) {
+				writeError(w, http.StatusBadRequest, "papel inválido (use owner ou operator)")
+				return
+			}
+			if _, err := s.controller.Repository().GetOrganization(body.OrgID); err != nil {
+				writeOrgError(w, r, err)
+				return
+			}
+		}
+		user, err := s.admin.CreateSubscriber(body.CreateSubscriberRequest)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
+		}
+		if strings.TrimSpace(body.OrgID) != "" {
+			role := body.OrgRole
+			if role == "" {
+				role = model.OrgRoleOperator
+			}
+			if _, err := s.controller.Repository().UpsertOrgMember(body.OrgID, user.ID, user.Email, role); err != nil {
+				_ = s.admin.DeleteSubscriber(user.ID)
+				writeInternalError(w, r, err)
+				return
+			}
+			s.tenants.invalidate(user.ID)
+		} else if _, err := s.ensureOwnOrganization(*user); err != nil {
+			// 1 conta = 1 organização por padrão; sem org a conta não acessa dados.
+			log.Printf("[View] own organization for %s: %v", user.ID, err)
 		}
 		writeJSON(w, user)
 	default:
@@ -483,6 +550,14 @@ func (s *HTTPServer) handleAdminUsersUpdate(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if body.Active != nil && *body.Active {
+		// Aprovar um cadastro público cria a organização própria dele.
+		if created, err := s.ensureOwnOrganization(*user); err != nil {
+			log.Printf("[View] own organization for %s: %v", user.ID, err)
+		} else if created {
+			s.tenants.invalidate(user.ID)
+		}
+	}
 	writeJSON(w, user)
 }
 
@@ -513,5 +588,38 @@ func (s *HTTPServer) handleAdminUsersDelete(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if member, err := s.controller.Repository().GetMembership(id); err == nil {
+		if _, err := s.controller.Repository().DeleteOrgMember(member.OrgID, id); err != nil {
+			log.Printf("[View] remove membership of deleted user %s: %v", id, err)
+		}
+		s.controller.DetachUser(member.OrgID, id)
+	}
+	s.tenants.invalidate(id)
+	s.kickSSE("", id)
 	writeJSON(w, map[string]bool{"success": true})
+}
+
+type membershipView struct {
+	model.OrgMember
+	orgName string
+}
+
+// allMemberships maps user id to organization membership (with org name).
+func (s *HTTPServer) allMemberships() (map[string]membershipView, error) {
+	repo := s.controller.Repository()
+	orgs, err := repo.ListOrganizations()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]membershipView)
+	for _, o := range orgs {
+		members, err := repo.ListOrgMembers(o.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range members {
+			out[m.UserID] = membershipView{OrgMember: m, orgName: o.Name}
+		}
+	}
+	return out, nil
 }

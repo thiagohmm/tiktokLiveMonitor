@@ -20,6 +20,13 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    # Também hospeda o database do Sigmenta. O alias db-primary é o host que a
+    # API dele já usa; sem essa rede, recriar este container tira o Sigmenta do ar.
+    networks:
+      default: {}
+      sigmenta_data:
+        aliases:
+          - db-primary
 
   backend:
     build:
@@ -35,11 +42,35 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-tlm}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tiktok_live_monitor}?sslmode=disable}
       CORS_ALLOWED_ORIGINS: https://${DOMAIN:-livemonitortk.com.br}
       SITE_URL: https://${DOMAIN:-livemonitortk.com.br}
+      # ── Fila PIX (WhatsApp/WAHA + MinIO) — opcional ──────────────────
+      # Sem WAHA_* e MINIO_* a fila fica desligada (rotas /api/pix* em 503) e o
+      # monitor de lives sobe normalmente. Modos de ativação em PRODUCAO.md:
+      # MinIO próprio (profile pix-minio) ou MinIO externo
+      # (deploy/compose.minio-externo.yml).
+      WAHA_ENABLED: ${WAHA_ENABLED:-0}
+      WAHA_URL: ${WAHA_URL:-http://waha:3000}
+      WAHA_API_KEY: ${WAHA_API_KEY:-}
+      WAHA_WEBHOOK_SECRET: ${WAHA_WEBHOOK_SECRET:-}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-}
+      MINIO_BUCKET: ${MINIO_BUCKET:-tlm-pix-media}
+      MINIO_USE_SSL: ${MINIO_USE_SSL:-0}
+      PIX_MEDIA_MAX_BYTES: ${PIX_MEDIA_MAX_BYTES:-16777216}
+      # OCR dos comprovantes (filtro de valores). O binário vem na imagem.
+      TESSERACT_BIN: ${TESSERACT_BIN:-tesseract}
     expose:
       - "3001"
     depends_on:
       postgres:
         condition: service_healthy
+      # required: false — fora dos profiles pix/pix-minio o backend sobe sem eles.
+      waha:
+        condition: service_started
+        required: false
+      minio:
+        condition: service_started
+        required: false
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3001/api/readiness || exit 1"]
@@ -60,6 +91,47 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # WAHA e MinIO ficam apenas na rede interna: nada além do Nginx publica portas.
+  # Só sobem com o profile (COMPOSE_PROFILES=pix ou pix,pix-minio no .env).
+  # O Compose interpola serviços fora do profile, por isso não há `:?` aqui:
+  # a checagem de segredo vazio fica no entrypoint (MinIO) e no backend.
+  waha:
+    image: ${WAHA_IMAGE:-devlikeapro/waha:gows-2026.9.1}
+    profiles: ["pix"]
+    restart: unless-stopped
+    # GOWS/NOWEB não rodam Chromium; WEBJS (default do WAHA) usa 300–600 MB.
+    mem_limit: ${WAHA_MEM_LIMIT:-384m}
+    environment:
+      WHATSAPP_DEFAULT_ENGINE: ${WAHA_ENGINE:-GOWS}
+      WAHA_GOWS_DEVICE_REQUIRE_FULL_SYNC: "false"
+      WHATSAPP_API_PORT: "3000"
+      WAHA_API_KEY: ${WAHA_API_KEY:-}
+      WAHA_BASE_URL: http://waha:3000
+      WHATSAPP_HOOK_URL: http://backend:3001/api/webhooks/whatsapp
+      WHATSAPP_HOOK_EVENTS: message
+      WHATSAPP_HOOK_HMAC_KEY: ${WAHA_WEBHOOK_SECRET:-}
+      TZ: ${TZ:-America/Sao_Paulo}
+    volumes:
+      - waha_sessions:/app/.sessions
+
+  # MinIO próprio. Alternativa: MinIO externo (deploy/compose.minio-externo.yml).
+  minio:
+    image: ${MINIO_IMAGE:-bitnamilegacy/minio:2025.7.23}
+    profiles: ["pix-minio"]
+    restart: unless-stopped
+    mem_limit: ${MINIO_MEM_LIMIT:-256m}
+    # A imagem bitnami cai em credenciais padrão quando elas estão vazias.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - '[ -n "$$MINIO_ROOT_USER" ] && [ -n "$$MINIO_ROOT_PASSWORD" ] || { echo "minio: MINIO_ACCESS_KEY e MINIO_SECRET_KEY obrigatórios" >&2; exit 1; }; exec /opt/bitnami/scripts/minio/entrypoint.sh /opt/bitnami/scripts/minio/run.sh'
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-}
+      MINIO_DEFAULT_BUCKETS: ${MINIO_BUCKET:-tlm-pix-media}
+    volumes:
+      - minio_data:/bitnami/minio/data
+
   nginx:
     image: nginx:1.27-alpine
     ports:
@@ -69,6 +141,13 @@ services:
       - ./deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - letsencrypt:/etc/letsencrypt:ro
       - certbot-www:/var/www/certbot:ro
+    # A borda também atende o Sigmenta e o agenttk (VPS compartilhado).
+    # O Sigmenta confia neste IP (set_real_ip_from 172.30.0.11); o agenttk
+    # entra em tiktok-live-monitor_default como rede externa.
+    networks:
+      default:
+      sigmenta_edge:
+        ipv4_address: 172.30.0.11
     depends_on:
       frontend:
         condition: service_started
@@ -81,7 +160,18 @@ services:
       - certbot-www:/var/www/certbot
     profiles: [certificates]
 
+networks:
+  default:
+    name: tiktok-live-monitor_default
+  sigmenta_edge:
+    external: true
+  sigmenta_data:
+    external: true
+    name: sigmenta_data
+
 volumes:
   postgres-data:
+  waha_sessions:
+  minio_data:
   letsencrypt:
   certbot-www:

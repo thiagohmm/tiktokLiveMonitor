@@ -125,6 +125,7 @@ type Monitor struct {
 	stdin           io.WriteCloser
 	stdout          io.ReadCloser
 	currentUsername string
+	orgID           string
 	liveID          string
 	liveTouchAt     time.Time
 	chatBuffer      []ChatMessage
@@ -214,6 +215,20 @@ func (m *Monitor) SetRepo(repo model.Repository) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.repo = repo
+}
+
+// SetOrgID binds the monitor to the organization that owns its sessions.
+func (m *Monitor) SetOrgID(orgID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.orgID = orgID
+}
+
+// OrgID returns the organization that owns the monitor.
+func (m *Monitor) OrgID() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.orgID
 }
 
 // SetCurrentLive sets the current live username for gift filtering.
@@ -314,21 +329,28 @@ func (m *Monitor) emit(eventType string, data EventData) {
 	m.mu.Lock()
 	handlers := append([]EventHandler(nil), m.handlers...)
 	liveID := m.liveID
+	orgID := m.orgID
 	m.mu.Unlock()
 
-	// Every event carries its session id. Without it the controller would have
-	// to resolve the session from the streamer name on each event — a database
-	// lookup per chat message. The payload is copied instead of mutated so
-	// callers can keep sharing their map.
-	if liveID != "" {
-		if _, exists := data["liveId"]; !exists {
-			enriched := make(EventData, len(data)+1)
-			for k, v := range data {
-				enriched[k] = v
-			}
-			enriched["liveId"] = liveID
-			data = enriched
+	// Every event carries its session id and organization. Without them the
+	// controller would have to resolve the session from the streamer name on
+	// each event — a database lookup per chat message — and the SSE fan-out
+	// could not tell which tenant may see it. The payload is copied instead of
+	// mutated so callers can keep sharing their map.
+	_, hasLive := data["liveId"]
+	_, hasOrg := data["orgId"]
+	if (liveID != "" && !hasLive) || (orgID != "" && !hasOrg) {
+		enriched := make(EventData, len(data)+2)
+		for k, v := range data {
+			enriched[k] = v
 		}
+		if liveID != "" && !hasLive {
+			enriched["liveId"] = liveID
+		}
+		if orgID != "" && !hasOrg {
+			enriched["orgId"] = orgID
+		}
+		data = enriched
 	}
 
 	for _, h := range handlers {

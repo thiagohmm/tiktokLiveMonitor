@@ -85,33 +85,35 @@ func coalesceStr(values ...string) string {
 }
 
 // GetRecentPinnedComments returns the latest N pinned comments.
-func (db *DB) GetRecentPinnedComments(liveName string, limit int) ([]model.PinnedComment, error) {
+func (db *DB) GetRecentPinnedComments(orgID, liveName string, limit int) ([]model.PinnedComment, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
 	if limit < 1 || limit > 200 {
 		limit = 15
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	var (
-		rows *sql.Rows
-		err  error
-	)
+	var rows *sql.Rows
 	if strings.TrimSpace(liveName) == "" {
 		rows, err = db.query(
 			`SELECT id, live_name, uniqueId, nickname, comment, pin_id, is_follower, timestamp
 			 FROM pinned_comments
+			 WHERE `+orgSessions+`
 			 ORDER BY timestamp DESC
 			 LIMIT ?`,
-			limit,
+			orgID, limit,
 		)
 	} else {
 		rows, err = db.query(
 			`SELECT id, live_name, uniqueId, nickname, comment, pin_id, is_follower, timestamp
 			 FROM pinned_comments
-			 WHERE live_name = ?
+			 WHERE `+orgSessions+` AND live_name = ?
 			 ORDER BY timestamp DESC
 			 LIMIT ?`,
-			liveName, limit,
+			orgID, liveName, limit,
 		)
 	}
 	if err != nil {

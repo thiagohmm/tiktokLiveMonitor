@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/auth"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 )
 
 func signupTestServer(t *testing.T) (*HTTPServer, *httptest.Server) {
@@ -133,8 +136,24 @@ func adminAuthorizationTestServer(t *testing.T, profiles []map[string]any) *HTTP
 	t.Cleanup(supabase.Close)
 
 	cfg := auth.Config{Enabled: true, SupabaseURL: supabase.URL, SupabaseAnon: "anon", ServiceRoleKey: "service-role"}
-	return &HTTPServer{auth: cfg, admin: auth.NewAdminClient(cfg)}
+	mon, err := monitor.New()
+	if err != nil {
+		t.Fatalf("monitor: %v", err)
+	}
+	repo := noOrgsRepo{}
+	return &HTTPServer{
+		auth:       cfg,
+		admin:      auth.NewAdminClient(cfg),
+		controller: controller.NewAppController(mon, repo),
+		tenants:    newTenantResolver(repo),
+	}
 }
+
+// noOrgsRepo is a repository without organizations; any other call panics
+// (nil embedded interface).
+type noOrgsRepo struct{ model.Repository }
+
+func (noOrgsRepo) ListOrganizations() ([]model.Organization, error) { return nil, nil }
 
 func authenticatedAdminRequest(srv *HTTPServer, handler http.HandlerFunc, method, target, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, target, strings.NewReader(body))

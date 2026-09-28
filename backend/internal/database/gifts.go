@@ -27,7 +27,11 @@ func (db *DB) AddGift(ref model.LiveRef, uniqueID, nickname, giftName string, re
 }
 
 // GetRecentGifts returns the latest N gifts.
-func (db *DB) GetRecentGifts(liveName string, limit int) ([]model.Gift, error) {
+func (db *DB) GetRecentGifts(orgID, liveName string, limit int) ([]model.Gift, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
 	if limit < 1 || limit > 500 {
 		limit = 100
 	}
@@ -35,8 +39,8 @@ func (db *DB) GetRecentGifts(liveName string, limit int) ([]model.Gift, error) {
 	defer db.mu.Unlock()
 
 	rows, err := db.query(
-		"SELECT id, live_name, uniqueId, nickname, gift_name, repeat_count, gift_type, timestamp FROM gifts WHERE live_name = ? ORDER BY timestamp DESC LIMIT ?",
-		liveName, limit,
+		"SELECT id, live_name, uniqueId, nickname, gift_name, repeat_count, gift_type, timestamp FROM gifts WHERE "+orgSessions+" AND live_name = ? ORDER BY timestamp DESC LIMIT ?",
+		orgID, liveName, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query gifts: %w", err)
@@ -55,7 +59,11 @@ func (db *DB) GetRecentGifts(liveName string, limit int) ([]model.Gift, error) {
 }
 
 // GetGiftsByUser returns all gifts for a specific user.
-func (db *DB) GetGiftsByUser(uniqueID string) ([]model.Gift, error) {
+func (db *DB) GetGiftsByUser(orgID, uniqueID string) ([]model.Gift, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
 	uniqueID = strings.ToLower(strings.TrimSpace(uniqueID))
 	if uniqueID == "" {
 		return nil, model.ErrUniqueIDRequired
@@ -64,8 +72,8 @@ func (db *DB) GetGiftsByUser(uniqueID string) ([]model.Gift, error) {
 	defer db.mu.Unlock()
 
 	rows, err := db.query(
-		"SELECT id, live_name, uniqueId, nickname, gift_name, repeat_count, gift_type, timestamp FROM gifts WHERE LOWER(uniqueId) = ? ORDER BY timestamp DESC",
-		uniqueID,
+		"SELECT id, live_name, uniqueId, nickname, gift_name, repeat_count, gift_type, timestamp FROM gifts WHERE "+orgSessions+" AND LOWER(uniqueId) = ? ORDER BY timestamp DESC",
+		orgID, uniqueID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query gifts by user: %w", err)
@@ -86,13 +94,18 @@ func (db *DB) GetGiftsByUser(uniqueID string) ([]model.Gift, error) {
 	return out, rows.Err()
 }
 
-// GetGiftSummary returns a summary of gifts grouped by user for the current live.
-func (db *DB) GetGiftSummary() (map[string]map[string]int, error) {
+// GetGiftSummary returns a summary of the organization's gifts grouped by user.
+func (db *DB) GetGiftSummary(orgID string) (map[string]map[string]int, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	rows, err := db.query(
-		"SELECT uniqueId, nickname, gift_name, SUM(repeat_count) as total FROM gifts GROUP BY uniqueId, nickname, gift_name ORDER BY total DESC",
+		"SELECT uniqueId, nickname, gift_name, SUM(repeat_count) as total FROM gifts WHERE "+orgSessions+" GROUP BY uniqueId, nickname, gift_name ORDER BY total DESC",
+		orgID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query gift summary: %w", err)
@@ -114,12 +127,16 @@ func (db *DB) GetGiftSummary() (map[string]map[string]int, error) {
 	return summary, rows.Err()
 }
 
-// ClearGifts removes all gift records.
-func (db *DB) ClearGifts() (int64, error) {
+// ClearGifts removes all gift records of an organization.
+func (db *DB) ClearGifts(orgID string) (int64, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return 0, err
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	result, err := db.exec("DELETE FROM gifts")
+	result, err := db.exec("DELETE FROM gifts WHERE "+orgSessions, orgID)
 	if err != nil {
 		return 0, fmt.Errorf("clear gifts: %w", err)
 	}

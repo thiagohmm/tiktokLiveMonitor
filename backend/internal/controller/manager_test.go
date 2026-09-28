@@ -9,11 +9,11 @@ import (
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 )
 
-func newManagedTestController(t *testing.T) *AppController {
+// useFakeBridge replaces the external TikTok bridge with a local process that
+// accepts commands without networking, keeping the real manager and monitor
+// lifecycle.
+func useFakeBridge(t *testing.T) {
 	t.Helper()
-	c := newTestController(t, "legacy-live")
-	// Keep the real manager and monitor lifecycle, replacing only the external
-	// TikTok bridge with a local process that accepts commands without networking.
 	dir := t.TempDir()
 	bridgeDir := filepath.Join(dir, "internal", "monitor")
 	if err := os.MkdirAll(bridgeDir, 0700); err != nil {
@@ -23,11 +23,15 @@ func newManagedTestController(t *testing.T) *AppController {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
-	manager := monitor.NewManager(c.repo, 10)
-	manager.SetSettings(c.GetSettings())
-	c.SetMonitorManager(manager)
+}
+
+func newManagedTestController(t *testing.T) *AppController {
+	t.Helper()
+	c := newTestController(t, "legacy-live")
+	useFakeBridge(t)
+	c.SetMonitorManager(monitor.NewManager(c.repo, 10))
 	t.Cleanup(c.Stop)
-	if err := c.StartMonitoring(t.Context(), "managed-live"); err != nil {
+	if err := c.StartMonitoring(t.Context(), testOrgID, "managed-live"); err != nil {
 		t.Fatalf("start managed live: %v", err)
 	}
 	return c
@@ -37,7 +41,7 @@ func TestManagedLiveGoalLifecycle(t *testing.T) {
 	for _, status := range []string{model.GoalStatusCancelled, model.GoalStatusCompleted} {
 		t.Run(status, func(t *testing.T) {
 			c := newManagedTestController(t)
-			goal, err := c.CreateGoal("Managed goal", "", 100, nil)
+			goal, err := c.CreateGoal(testOrgID, "", "Managed goal", "", 100, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -47,7 +51,7 @@ func TestManagedLiveGoalLifecycle(t *testing.T) {
 			gift := giftData("viewer", 5)
 			gift["liveName"] = "managed-live"
 			c.HandleGiftEvent(gift)
-			state, err := c.GetGoalsState()
+			state, err := c.GetGoalsState(testOrgID, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -55,14 +59,14 @@ func TestManagedLiveGoalLifecycle(t *testing.T) {
 				t.Fatalf("unexpected managed goal state: %+v", state)
 			}
 			if status == model.GoalStatusCancelled {
-				err = c.CancelGoal(goal.ID)
+				err = c.CancelGoal(testOrgID, "", goal.ID)
 			} else {
-				err = c.CompleteGoal(goal.ID)
+				err = c.CompleteGoal(testOrgID, "", goal.ID)
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			state, err = c.GetGoalsState()
+			state, err = c.GetGoalsState(testOrgID, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -76,13 +80,13 @@ func TestManagedLiveGoalLifecycle(t *testing.T) {
 func TestManagedLivePinnedComments(t *testing.T) {
 	c := newManagedTestController(t)
 	for _, live := range []string{"legacy-live", "managed-live"} {
-		if _, err := c.RecordPinnedComment(monitor.EventData{
+		if _, err := c.RecordPinnedComment(liveEvent(monitor.EventData{
 			"liveName": live, "uniqueId": "viewer", "comment": live, "pinId": live,
-		}); err != nil {
+		})); err != nil {
 			t.Fatal(err)
 		}
 	}
-	comments, err := c.GetRecentPinnedComments(10)
+	comments, err := c.GetRecentPinnedComments(testOrgID, "", 10)
 	if err != nil {
 		t.Fatal(err)
 	}

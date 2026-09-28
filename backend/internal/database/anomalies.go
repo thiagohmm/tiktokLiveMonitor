@@ -62,8 +62,12 @@ func (db *DB) LogAnomaly(ref model.LiveRef, comment string, isAnomaly bool, cate
 	return nil
 }
 
-// GetRecentModerations returns the latest N moderation records.
-func (db *DB) GetRecentModerations(limit int) ([]model.AnomalyLog, error) {
+// GetRecentModerations returns the latest N moderation records of an organization.
+func (db *DB) GetRecentModerations(orgID string, limit int) ([]model.AnomalyLog, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
 	if limit < 1 || limit > 500 {
 		limit = 100
 	}
@@ -72,8 +76,8 @@ func (db *DB) GetRecentModerations(limit int) ([]model.AnomalyLog, error) {
 
 	rows, err := db.query(
 		`SELECT id, live_name, day, timestamp, uniqueId, comment, is_anomaly, category
-		 FROM anomaly_logs ORDER BY timestamp DESC LIMIT ?`,
-		limit,
+		 FROM anomaly_logs WHERE `+orgSessions+` ORDER BY timestamp DESC LIMIT ?`,
+		orgID, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query moderations: %w", err)
@@ -92,18 +96,22 @@ func (db *DB) GetRecentModerations(limit int) ([]model.AnomalyLog, error) {
 }
 
 // GetRecentAnomalyLogs retrieves the most recent anomaly logs.
-func (db *DB) GetRecentAnomalyLogs(limit int) ([]model.AnomalyLog, error) {
-	return db.GetRecentModerations(limit)
+func (db *DB) GetRecentAnomalyLogs(orgID string, limit int) ([]model.AnomalyLog, error) {
+	return db.GetRecentModerations(orgID, limit)
 }
 
 // GetAnomalyLogsByLiveName retrieves logs for a specific live name.
-func (db *DB) GetAnomalyLogsByLiveName(liveName string) ([]model.AnomalyLog, error) {
+func (db *DB) GetAnomalyLogsByLiveName(orgID, liveName string) ([]model.AnomalyLog, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	rows, err := db.query(
-		"SELECT id, live_name, day, timestamp, uniqueId, comment, is_anomaly, category FROM anomaly_logs WHERE live_name = ?",
-		liveName,
+		"SELECT id, live_name, day, timestamp, uniqueId, comment, is_anomaly, category FROM anomaly_logs WHERE "+orgSessions+" AND live_name = ?",
+		orgID, liveName,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query anomaly logs by live: %w", err)
@@ -122,7 +130,11 @@ func (db *DB) GetAnomalyLogsByLiveName(liveName string) ([]model.AnomalyLog, err
 }
 
 // GetAnomalyLogsByUser returns anomaly logs for a participant (case-insensitive).
-func (db *DB) GetAnomalyLogsByUser(uniqueID string, limit int) ([]model.AnomalyLog, error) {
+func (db *DB) GetAnomalyLogsByUser(orgID, uniqueID string, limit int) ([]model.AnomalyLog, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return nil, err
+	}
 	uniqueID = strings.TrimSpace(uniqueID)
 	if uniqueID == "" {
 		return nil, fmt.Errorf("uniqueId is required")
@@ -137,10 +149,10 @@ func (db *DB) GetAnomalyLogsByUser(uniqueID string, limit int) ([]model.AnomalyL
 	rows, err := db.query(
 		`SELECT id, live_name, day, timestamp, uniqueId, comment, is_anomaly, category
 		 FROM anomaly_logs
-		 WHERE LOWER(uniqueId) = LOWER(?) AND is_anomaly = TRUE
+		 WHERE `+orgSessions+` AND LOWER(uniqueId) = LOWER(?) AND is_anomaly = TRUE
 		 ORDER BY timestamp DESC
 		 LIMIT ?`,
-		uniqueID, limit,
+		orgID, uniqueID, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query anomaly logs by user: %w", err)
@@ -158,27 +170,35 @@ func (db *DB) GetAnomalyLogsByUser(uniqueID string, limit int) ([]model.AnomalyL
 	return out, rows.Err()
 }
 
-// ClearHistory removes all anomaly logs.
-func (db *DB) ClearHistory() (int64, error) {
+// ClearHistory removes all anomaly logs of an organization.
+func (db *DB) ClearHistory(orgID string) (int64, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return 0, err
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	result, err := db.exec("DELETE FROM anomaly_logs")
+	result, err := db.exec("DELETE FROM anomaly_logs WHERE "+orgSessions, orgID)
 	if err != nil {
 		return 0, fmt.Errorf("clear history: %w", err)
 	}
 	return result.RowsAffected()
 }
 
-// DeleteModeration removes a single anomaly log by ID.
-func (db *DB) DeleteModeration(id int64) (int64, error) {
+// DeleteModeration removes a single anomaly log of an organization by ID.
+func (db *DB) DeleteModeration(orgID string, id int64) (int64, error) {
+	orgID, err := requireOrg(orgID)
+	if err != nil {
+		return 0, err
+	}
 	if id <= 0 {
 		return 0, model.ErrInvalidID
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	result, err := db.exec("DELETE FROM anomaly_logs WHERE id = ?", id)
+	result, err := db.exec("DELETE FROM anomaly_logs WHERE id = ? AND "+orgSessions, id, orgID)
 	if err != nil {
 		return 0, fmt.Errorf("delete moderation: %w", err)
 	}

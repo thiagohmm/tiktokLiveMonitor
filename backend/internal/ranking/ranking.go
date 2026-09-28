@@ -48,10 +48,10 @@ var DefaultWeights = Weights{
 
 // ScoreResult is the computed score for a single participant.
 type ScoreResult struct {
-	UserRank   model.UserRank
-	GiftScore  float64
-	Score      float64
-	RiskLevel  string
+	UserRank  model.UserRank
+	GiftScore float64
+	Score     float64
+	RiskLevel string
 }
 
 // Ranker computes engagement rankings.
@@ -77,8 +77,8 @@ func (r *Ranker) Compute(stats []model.LiveStat, anomaliesByUser map[string]int)
 	for _, s := range stats {
 		giftScore := r.weights.GiftPointPerGift*float64(s.GiftCount) +
 			r.weights.GiftPointPerUnit*float64(s.GiftValue)
-		messageScore := r.weights.MessagePointPerMessage*float64(s.MessageCount)
-		questionScore := r.weights.QuestionPointPerQuestion*float64(s.QuestionCount)
+		messageScore := r.weights.MessagePointPerMessage * float64(s.MessageCount)
+		questionScore := r.weights.QuestionPointPerQuestion * float64(s.QuestionCount)
 		likeScore := r.weights.LikePointPerLike * float64(s.LikeCount)
 		shareScore := r.weights.SharePointPerShare * float64(s.ShareCount)
 		// Repeated messages / spam reduce the score (penalty subtracts, never adds).

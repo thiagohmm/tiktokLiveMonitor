@@ -11,6 +11,23 @@ import (
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 )
 
+const (
+	testOrgID = "org-test"
+	testLive  = "live1"
+)
+
+// liveEvent tags an event with the organization and live under test, as the
+// monitor manager does for every bridge event.
+func liveEvent(data monitor.EventData) monitor.EventData {
+	if _, ok := data["orgId"]; !ok {
+		data["orgId"] = testOrgID
+	}
+	if _, ok := data["liveName"]; !ok {
+		data["liveName"] = testLive
+	}
+	return data
+}
+
 func newTestController(t *testing.T, liveName string) *AppController {
 	t.Helper()
 	baseDSN := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
@@ -37,7 +54,7 @@ func newTestController(t *testing.T, liveName string) *AppController {
 	// StartMonitoring is what opens the session in production; the harness opens
 	// it here so active/session resolution behaves like a running live.
 	if liveName != "" {
-		if _, err := db.BeginLiveSession(liveName, time.Now()); err != nil {
+		if _, err := db.BeginLiveSession(testOrgID, liveName, time.Now()); err != nil {
 			t.Fatalf("begin live session: %v", err)
 		}
 	}
@@ -49,7 +66,7 @@ func newTestController(t *testing.T, liveName string) *AppController {
 // activeRefForTest resolves the session of the live under test.
 func (c *AppController) activeRefForTest(t *testing.T) model.LiveRef {
 	t.Helper()
-	ref, err := c.activeLiveRef()
+	ref, err := c.activeLiveRef(testOrgID, testLive)
 	if err != nil {
 		t.Fatalf("active live ref: %v", err)
 	}
@@ -57,19 +74,19 @@ func (c *AppController) activeRefForTest(t *testing.T) model.LiveRef {
 }
 
 func giftData(uniqueID string, repeatCount int) monitor.EventData {
-	return monitor.EventData{
+	return liveEvent(monitor.EventData{
 		"uniqueId":    uniqueID,
 		"nickname":    "User One",
 		"giftName":    "Rose",
 		"repeatCount": repeatCount,
 		"repeatEnd":   true,
-	}
+	})
 }
 
 func TestCreateGoalAndState(t *testing.T) {
 	c := newTestController(t, "live1")
 
-	g, err := c.CreateGoal("Meta da noite", "", 100, []model.GoalMilestone{
+	g, err := c.CreateGoal(testOrgID, testLive, "Meta da noite", "", 100, []model.GoalMilestone{
 		{AtUnits: 50, Reward: "música especial"},
 	})
 	if err != nil {
@@ -79,7 +96,7 @@ func TestCreateGoalAndState(t *testing.T) {
 		t.Fatalf("unexpected goal: %+v", g)
 	}
 
-	st, err := c.GetGoalsState()
+	st, err := c.GetGoalsState(testOrgID, testLive)
 	if err != nil {
 		t.Fatalf("get goals state: %v", err)
 	}
@@ -100,14 +117,14 @@ func TestCreateGoalAndState(t *testing.T) {
 func TestCreateMultipleGoalsCoexist(t *testing.T) {
 	c := newTestController(t, "live1")
 
-	if _, err := c.CreateGoal("meta antiga", "", 10, nil); err != nil {
+	if _, err := c.CreateGoal(testOrgID, testLive, "meta antiga", "", 10, nil); err != nil {
 		t.Fatalf("create first: %v", err)
 	}
-	if _, err := c.CreateGoal("meta nova", "", 20, nil); err != nil {
+	if _, err := c.CreateGoal(testOrgID, testLive, "meta nova", "", 20, nil); err != nil {
 		t.Fatalf("create second: %v", err)
 	}
 
-	st, err := c.GetGoalsState()
+	st, err := c.GetGoalsState(testOrgID, testLive)
 	if err != nil {
 		t.Fatalf("get state: %v", err)
 	}
@@ -130,11 +147,11 @@ func TestMultipleGoalsCompleteIndependently(t *testing.T) {
 	var updates []GoalUpdate
 	c.SetGoalCallback(func(u GoalUpdate) { updates = append(updates, u) })
 
-	g1, err := c.CreateGoal("meta pequena", "", 10, nil)
+	g1, err := c.CreateGoal(testOrgID, testLive, "meta pequena", "", 10, nil)
 	if err != nil {
 		t.Fatalf("create first: %v", err)
 	}
-	if _, err := c.CreateGoal("meta grande", "", 100, nil); err != nil {
+	if _, err := c.CreateGoal(testOrgID, testLive, "meta grande", "", 100, nil); err != nil {
 		t.Fatalf("create second: %v", err)
 	}
 
@@ -154,7 +171,7 @@ func TestMultipleGoalsCompleteIndependently(t *testing.T) {
 		t.Fatalf("expected big goal progress, got %+v", updates)
 	}
 
-	st, err := c.GetGoalsState()
+	st, err := c.GetGoalsState(testOrgID, testLive)
 	if err != nil {
 		t.Fatalf("state: %v", err)
 	}
@@ -170,7 +187,7 @@ func TestMultipleGoalsCompleteIndependently(t *testing.T) {
 
 	// 90 more units complete the big goal too.
 	c.HandleGiftEvent(giftData("u2", 90))
-	st, err = c.GetGoalsState()
+	st, err = c.GetGoalsState(testOrgID, testLive)
 	if err != nil {
 		t.Fatalf("state: %v", err)
 	}
@@ -188,7 +205,7 @@ func TestGoalProgressFlow(t *testing.T) {
 	var updates []GoalUpdate
 	c.SetGoalCallback(func(u GoalUpdate) { updates = append(updates, u) })
 
-	if _, err := c.CreateGoal("Meta", "", 100, []model.GoalMilestone{
+	if _, err := c.CreateGoal(testOrgID, testLive, "Meta", "", 100, []model.GoalMilestone{
 		{AtUnits: 50, Reward: "música especial"},
 		{AtUnits: 80, Reward: "dedicatória"},
 	}); err != nil {
@@ -234,7 +251,7 @@ func TestGoalProgressFlow(t *testing.T) {
 	}
 
 	// Persisted state reflects completion.
-	st, err := c.GetGoalsState()
+	st, err := c.GetGoalsState(testOrgID, testLive)
 	if err != nil {
 		t.Fatalf("get state: %v", err)
 	}
@@ -255,17 +272,17 @@ func TestGoalProgressFlow(t *testing.T) {
 func TestPerGiftGoal(t *testing.T) {
 	c := newTestController(t, "live1")
 
-	if _, err := c.CreateGoal("Meta de Rose", "Rose", 10, []model.GoalMilestone{
+	if _, err := c.CreateGoal(testOrgID, testLive, "Meta de Rose", "Rose", 10, []model.GoalMilestone{
 		{AtUnits: 5, Reward: "música especial"},
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
 	// Gifts other than the goal's gift must not count.
-	c.HandleGiftEvent(monitor.EventData{
+	c.HandleGiftEvent(liveEvent(monitor.EventData{
 		"uniqueId": "u1", "nickname": "User One", "giftName": "Dino", "repeatCount": 40, "repeatEnd": true,
-	})
-	st, err := c.GetGoalsState()
+	}))
+	st, err := c.GetGoalsState(testOrgID, testLive)
 	if err != nil {
 		t.Fatalf("state: %v", err)
 	}
@@ -277,10 +294,10 @@ func TestPerGiftGoal(t *testing.T) {
 	}
 
 	// 5 roses unlock the 5-unit milestone.
-	c.HandleGiftEvent(monitor.EventData{
+	c.HandleGiftEvent(liveEvent(monitor.EventData{
 		"uniqueId": "u2", "nickname": "User Two", "giftName": "Rose", "repeatCount": 5, "repeatEnd": true,
-	})
-	st, err = c.GetGoalsState()
+	}))
+	st, err = c.GetGoalsState(testOrgID, testLive)
 	if err != nil {
 		t.Fatalf("state: %v", err)
 	}
@@ -292,10 +309,10 @@ func TestPerGiftGoal(t *testing.T) {
 	}
 
 	// 6 more roses reach 11 >= 10 and complete the goal.
-	c.HandleGiftEvent(monitor.EventData{
+	c.HandleGiftEvent(liveEvent(monitor.EventData{
 		"uniqueId": "u3", "nickname": "User Three", "giftName": "Rose", "repeatCount": 6, "repeatEnd": true,
-	})
-	st, err = c.GetGoalsState()
+	}))
+	st, err = c.GetGoalsState(testOrgID, testLive)
 	if err != nil {
 		t.Fatalf("state: %v", err)
 	}
@@ -316,7 +333,7 @@ func TestGoalProgressEmitsOnPlainGifts(t *testing.T) {
 	var updates []GoalUpdate
 	c.SetGoalCallback(func(u GoalUpdate) { updates = append(updates, u) })
 
-	g, err := c.CreateGoal("Meta", "", 1000, nil)
+	g, err := c.CreateGoal(testOrgID, testLive, "Meta", "", 1000, nil)
 	if err != nil {
 		t.Fatalf("create goal: %v", err)
 	}
@@ -345,7 +362,7 @@ func TestGoalProgressEmitsOnPlainGifts(t *testing.T) {
 	}
 
 	// Completed goals must not re-emit on later gifts.
-	if err := c.CompleteGoal(g.ID); err != nil {
+	if err := c.CompleteGoal(testOrgID, testLive, g.ID); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	before := len(updates)
@@ -358,24 +375,24 @@ func TestGoalProgressEmitsOnPlainGifts(t *testing.T) {
 func TestCancelGoal(t *testing.T) {
 	c := newTestController(t, "live1")
 
-	g, err := c.CreateGoal("meta", "", 100, nil)
+	g, err := c.CreateGoal(testOrgID, testLive, "meta", "", 100, nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := c.CancelGoal(g.ID); err != nil {
+	if err := c.CancelGoal(testOrgID, testLive, g.ID); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
-	st, err := c.GetGoalsState()
+	st, err := c.GetGoalsState(testOrgID, testLive)
 	if err != nil {
 		t.Fatalf("state: %v", err)
 	}
 	if st.Active != nil || len(st.History) != 1 || st.History[0].Status != model.GoalStatusCancelled {
 		t.Fatalf("unexpected state after cancel: %+v", st)
 	}
-	if err := c.CancelGoal(g.ID); err == nil {
+	if err := c.CancelGoal(testOrgID, testLive, g.ID); err == nil {
 		t.Fatal("expected error cancelling an already-cancelled goal")
 	}
-	if err := c.CancelGoal(99999); err == nil {
+	if err := c.CancelGoal(testOrgID, testLive, 99999); err == nil {
 		t.Fatal("expected error cancelling an unknown goal")
 	}
 }
@@ -383,16 +400,16 @@ func TestCancelGoal(t *testing.T) {
 func TestCompleteGoalManual(t *testing.T) {
 	c := newTestController(t, "live1")
 
-	g, err := c.CreateGoal("meta", "", 100, []model.GoalMilestone{{AtUnits: 30, Reward: "prêmio"}})
+	g, err := c.CreateGoal(testOrgID, testLive, "meta", "", 100, []model.GoalMilestone{{AtUnits: 30, Reward: "prêmio"}})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	c.HandleGiftEvent(giftData("u1", 30))
 
-	if err := c.CompleteGoal(g.ID); err != nil {
+	if err := c.CompleteGoal(testOrgID, testLive, g.ID); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
-	st, err := c.GetGoalsState()
+	st, err := c.GetGoalsState(testOrgID, testLive)
 	if err != nil {
 		t.Fatalf("state: %v", err)
 	}
@@ -402,7 +419,7 @@ func TestCompleteGoalManual(t *testing.T) {
 	if !st.History[0].Milestones[0].Unlocked || st.History[0].Milestones[0].UnlockedAt == nil {
 		t.Fatalf("expected crossed milestone unlocked, got %+v", st.History[0].Milestones[0])
 	}
-	if err := c.CompleteGoal(g.ID); err == nil {
+	if err := c.CompleteGoal(testOrgID, testLive, g.ID); err == nil {
 		t.Fatal("expected error completing an already-completed goal")
 	}
 }
@@ -410,7 +427,7 @@ func TestCompleteGoalManual(t *testing.T) {
 func TestUpdateGoal(t *testing.T) {
 	c := newTestController(t, "live1")
 
-	g, err := c.CreateGoal("meta", "", 100, nil)
+	g, err := c.CreateGoal(testOrgID, testLive, "meta", "", 100, nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -419,7 +436,7 @@ func TestUpdateGoal(t *testing.T) {
 	if err := c.UpdateGoal(g); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	st, err := c.GetGoalsState()
+	st, err := c.GetGoalsState(testOrgID, testLive)
 	if err != nil {
 		t.Fatalf("state: %v", err)
 	}
@@ -437,7 +454,7 @@ func TestGoalUnlockedNotRepeatedOnPlainProgress(t *testing.T) {
 	var updates []GoalUpdate
 	c.SetGoalCallback(func(u GoalUpdate) { updates = append(updates, u) })
 
-	if _, err := c.CreateGoal("Meta", "", 100, []model.GoalMilestone{
+	if _, err := c.CreateGoal(testOrgID, testLive, "Meta", "", 100, []model.GoalMilestone{
 		{AtUnits: 50, Reward: "música especial"},
 	}); err != nil {
 		t.Fatalf("create goal: %v", err)
@@ -463,7 +480,7 @@ func TestGoalUnlockedNotRepeatedOnPlainProgress(t *testing.T) {
 
 func TestCreateGoalWithoutLive(t *testing.T) {
 	c := newTestController(t, "")
-	if _, err := c.CreateGoal("meta", "", 10, nil); err == nil {
+	if _, err := c.CreateGoal(testOrgID, "", "meta", "", 10, nil); err == nil {
 		t.Fatal("expected error when no live is monitored")
 	}
 }

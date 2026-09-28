@@ -143,11 +143,11 @@ func TestGetUserProfile(t *testing.T) {
 	// 12 distinct messages (the store keeps at most 10 per user; the
 	// profile must surface the 10 most recent).
 	for i := 0; i < 12; i++ {
-		c.HandleChatMessageEvent(monitor.EventData{
+		c.HandleChatMessageEvent(liveEvent(monitor.EventData{
 			"uniqueId": "user1",
 			"nickname": "User One",
 			"comment":  fmt.Sprintf("msg %d", i),
-		})
+		}))
 	}
 
 	// 2 gift events: 1 + 5 units.
@@ -155,14 +155,14 @@ func TestGetUserProfile(t *testing.T) {
 	c.HandleGiftEvent(giftData("user1", 5))
 
 	// Likes: 3 + 4 = 7 (the "total" room counter is irrelevant here).
-	c.HandleLikeEvent(monitor.EventData{"uniqueId": "user1", "nickname": "User One", "likeCount": 3})
-	c.HandleLikeEvent(monitor.EventData{"uniqueId": "user1", "nickname": "User One", "likeCount": 4})
+	c.HandleLikeEvent(liveEvent(monitor.EventData{"uniqueId": "user1", "nickname": "User One", "likeCount": 3}))
+	c.HandleLikeEvent(liveEvent(monitor.EventData{"uniqueId": "user1", "nickname": "User One", "likeCount": 4}))
 
 	// 2 shares.
-	c.HandleShareEvent(monitor.EventData{"uniqueId": "user1", "nickname": "User One"})
-	c.HandleShareEvent(monitor.EventData{"uniqueId": "user1", "nickname": "User One"})
+	c.HandleShareEvent(liveEvent(monitor.EventData{"uniqueId": "user1", "nickname": "User One"}))
+	c.HandleShareEvent(liveEvent(monitor.EventData{"uniqueId": "user1", "nickname": "User One"}))
 
-	prof, err := c.GetUserProfile("user1")
+	prof, err := c.GetUserProfile(testOrgID, "user1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestGetUserProfile(t *testing.T) {
 	}
 
 	// Case-insensitive lookup.
-	prof, err = c.GetUserProfile("USER1")
+	prof, err = c.GetUserProfile(testOrgID, "USER1")
 	if err != nil {
 		t.Fatalf("unexpected error (case-insensitive): %v", err)
 	}
@@ -200,7 +200,7 @@ func TestGetUserProfile(t *testing.T) {
 	}
 
 	// Unknown user: zeroed profile, no error.
-	prof, err = c.GetUserProfile("nobody")
+	prof, err = c.GetUserProfile(testOrgID, "nobody")
 	if err != nil {
 		t.Fatalf("unexpected error for unknown user: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestGetUserProfile(t *testing.T) {
 	}
 
 	// Empty uid: no error, empty profile.
-	prof, err = c.GetUserProfile("  ")
+	prof, err = c.GetUserProfile(testOrgID, "  ")
 	if err != nil {
 		t.Fatalf("unexpected error for empty uid: %v", err)
 	}
@@ -223,17 +223,17 @@ func TestGetUserProfileAlertsAndRisk(t *testing.T) {
 	c := newTestController(t, "live1")
 
 	// Seed moderation alerts via the controller (persists to anomaly_logs).
-	c.ReportExternalFlag(monitor.EventData{
+	c.ReportExternalFlag(liveEvent(monitor.EventData{
 		"uniqueId": "baduser", "nickname": "Bad", "comment": "spam one", "category": "SPAM", "reason": "SPAM",
-	})
-	c.ReportExternalFlag(monitor.EventData{
+	}))
+	c.ReportExternalFlag(liveEvent(monitor.EventData{
 		"uniqueId": "baduser", "nickname": "Bad", "comment": "spam two", "category": "REPETICAO", "reason": "REPETICAO",
-	})
-	c.ReportExternalFlag(monitor.EventData{
+	}))
+	c.ReportExternalFlag(liveEvent(monitor.EventData{
 		"uniqueId": "gooduser", "nickname": "Good", "comment": "ok", "category": "SPAM", "reason": "SPAM",
-	})
+	}))
 
-	prof, err := c.GetUserProfile("baduser")
+	prof, err := c.GetUserProfile(testOrgID, "baduser")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestGetUserProfileAlertsAndRisk(t *testing.T) {
 		t.Fatalf("expected medium risk for 2 anomalies, got %q", prof.RiskLevel)
 	}
 
-	prof, err = c.GetUserProfile("BADUSER")
+	prof, err = c.GetUserProfile(testOrgID, "BADUSER")
 	if err != nil {
 		t.Fatalf("case-insensitive lookup failed: %v", err)
 	}
