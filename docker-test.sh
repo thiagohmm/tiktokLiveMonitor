@@ -18,8 +18,6 @@ if [[ ! -f .env ]]; then
   echo ""
   echo "Criado .env a partir de .env.example"
   echo "  • Teste rápido sem login: defina AUTH_ENABLED=0 no .env"
-  echo "  • Com Supabase: preencha SUPABASE_URL, SUPABASE_ANON_KEY,"
-  echo "    SUPABASE_JWT_SECRET e SUPABASE_SERVICE_ROLE_KEY"
   echo ""
 fi
 

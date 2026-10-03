@@ -1,3 +1,5 @@
+> Documento histórico anterior à autenticação local. Para o deploy atual, use [auth-local.md](auth-local.md). Scripts do provedor antigo foram retirados; não execute estas instruções de migração.
+
 # Plano: Aba de Administração (Lives e Horários)
 
 ## Objetivo

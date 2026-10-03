@@ -15,7 +15,7 @@ ENV BACKEND_URL=${BACKEND_URL}
 
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 WORKDIR /usr/share/nginx/html
-COPY index.html admin.html login.html reset-password.html config.js auth.js renderer.js admin.js pix.js ./
+COPY index.html admin.html login.html reset-password.html config.js auth.js renderer.js admin.js teams-ui.js invite.html invite.js pix.js ./
 COPY landing.html landing.css landing-offer.js ./
 COPY vendor/ ./vendor/
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/auth"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/teams"
 )
 
 // writeOrgError maps organization repository errors to HTTP statuses.
@@ -28,7 +29,7 @@ func writeOrgError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 }
 
-// createActiveAccount creates a Supabase user that can log in right away
+// createActiveAccount creates a local user that can log in right away
 // (organization members are released by whoever adds them).
 func (s *HTTPServer) createActiveAccount(req auth.CreateSubscriberRequest) (*auth.SubscriberProfile, error) {
 	user, err := s.admin.CreateSubscriber(req)
@@ -116,7 +117,7 @@ func (s *HTTPServer) handleAdminOrgs(w http.ResponseWriter, r *http.Request) {
 		withOwner := strings.TrimSpace(body.OwnerEmail) != ""
 		existingOwner := strings.TrimSpace(body.OwnerUserID)
 		if (withOwner || existingOwner != "") && s.admin == nil {
-			writeError(w, http.StatusServiceUnavailable, "supabase admin não configurado")
+			writeError(w, http.StatusServiceUnavailable, "cadastro local indisponível")
 			return
 		}
 		org, err := repo.CreateOrganization(body.Name, body.MaxLives)
@@ -131,6 +132,11 @@ func (s *HTTPServer) handleAdminOrgs(w http.ResponseWriter, r *http.Request) {
 				resp["ownerError"] = "usuário não encontrado"
 			} else {
 				previous, prevErr := repo.GetMembership(existingOwner)
+				if prevErr == nil {
+					resp["ownerError"] = "usuário já pertence a uma organização"
+					writeJSON(w, resp)
+					return
+				}
 				member, err := repo.UpsertOrgMember(org.ID, existingOwner, profile.Email, model.OrgRoleOwner)
 				if err != nil {
 					resp["ownerError"] = err.Error()
@@ -140,7 +146,11 @@ func (s *HTTPServer) handleAdminOrgs(w http.ResponseWriter, r *http.Request) {
 					}
 					s.tenants.invalidate(existingOwner)
 					s.kickSSE("", existingOwner)
-					resp["owner"] = member
+					if err := s.teams.Allocate(r.Context(), org.ID, member.UserID, teams.Allocation{PrimaryOwner: member.UserID}, true); err != nil {
+						resp["ownerError"] = err.Error()
+					} else {
+						resp["owner"] = member
+					}
 				}
 			}
 		} else if withOwner {
@@ -151,7 +161,11 @@ func (s *HTTPServer) handleAdminOrgs(w http.ResponseWriter, r *http.Request) {
 				// The organization stays (inactive owners can be added later).
 				resp["ownerError"] = err.Error()
 			} else {
-				resp["owner"] = member
+				if err := s.teams.Allocate(r.Context(), org.ID, member.UserID, teams.Allocation{PrimaryOwner: member.UserID}, true); err != nil {
+					resp["ownerError"] = err.Error()
+				} else {
+					resp["owner"] = member
+				}
 			}
 		}
 		writeJSON(w, resp)
@@ -203,40 +217,7 @@ func (s *HTTPServer) handleAdminOrgMembers(w http.ResponseWriter, r *http.Reques
 	repo := s.controller.Repository()
 	switch r.Method {
 	case http.MethodPost:
-		var body struct {
-			OrgID  string `json:"orgId"`
-			UserID string `json:"userId"`
-			Email  string `json:"email"`
-			Role   string `json:"role"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid body")
-			return
-		}
-		if strings.TrimSpace(body.UserID) == "" {
-			writeError(w, http.StatusBadRequest, "userId é obrigatório")
-			return
-		}
-		if s.admin != nil {
-			profile, err := s.admin.GetProfileByID(body.UserID)
-			if err != nil {
-				writeError(w, http.StatusNotFound, "usuário não encontrado")
-				return
-			}
-			body.Email = profile.Email
-		}
-		previous, prevErr := repo.GetMembership(body.UserID)
-		member, err := repo.UpsertOrgMember(body.OrgID, body.UserID, body.Email, body.Role)
-		if err != nil {
-			writeOrgError(w, r, err)
-			return
-		}
-		if prevErr == nil && previous.OrgID != member.OrgID {
-			s.controller.DetachUser(previous.OrgID, body.UserID)
-		}
-		s.tenants.invalidate(body.UserID)
-		s.kickSSE("", body.UserID)
-		writeJSON(w, member)
+		writeError(w, 410, "use convites e alocação de vagas; transferência de usuário entre organizações não é automática")
 	case http.MethodDelete:
 		userID := strings.TrimSpace(r.URL.Query().Get("userId"))
 		member, err := repo.GetMembership(userID)
@@ -244,8 +225,13 @@ func (s *HTTPServer) handleAdminOrgMembers(w http.ResponseWriter, r *http.Reques
 			writeOrgError(w, r, err)
 			return
 		}
-		if _, err := repo.DeleteOrgMember(member.OrgID, userID); err != nil {
-			writeInternalError(w, r, err)
+		actor, _ := auth.UserFromContext(r.Context())
+		actorID := "local-dev"
+		if actor != nil {
+			actorID = actor.ID
+		}
+		if err := s.teams.Revoke(r.Context(), member.OrgID, actorID, userID); err != nil {
+			writeTeamError(w, r, err)
 			return
 		}
 		s.tenants.invalidate(userID)
@@ -363,79 +349,10 @@ func (s *HTTPServer) handleOrgMembers(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, map[string]any{"members": members})
 	case http.MethodPost:
-		if s.admin == nil {
-			writeError(w, http.StatusServiceUnavailable, "supabase admin não configurado")
-			return
-		}
-		var body struct {
-			Email       string `json:"email"`
-			Password    string `json:"password"`
-			DisplayName string `json:"displayName"`
-			Role        string `json:"role"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid body")
-			return
-		}
-		role := body.Role
-		if role == "" {
-			role = model.OrgRoleOperator
-		}
-		member, err := s.addMember(t.OrgID, role, auth.CreateSubscriberRequest{
-			Email: body.Email, Password: body.Password, DisplayName: body.DisplayName,
-		})
-		if err != nil {
-			writeOrgError(w, r, err)
-			return
-		}
-		writeJSON(w, member)
+		writeError(w, http.StatusGone, "use convites por e-mail em /api/org/invitations")
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
-}
-
-// orgMemberOf returns the membership of userID when it belongs to orgID.
-// Members of other organizations answer ErrOrgNotFound (404), never 403, so
-// the caller cannot probe foreign accounts.
-func (s *HTTPServer) orgMemberOf(orgID, userID string) (model.OrgMember, error) {
-	member, err := s.controller.Repository().GetMembership(userID)
-	if err != nil {
-		return model.OrgMember{}, err
-	}
-	if member.OrgID != orgID {
-		return model.OrgMember{}, model.ErrOrgNotFound
-	}
-	return member, nil
-}
-
-// protectPlatformAdmin refuses owner operations on platform admin accounts:
-// an organization owner must never demote or delete a platform admin that
-// happens to be a member of the organization.
-func (s *HTTPServer) protectPlatformAdmin(w http.ResponseWriter, userID string) bool {
-	if s.admin == nil {
-		return true
-	}
-	profile, err := s.admin.GetProfileByID(userID)
-	if err == nil && profile.Role == "admin" {
-		writeError(w, http.StatusForbidden, "contas de administrador da plataforma não podem ser alteradas aqui")
-		return false
-	}
-	return true
-}
-
-// ownerCount counts the owners of an organization.
-func (s *HTTPServer) ownerCount(orgID string) (int, error) {
-	members, err := s.controller.Repository().ListOrgMembers(orgID)
-	if err != nil {
-		return 0, err
-	}
-	n := 0
-	for _, m := range members {
-		if m.Role == model.OrgRoleOwner {
-			n++
-		}
-	}
-	return n, nil
 }
 
 // handleOrgMembersUpdate changes the role of a member of the organization.
@@ -464,30 +381,17 @@ func (s *HTTPServer) handleOrgMembersUpdate(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "papel inválido (use owner ou operator)")
 		return
 	}
-	member, err := s.orgMemberOf(t.OrgID, body.UserID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "membro não encontrado")
-		return
-	}
-	if !s.protectPlatformAdmin(w, member.UserID) {
-		return
-	}
-	if member.Role == model.OrgRoleOwner && body.Role != model.OrgRoleOwner {
-		if n, err := s.ownerCount(t.OrgID); err != nil {
-			writeInternalError(w, r, err)
-			return
-		} else if n <= 1 {
-			writeError(w, http.StatusConflict, "a organização precisa de pelo menos um dono")
+	if s.teams != nil {
+		if err := s.teams.SetRole(r.Context(), t.OrgID, t.UserID, body.UserID, body.Role); err != nil {
+			writeTeamError(w, r, err)
 			return
 		}
-	}
-	updated, err := s.controller.Repository().UpsertOrgMember(t.OrgID, member.UserID, member.Email, body.Role)
-	if err != nil {
-		writeOrgError(w, r, err)
+		s.tenants.invalidate(body.UserID)
+		s.kickSSE("", body.UserID)
+		writeJSON(w, map[string]bool{"success": true})
 		return
 	}
-	s.tenants.invalidate(member.UserID)
-	writeJSON(w, updated)
+	writeError(w, 503, "gestão da equipe indisponível")
 }
 
 // handleOrgMembersDelete removes a member from the organization and deletes
@@ -510,38 +414,16 @@ func (s *HTTPServer) handleOrgMembersDelete(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusForbidden, "não é possível remover a própria conta")
 		return
 	}
-	member, err := s.orgMemberOf(t.OrgID, userID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "membro não encontrado")
+	if s.teams == nil {
+		writeError(w, 503, "gestão da equipe indisponível")
 		return
 	}
-	if !s.protectPlatformAdmin(w, member.UserID) {
-		return
-	}
-	if member.Role == model.OrgRoleOwner {
-		if n, err := s.ownerCount(t.OrgID); err != nil {
-			writeInternalError(w, r, err)
-			return
-		} else if n <= 1 {
-			writeError(w, http.StatusConflict, "a organização precisa de pelo menos um dono")
-			return
-		}
-	}
-	if _, err := s.controller.Repository().DeleteOrgMember(t.OrgID, userID); err != nil {
-		writeInternalError(w, r, err)
+	if err := s.teams.Revoke(r.Context(), t.OrgID, t.UserID, userID); err != nil {
+		writeTeamError(w, r, err)
 		return
 	}
 	s.tenants.invalidate(userID)
 	s.controller.DetachUser(t.OrgID, userID)
 	s.kickSSE("", userID)
-	if s.admin != nil {
-		// Without a membership the account can no longer act; deleting it
-		// also revokes its sessions. A failure here leaves a harmless
-		// organization-less account behind.
-		if err := s.admin.DeleteSubscriber(userID); err != nil {
-			writeJSON(w, map[string]any{"success": true, "accountDeleted": false})
-			return
-		}
-	}
-	writeJSON(w, map[string]any{"success": true, "accountDeleted": s.admin != nil})
+	writeJSON(w, map[string]any{"success": true, "accountDeleted": false})
 }

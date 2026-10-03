@@ -73,7 +73,7 @@ func TestBuildWelcomeBody(t *testing.T) {
 }
 
 func TestBuildResetBodyContainsLink(t *testing.T) {
-	link := "https://project-ref.supabase.co/auth/v1/verify?token=abc123&type=recovery"
+	link := "https://livemonitortk.com.br/reset-password.html#token=abc123&type=recovery"
 	body := buildResetBody(link)
 	if !strings.Contains(body, link) {
 		t.Fatalf("corpo não contém o link de redefinição\n--- corpo ---\n%s", body)

@@ -1,5 +1,4 @@
-// Build para Vercel: copia os arquivos estáticos para dist/ e fixa a base da
-// API em vazio (same-origin + rewrites do vercel.json).
+// Build estático do VPS; API na mesma origem.
 // Rode localmente para inspecionar: npm run build && ls dist
 import { cpSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +10,7 @@ const dist = path.join(root, 'dist');
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 
-for (const entry of ['index.html', 'landing.html', 'landing.css', 'landing-offer.js', 'admin.html', 'login.html', 'reset-password.html', 'auth.js', 'renderer.js', 'admin.js', 'pix.js', 'vendor']) {
+for (const entry of ['index.html', 'landing.html', 'landing.css', 'landing-offer.js', 'admin.html', 'login.html', 'reset-password.html', 'auth.js', 'renderer.js', 'admin.js', 'teams-ui.js', 'invite.html', 'invite.js', 'pix.js', 'vendor']) {
   cpSync(path.join(root, entry), path.join(dist, entry), { recursive: true });
 }
 
@@ -19,4 +18,4 @@ let config = readFileSync(path.join(root, 'config.js'), 'utf8');
 config = config.replace('"__API_BASE__"', '""');
 writeFileSync(path.join(dist, 'config.js'), config);
 
-console.log('dist/ pronto (base da API: same-origin, via rewrites do vercel.json)');
+console.log('dist/ pronto (API na mesma origem do VPS)');

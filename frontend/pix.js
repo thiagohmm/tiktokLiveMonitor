@@ -325,6 +325,7 @@
     }
 
     async function connectWhatsApp() {
+        if (!state.canPair) return;
         const button = el('pixConnectBtn');
         if (button) button.disabled = true;
         setHint('Conectando...', 'info');
@@ -348,6 +349,7 @@
     }
 
     async function disconnectWhatsApp() {
+        if (!state.canPair) return;
         const response = await api('/api/pix/whatsapp/disconnect', { method: 'POST' });
         if (!response.ok) {
             toast('Não foi possível desconectar o WhatsApp.', 'error');
@@ -431,6 +433,7 @@
     }
 
     async function saveValues() {
+        if (!state.canPair) return;
         const button = el('pixSaveValuesBtn');
         const collected = collectValues();
         if (collected.error) {
@@ -567,7 +570,7 @@
 
     async function openTicket(ticket, readonly) {
         state.selected = ticket;
-        state.readonly = !!readonly;
+        state.readonly = !!readonly || !state.canPair;
         releaseObjectURLs();
         renderConversationHeader(ticket);
         toggle(el('pixAnswerBtn'), !state.readonly && ticket.status === 'pending');
@@ -747,7 +750,8 @@
         }
         const handler = event => {
             // O backend só entrega eventos da organização do usuário.
-            try { JSON.parse(event.data || '{}'); } catch (_) { return; }
+            let data;
+            try { data = JSON.parse(event.data || '{}'); } catch (_) { return; }
             loadTickets();
             if (typeof renderActiveModal === 'function'
                 && typeof activeModalType !== 'undefined'
@@ -773,8 +777,7 @@
             } catch (_) { /* noop */ }
             if (!shouldBeaconOnPageHide(navType)) return;
             const username = (el('username') && el('username').value.trim()) || '';
-            const payload = new Blob([JSON.stringify({ username })], { type: 'application/json' });
-            navigator.sendBeacon('/api/monitoring/beacon-disconnect', payload);
+            void window.TLMAuth.authFetch('/api/monitoring/beacon-disconnect', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username}),keepalive:true});
         });
     }
 
@@ -897,14 +900,14 @@
         if (!user) return;
         state.canPair = !!(window.TLMAuth.canManageOrg && window.TLMAuth.canManageOrg());
         bind();
-        installPageHideBeacon();
+        if (state.canPair) installPageHideBeacon();
         subscribeSSE();
         await refreshStatus(true);
         if (!state.disabled) {
             toggle(el('pixContent'), true);
             await loadTickets();
             loadValues();
-            loadQR();
+            if (state.canPair) loadQR();
         }
     }
 

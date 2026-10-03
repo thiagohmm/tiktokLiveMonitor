@@ -1,4 +1,4 @@
-// Package database provides the PostgreSQL (Supabase) implementation of the model.Repository interface.
+// Package database provides the PostgreSQL implementation of the model.Repository interface.
 package database
 
 import (

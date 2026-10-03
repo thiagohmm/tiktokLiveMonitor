@@ -29,7 +29,7 @@ Navegador HTTPS → vps-edge-nginx :443
   ├─ estáticos em /opt/vps-edge-nginx/static/livemonitortk
   └─ /api/* e /events → backend Go :3001
        → PostgreSQL Docker :5432 (dados operacionais + DB Sigmenta)
-       → Supabase Auth + REST de profiles (usuários e assinaturas)
+       → autenticação local (users, auth_sessions, auth_action_tokens no PostgreSQL)
        → WAHA / MinIO (Fila PIX, opcional via COMPOSE_PROFILES)
 ```
 
@@ -41,8 +41,9 @@ clone canônico `/opt/vps-edge-nginx`.
 WAHA/MinIO. Não publica portas no host. O Postgres também entra na rede
 `sigmenta_data` com alias `db-primary` para a API do Sigmenta.
 
-**A migração do Supabase é parcial:** Auth, usuários, senhas, claims e
-public.profiles permanecem em https://vcbvctmhwnurdnfssjfj.supabase.co.
+Usuários, autenticação e dados operacionais passam a residir no VPS. A primeira
+publicação exige a [migração de identidades](docs/auth-local.md). Preservar o
+backup e o projeto antigo durante a validação, sem fallback de autenticação.
 
 ## Configuração e persistência
 
@@ -111,4 +112,6 @@ docker compose -f docker-compose.production.yml exec -T postgres \
 ## Ambientes anteriores
 
 - Vercel/Railway são legados; ver histórico em commits anteriores.
-- Não desativar Supabase sem migrar Auth/profiles.
+- Antes do primeiro deploy local: exportar/importar identidades, validar o admin
+  e preparar os links de definição de senha. Nunca voltar automaticamente à
+  autenticação antiga após usuários começarem a alterar dados.

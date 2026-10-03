@@ -180,6 +180,10 @@ func (s *HTTPServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) handleDisconnect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, 405, "method not allowed")
+		return
+	}
 	t, ok := requestTenant(w, r)
 	if !ok {
 		return
@@ -189,6 +193,10 @@ func (s *HTTPServer) handleDisconnect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) handleClearHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, 405, "method not allowed")
+		return
+	}
 	// Destrutivo: só o dono da organização zera o histórico de moderação dela.
 	t, ok := requireOrgManager(w, r)
 	if !ok {

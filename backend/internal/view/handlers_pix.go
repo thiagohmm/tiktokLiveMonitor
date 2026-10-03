@@ -427,7 +427,7 @@ func (s *HTTPServer) handlePixValues(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleWhatsAppWebhook receives WAHA events. It is public (no Supabase token)
+// handleWhatsAppWebhook receives WAHA events. It is public (authenticated by webhook signature)
 // but fail-closed: without a valid HMAC-SHA512 signature it returns 401.
 func (s *HTTPServer) handleWhatsAppWebhook(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

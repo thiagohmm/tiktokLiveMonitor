@@ -44,6 +44,9 @@ func newTestController(t *testing.T, liveName string) *AppController {
 		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
+	if err := db.ExecSQL(`INSERT INTO organizations(id,name) VALUES(?,?) ON CONFLICT DO NOTHING`, testOrgID, "Test org"); err != nil {
+		t.Fatal(err)
+	}
 
 	mon, err := monitor.New()
 	if err != nil {

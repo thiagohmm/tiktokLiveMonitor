@@ -1,89 +1,44 @@
-// Package auth validates Supabase JWT tokens and exposes request-scoped user claims.
+// Package auth implements PostgreSQL-backed local authentication.
 package auth
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"strings"
-	"time"
-
-	"github.com/golang-jwt/jwt/v5"
 )
 
 type contextKey string
 
 const userContextKey contextKey = "authUser"
+const AccessTokenCookie = "tlm_session"
 
-const AccessTokenCookie = "tlm_access_token"
-
-// User holds authenticated identity extracted from a Supabase access token.
 type User struct {
 	ID     string `json:"id"`
 	Email  string `json:"email"`
 	Role   string `json:"role"`
 	Active bool   `json:"active"`
 }
-
-// Config controls Supabase-backed authentication for the API.
 type Config struct {
-	Enabled        bool
-	JWTSecret      string
-	SupabaseURL    string
-	SupabaseAnon   string
-	ServiceRoleKey string
-	JWTAudience    string
-	JWTIssuer      string
-	SiteURL        string
+	Enabled bool
+	SiteURL string
+	Store   *Store
 }
 
-// LoadConfigFromEnv builds auth settings from environment variables.
-// A legacy JWT secret enables local HS256 validation. Without it, access
-// tokens are validated by Supabase Auth using the configured project URL/key.
 func LoadConfigFromEnv() Config {
-	enabled := strings.TrimSpace(os.Getenv("AUTH_ENABLED")) != "0"
-	jwtSecret := strings.TrimSpace(os.Getenv("SUPABASE_JWT_SECRET"))
-	supabaseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("SUPABASE_URL")), "/")
-	supabaseAnon := strings.TrimSpace(os.Getenv("SUPABASE_ANON_KEY"))
-	if supabaseURL == "" || supabaseAnon == "" {
-		enabled = false
-	}
-
-	audience := strings.TrimSpace(os.Getenv("SUPABASE_JWT_AUD"))
-	if audience == "" {
-		audience = "authenticated"
-	}
-	issuer := strings.TrimSpace(os.Getenv("SUPABASE_JWT_ISSUER"))
-	if issuer == "" && supabaseURL != "" {
-		issuer = supabaseURL + "/auth/v1"
-	}
-	siteURL := strings.TrimRight(strings.TrimSpace(os.Getenv("SITE_URL")), "/")
-
-	return Config{
-		Enabled:        enabled,
-		JWTSecret:      jwtSecret,
-		SupabaseURL:    supabaseURL,
-		SupabaseAnon:   supabaseAnon,
-		ServiceRoleKey: strings.TrimSpace(os.Getenv("SUPABASE_SERVICE_ROLE_KEY")),
-		JWTAudience:    audience,
-		JWTIssuer:      issuer,
-		SiteURL:        siteURL,
-	}
+	return Config{Enabled: strings.TrimSpace(os.Getenv("AUTH_ENABLED")) != "0", SiteURL: strings.TrimRight(strings.TrimSpace(os.Getenv("SITE_URL")), "/")}
 }
-
-// CheckConfigFromEnv reports an auth setup that would silently disable
-// authentication: AUTH_ENABLED is not "0" but SUPABASE_URL/SUPABASE_ANON_KEY
-// are missing. Running without auth must be an explicit AUTH_ENABLED=0.
 func CheckConfigFromEnv() error {
-	if strings.TrimSpace(os.Getenv("AUTH_ENABLED")) == "0" {
+	if os.Getenv("AUTH_ENABLED") == "0" {
+		if strings.HasPrefix(os.Getenv("SITE_URL"), "https://") {
+			return errors.New("AUTH_ENABLED=0 é permitido apenas em desenvolvimento local")
+		}
 		return nil
 	}
-	if strings.TrimSpace(os.Getenv("SUPABASE_URL")) == "" || strings.TrimSpace(os.Getenv("SUPABASE_ANON_KEY")) == "" {
-		return errors.New("SUPABASE_URL e SUPABASE_ANON_KEY são obrigatórios (use AUTH_ENABLED=0 apenas em desenvolvimento local)")
+	if strings.TrimSpace(os.Getenv("DATABASE_URL")) == "" {
+		return errors.New("DATABASE_URL obrigatório para autenticação local")
 	}
 	return nil
 }
@@ -94,7 +49,7 @@ func CheckConfigFromEnv() error {
 // autenticação. Os arquivos da UI não são mais servidos pelo backend.
 func PublicPath(path string) bool {
 	if path == "/api/auth/config" || path == "/api/auth/login" || path == "/api/auth/signup" ||
-		path == "/api/auth/recover" || path == "/api/auth/reset-password" || path == "/api/readiness" ||
+		path == "/api/auth/recover" || path == "/api/auth/reset-password" || path == "/api/auth/invitations/accept" || path == "/api/readiness" ||
 		path == "/api/webhooks/whatsapp" {
 		return true
 	}
@@ -118,125 +73,6 @@ func TokenFromRequest(r *http.Request) string {
 	return ""
 }
 
-// ValidateToken parses and validates a Supabase JWT.
-func (c Config) ValidateToken(tokenString string) (*User, error) {
-	if !c.Enabled {
-		return &User{Role: "admin", Active: true}, nil
-	}
-	if tokenString == "" {
-		return nil, errors.New("token ausente")
-	}
-	if c.JWTSecret == "" {
-		return c.validateTokenRemotely(tokenString)
-	}
-
-	parseOpts := []jwt.ParserOption{
-		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
-	}
-	if c.JWTIssuer != "" {
-		parseOpts = append(parseOpts, jwt.WithIssuer(c.JWTIssuer))
-	}
-	if c.JWTAudience != "" {
-		parseOpts = append(parseOpts, jwt.WithAudience(c.JWTAudience))
-	}
-
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (any, error) {
-		if token.Method != jwt.SigningMethodHS256 {
-			return nil, fmt.Errorf("algoritmo inesperado: %v", token.Method.Alg())
-		}
-		return []byte(c.JWTSecret), nil
-	}, parseOpts...)
-	if err != nil || !token.Valid {
-		return nil, errors.New("token inválido")
-	}
-
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return nil, errors.New("claims inválidas")
-	}
-
-	sub, _ := claims["sub"].(string)
-	if sub == "" {
-		return nil, errors.New("usuário inválido")
-	}
-
-	email, _ := claims["email"].(string)
-	role := "subscriber"
-	// Contas sem a claim explícita ficam pendentes por padrão. Isso impede que
-	// um usuário criado fora do fluxo administrativo ganhe acesso por acidente.
-	active := false
-	var subscriptionExpiresAt *time.Time
-
-	if appMeta, ok := claims["app_metadata"].(map[string]any); ok {
-		if v, ok := appMeta["role"].(string); ok && v != "" {
-			role = v
-		}
-		if v, ok := appMeta["active"].(bool); ok {
-			active = v
-		}
-		if v, ok := appMeta["subscription_expires_at"].(string); ok && v != "" {
-			if parsed, err := time.Parse(time.RFC3339, v); err == nil {
-				subscriptionExpiresAt = &parsed
-			}
-		}
-	}
-
-	if role == "subscriber" && subscriptionExpiresAt != nil && time.Now().After(*subscriptionExpiresAt) {
-		return nil, errors.New("assinatura expirada")
-	}
-
-	exp, err := claims.GetExpirationTime()
-	if err == nil && exp != nil && time.Now().After(exp.Time) {
-		return nil, errors.New("token expirado")
-	}
-
-	return &User{ID: sub, Email: email, Role: role, Active: active}, nil
-}
-
-func (c Config) validateTokenRemotely(tokenString string) (*User, error) {
-	req, err := http.NewRequest(http.MethodGet, c.SupabaseURL+"/auth/v1/user", nil)
-	if err != nil {
-		return nil, errors.New("token inválido")
-	}
-	req.Header.Set("apikey", c.SupabaseAnon)
-	req.Header.Set("Authorization", "Bearer "+tokenString)
-
-	res, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
-	if err != nil {
-		return nil, errors.New("token inválido")
-	}
-	defer func() { _ = res.Body.Close() }()
-	if res.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, res.Body)
-		return nil, errors.New("token inválido")
-	}
-
-	var remoteUser struct {
-		ID          string         `json:"id"`
-		Email       string         `json:"email"`
-		AppMetadata map[string]any `json:"app_metadata"`
-	}
-	if err := json.NewDecoder(res.Body).Decode(&remoteUser); err != nil || remoteUser.ID == "" {
-		return nil, errors.New("usuário inválido")
-	}
-
-	role := "subscriber"
-	active := false
-	if value, ok := remoteUser.AppMetadata["role"].(string); ok && value != "" {
-		role = value
-	}
-	if value, ok := remoteUser.AppMetadata["active"].(bool); ok {
-		active = value
-	}
-	if value, ok := remoteUser.AppMetadata["subscription_expires_at"].(string); ok && value != "" {
-		if expiresAt, err := time.Parse(time.RFC3339, value); err == nil && role == "subscriber" && time.Now().After(expiresAt) {
-			return nil, errors.New("assinatura expirada")
-		}
-	}
-
-	return &User{ID: remoteUser.ID, Email: remoteUser.Email, Role: role, Active: active}, nil
-}
-
 // Middleware protects HTTP handlers when auth is enabled. A página /admin.html
 // não é mais servida pelo backend (a UI vive em /frontend); a restrição de
 // papel admin é aplicada nos endpoints /api/admin/* via RequireAdmin.
@@ -246,6 +82,13 @@ func (c Config) Middleware(next http.Handler) http.Handler {
 			ctx := context.WithValue(r.Context(), userContextKey, &User{Role: "admin", Active: true})
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions && r.URL.Path != "/api/webhooks/whatsapp" {
+			origin := r.Header.Get("Origin")
+			if c.SiteURL != "" && origin != c.SiteURL {
+				writeAuthError(w, http.StatusForbidden, "origem não autorizada")
+				return
+			}
 		}
 		if PublicPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
@@ -262,6 +105,12 @@ func (c Config) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+			if c.Store == nil || !c.Store.CSRF(TokenFromRequest(r), r.Header.Get("X-CSRF-Token")) {
+				writeAuthError(w, http.StatusForbidden, "token CSRF inválido")
+				return
+			}
+		}
 		ctx := context.WithValue(r.Context(), userContextKey, user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

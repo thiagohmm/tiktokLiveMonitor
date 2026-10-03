@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"database/sql"
 	"net"
 	"net/http"
 	"os"
@@ -54,6 +55,7 @@ type lockoutEntry struct {
 // LoginLockout tracks failed login attempts per email and client IP.
 // Stale entries are pruned periodically so the key set cannot grow unbounded.
 type LoginLockout struct {
+	db   *sql.DB
 	cfg  LockoutConfig
 	mu   sync.Mutex
 	keys map[string]*lockoutEntry
@@ -226,6 +228,9 @@ func (l *LoginLockout) reap(now time.Time) {
 }
 
 func (l *LoginLockout) Status(email, ip string) LockoutStatus {
+	if l.db != nil {
+		return l.persistentStatus(email, ip, false)
+	}
 	now := time.Now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -261,6 +266,9 @@ func (l *LoginLockout) Status(email, ip string) LockoutStatus {
 }
 
 func (l *LoginLockout) RecordFailure(email, ip string) LockoutStatus {
+	if l.db != nil {
+		return l.persistentStatus(email, ip, true)
+	}
 	now := time.Now()
 	key := lockoutKey(email, ip)
 
@@ -313,6 +321,14 @@ func (l *LoginLockout) RecordFailure(email, ip string) LockoutStatus {
 }
 
 func (l *LoginLockout) RecordSuccess(email, ip string) {
+	if l.db != nil {
+		ctx, cancel := dbContext()
+		defer cancel()
+		if _, err := l.db.ExecContext(ctx, `DELETE FROM auth_rate_limits WHERE key=$1`, TokenHash(lockoutKey(email, ip))); err != nil {
+			return
+		}
+		return
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.keys, lockoutKey(email, ip))

@@ -59,13 +59,13 @@ Com pelo menos um valor configurado, cada comprovante passa por um filtro:
 
 Schema: tabela `pix_value_rules` (valores em cents por organização) e coluna
 `media_value_cents` em `pix_messages` — criadas por `migratePostgres()` no boot
-(espelhadas em `supabase/migrations/006_pix_value_rules.sql`).
+.
 
 ## Regra de expurgo
 
 Os comprovantes são apagados quando o usuário:
 
-- desconecta a live (`GET /api/disconnect` / botão Desconectar), ou
+- desconecta a live (`POST /api/disconnect` / botão Desconectar), ou
 - fecha a página (`pagehide` → `POST /api/monitoring/beacon-disconnect`).
 
 O expurgo é **por organização**: acontece quando o último membro da organização
@@ -105,19 +105,16 @@ Sem essas variáveis o backend sobe normalmente e loga
 
 As tabelas ficam no PostgreSQL do compose e são criadas no boot do backend
 (`migratePostgres`), com RLS default deny nas 4 tabelas `pix_*`. Não há passo
-manual de migração. `supabase/migrations/005_pix_queue.sql` espelha o schema com
-o hardening do Supabase (REVOKE para `anon/authenticated`), que não se aplica ao
-Postgres do compose. `org_id` é `TEXT` (id de `organizations`). Bancos criados antes
+manual de migração. `org_id` é `TEXT` (id de `organizations`). Bancos criados antes
 do multi-tenant tinham `owner_user_id` (usuário): o boot renomeia a coluna e
 converte cada valor para a organização do usuário. Todo usuário sem
 organização ganha uma própria antes (1 usuário = 1 organização, ele como dono),
 tudo numa transação; linhas sem dono vão para a organização de legado, que não
 tem membros e só o admin da plataforma acessa —
-ver `supabase/migrations/007_organizations.sql`.
+ver `backend/internal/database/organizations.go` e `docs/auth-local.md`.
 
 O filtro de valores adiciona a tabela `pix_value_rules` e a coluna
-`pix_messages.media_value_cents` — também no boot (espelho em
-`supabase/migrations/006_pix_value_rules.sql`).
+`pix_messages.media_value_cents` — também no boot.
 
 Em produção WAHA e MinIO não publicam portas (só rede interna do compose). Os
 volumes `waha_sessions` (pareamento) e `minio_data` (comprovantes) não entram no

@@ -1,3 +1,5 @@
+> Documento histórico anterior à autenticação local. Para o deploy atual, use [auth-local.md](auth-local.md). Scripts do provedor antigo foram retirados; não execute estas instruções de migração.
+
 # Plano: exclusão de live por ID de sessão
 
 **Objetivo:** ao clicar em "Deletar" numa linha da administração, apagar **somente

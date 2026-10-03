@@ -6,7 +6,7 @@ import { runInNewContext } from 'node:vm';
 const html = readFileSync(new URL('./reset-password.html', import.meta.url), 'utf8');
 const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]).join('\n');
 
-async function loadForm({ hash = '#access_token=test-token&type=recovery', failure } = {}) {
+async function loadForm({ hash = '#token=test-token&type=recovery', failure } = {}) {
     const elements = new Map();
     const calls = [];
     const replaceStateCalls = [];

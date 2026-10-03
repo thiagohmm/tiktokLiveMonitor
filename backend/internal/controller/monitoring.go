@@ -118,7 +118,7 @@ func (s *MonitorAttachmentStore) OrgWatchers(orgID string) int {
 // AttachMonitoring registers the user as a watcher of the organization's live
 // and starts the organization's monitor when this is the first watcher.
 func (c *AppController) AttachMonitoring(ctx context.Context, orgID, userID, username string) error {
-	username = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	username = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(username), "@")))
 	if username == "" {
 		return fmt.Errorf("username is required")
 	}
@@ -128,6 +128,13 @@ func (c *AppController) AttachMonitoring(ctx context.Context, orgID, userID, use
 		return fmt.Errorf("organization and user are required")
 	}
 
+	if validator, ok := c.repo.(interface {
+		CheckAllowedLive(context.Context, string, string) error
+	}); ok {
+		if err := validator.CheckAllowedLive(ctx, orgID, username); err != nil {
+			return err
+		}
+	}
 	if watchers := c.attachments.Attach(orgID, userID, username); watchers > 1 {
 		// Another member of the organization already runs this live.
 		return nil
@@ -146,7 +153,7 @@ func (c *AppController) AttachMonitoring(ctx context.Context, orgID, userID, use
 func (c *AppController) DetachMonitoring(orgID, userID, username string) []string {
 	orgID = strings.TrimSpace(orgID)
 	userID = strings.TrimSpace(userID)
-	username = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	username = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(username), "@")))
 	if orgID == "" || userID == "" {
 		return nil
 	}

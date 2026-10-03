@@ -6,8 +6,6 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/auth"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
@@ -15,13 +13,8 @@ import (
 )
 
 // localDevUser is the synthetic user used only when auth is disabled
-// (docker-compose dev without Supabase). It belongs to the default organization.
+// (docker-compose local development). It belongs to the default organization.
 const localDevUser = "local-dev"
-
-// tenantCacheTTL bounds how long a membership (or its absence) is reused. An
-// admin change invalidates the entry right away; the TTL only covers changes
-// made directly in the database.
-const tenantCacheTTL = 30 * time.Second
 
 const (
 	msgNoOrganization  = "Sua conta não está vinculada a nenhuma organização. Peça ao administrador para adicioná-la."
@@ -31,33 +24,16 @@ const (
 	errCodeOrgDisabled = "organization_disabled"
 )
 
-type tenantEntry struct {
-	t       tenant.Tenant
-	code    string
-	expires time.Time
-}
-
-// tenantResolver maps authenticated users to their organization.
-type tenantResolver struct {
-	repo  model.OrganizationRepository
-	mu    sync.Mutex
-	cache map[string]tenantEntry
-}
+// tenantResolver always reads current membership and organization state.
+type tenantResolver struct{ repo model.OrganizationRepository }
 
 func newTenantResolver(repo model.OrganizationRepository) *tenantResolver {
-	return &tenantResolver{repo: repo, cache: make(map[string]tenantEntry)}
+	return &tenantResolver{repo: repo}
 }
 
 // resolve returns the tenant of user, or an error code (no_organization /
 // organization_disabled) when the user cannot act inside any organization.
 func (tr *tenantResolver) resolve(user *auth.User) (tenant.Tenant, string, error) {
-	now := time.Now()
-	tr.mu.Lock()
-	if e, ok := tr.cache[user.ID]; ok && now.Before(e.expires) {
-		tr.mu.Unlock()
-		return e.t, e.code, nil
-	}
-	tr.mu.Unlock()
 
 	t := tenant.Tenant{UserID: user.ID, Email: user.Email, PlatformAdmin: user.Role == "admin"}
 	code := ""
@@ -88,25 +64,11 @@ func (tr *tenantResolver) resolve(user *auth.User) (tenant.Tenant, string, error
 		}
 	}
 
-	tr.mu.Lock()
-	if len(tr.cache) > 10000 {
-		tr.cache = make(map[string]tenantEntry)
-	}
-	tr.cache[user.ID] = tenantEntry{t: t, code: code, expires: now.Add(tenantCacheTTL)}
-	tr.mu.Unlock()
 	return t, code, nil
 }
 
-// invalidate drops cached memberships (all of them when userID is empty).
-func (tr *tenantResolver) invalidate(userID string) {
-	tr.mu.Lock()
-	defer tr.mu.Unlock()
-	if userID == "" {
-		tr.cache = make(map[string]tenantEntry)
-		return
-	}
-	delete(tr.cache, userID)
-}
+// invalidate is retained for callers; authorization is no longer cached.
+func (tr *tenantResolver) invalidate(userID string) {}
 
 // tenantExempt lists authenticated paths that work without an organization:
 // the session endpoints (the UI must be able to explain the missing
@@ -161,6 +123,17 @@ func (s *HTTPServer) tenantMiddleware(next http.Handler) http.Handler {
 		if t.OrgID != "" {
 			r = r.WithContext(tenant.With(r.Context(), t))
 		}
+
+		if !tenantExempt(r.URL.Path) && !t.PlatformAdmin && s.teams != nil {
+			if err := s.teams.Access(r.Context(), t.OrgID, t.UserID); err != nil {
+				writeJSONErrorCode(w, 403, "seat_suspended", err.Error())
+				return
+			}
+		}
+		if !t.CanManageOrg() && !operatorReadPath(r.Method, r.URL.Path) {
+			writeError(w, 403, "membros ajudantes possuem acesso somente de leitura")
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -188,4 +161,30 @@ func requireOrgManager(w http.ResponseWriter, r *http.Request) (tenant.Tenant, b
 		return tenant.Tenant{}, false
 	}
 	return t, true
+}
+
+// operatorReadPath grants only explicit observational endpoints and identity operations.
+func operatorReadPath(method, path string) bool {
+	if strings.HasPrefix(path, "/api/auth/") {
+		return true
+	}
+	if method != http.MethodGet && method != http.MethodHead {
+		return false
+	}
+	if strings.HasPrefix(path, "/api/pix/media/") || strings.HasPrefix(path, "/api/pix/contacts/") {
+		return true
+	}
+	if strings.HasPrefix(path, "/api/pix/tickets/") {
+		return true
+	}
+	switch path {
+	case "/events", "/api/state", "/api/lives", "/api/settings", "/api/history", "/api/gifts", "/api/available-gifts", "/api/target-gift-history", "/api/pinned-comments", "/api/ranking", "/api/report", "/api/profile", "/api/goals", "/api/pix/tickets", "/api/pix/values", "/api/pix/whatsapp/status", "/api/org/allowed-lives":
+		return true
+	}
+	return false
+}
+func writeJSONErrorCode(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"code": code, "error": message})
 }

@@ -1,0 +1,19 @@
+package auth
+
+import (
+	"database/sql"
+	"errors"
+	"log"
+)
+
+// rollback ignores only the expected result after a transaction has committed.
+func rollback(tx *sql.Tx) {
+	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+		log.Printf("[auth] rollback failed: %v", err)
+	}
+}
+func closeRows(rows *sql.Rows) {
+	if err := rows.Close(); err != nil {
+		log.Printf("[auth] close rows: %v", err)
+	}
+}

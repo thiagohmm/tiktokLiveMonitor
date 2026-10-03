@@ -1,7 +1,7 @@
 # Multi-stage build: API Go do TikTok Live Monitor (lite, sem IA)
 # Multi-arch: linux/amd64 (servidores) e linux/arm64 (Raspberry Pi 4 64-bit, Mac Apple Silicon).
 #
-# A UI está separada em /frontend (nginx/Vercel) e consome esta API via
+# A UI está separada em /frontend (nginx do VPS) e consome esta API via
 # /api/* e /events.
 #
 #   Build nativo (na Pi, no Mac, ou num servidor):
@@ -30,6 +30,7 @@ RUN if [ "$SKIP_TESTS" = "1" ]; then echo "SKIP_TESTS=1: pulando testes"; \
 
 # Sem CGO desde a migração para PostgreSQL (pgx puro Go): cross-build rápido.
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -o /tiktok-live-monitor .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -o /import-identities ./cmd/import-identities
 
 # Stage 2: Minimal runtime (multi-arch). Sem Python/llama/GGUF: apenas a API
 # Go + a bridge Node (tiktok-live-connector).
@@ -48,6 +49,7 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY --from=builder /tiktok-live-monitor /app/tiktok-live-monitor
+COPY --from=builder /import-identities /app/import-identities
 COPY internal/monitor/ ./internal/monitor/
 COPY package.json package-lock.json ./
 COPY patches/ ./patches/

@@ -10,11 +10,6 @@ import (
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 )
 
-// testRef builds a live reference for tests that do not need a real session row.
-func testRef(name string) model.LiveRef {
-	return model.LiveRef{ID: name + "-session", Name: name}
-}
-
 func TestNormalizeID(t *testing.T) {
 	tests := []struct {
 		input    string

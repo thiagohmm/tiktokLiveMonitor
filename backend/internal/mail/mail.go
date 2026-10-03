@@ -152,6 +152,19 @@ type resendEmailRequest struct {
 	Text    string   `json:"text"`
 }
 
+// SendInvitation delivers a tenant-scoped invitation without sharing a password.
+func (m *Mailer) SendInvitation(to, organization, link string) error {
+	if !m.Enabled() {
+		return fmt.Errorf("envio de e-mail indisponível")
+	}
+	body := "Você recebeu um convite para a organização " + organization + ".\n\nAceite em até sete dias:\n" + link + "\n\nSeu acesso inicial será somente de leitura."
+	subject := "Convite — TikTok Live Monitor"
+	if m.cfg.ResendAPIKey != "" {
+		return m.sendResend(to, subject, body)
+	}
+	return m.send(to, buildMessage(m.cfg.From, to, subject, body))
+}
+
 // sendResend envia o e-mail pela API HTTPS do Resend.
 func (m *Mailer) sendResend(to, subject, body string) error {
 	payload, err := json.Marshal(resendEmailRequest{

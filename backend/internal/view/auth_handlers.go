@@ -19,9 +19,9 @@ func (s *HTTPServer) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	lockout := s.lockout.Config()
 	writeJSON(w, map[string]any{
-		"enabled":          s.auth.Enabled,
-		"supabaseUrl":      s.auth.SupabaseURL,
-		"supabaseAnonKey":  s.auth.SupabaseAnon,
+		"enabled":  s.auth.Enabled,
+		"provider": "local",
+
 		"maxLoginAttempts": lockout.MaxAttempts,
 		"lockoutMinutes":   int(lockout.Lockout.Minutes()),
 		"theme": map[string]string{
@@ -84,6 +84,17 @@ func (s *HTTPServer) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 
 		session, err := s.auth.SignInWithPassword(email, body.Password)
 		if err != nil {
+			if s.auth.Store != nil {
+				if link, ok := s.auth.Store.ActivationRedirectIfLegacyPassword(email, body.Password, s.auth.SiteURL); ok {
+					s.lockout.RecordSuccess(email, ip)
+					writeJSON(w, map[string]any{
+						"needsActivation": true,
+						"redirectTo":      link,
+						"message":         "Conta migrada: defina uma nova senha para continuar.",
+					})
+					return
+				}
+			}
 			failStatus := s.lockout.RecordFailure(email, ip)
 			payload := map[string]any{
 				"error":             err.Error(),
@@ -126,17 +137,10 @@ func (s *HTTPServer) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 			Path:     "/",
 			MaxAge:   session.ExpiresIn,
 			HttpOnly: true,
-			Secure:   r.TLS != nil,
-			SameSite: http.SameSiteStrictMode,
+			Secure:   strings.HasPrefix(s.auth.SiteURL, "https://") || r.TLS != nil,
+			SameSite: http.SameSiteLaxMode,
 		})
-		writeJSON(w, map[string]any{
-			"session": map[string]any{
-				"access_token":  session.AccessToken,
-				"refresh_token": session.RefreshToken,
-				"expires_in":    session.ExpiresIn,
-				"token_type":    session.TokenType,
-			},
-		})
+		writeJSON(w, map[string]any{"authenticated": true, "csrfToken": session.CSRFToken})
 		return
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -184,7 +188,7 @@ func (s *HTTPServer) handleAuthSignup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		msg := err.Error()
-		if strings.Contains(strings.ToLower(msg), "supabase") {
+		if errors.Is(err, auth.ErrAuthUnavailable) {
 			writeError(w, http.StatusBadGateway, "não foi possível concluir o cadastro")
 			return
 		}
@@ -318,9 +322,9 @@ func (s *HTTPServer) handleAuthResetPassword(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	password := strings.TrimSpace(body.Password)
-	if len(password) < 8 {
-		writeError(w, http.StatusBadRequest, "senha deve ter pelo menos 8 caracteres")
+	password := body.Password
+	if err := auth.ValidatePassword(password); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -361,8 +365,8 @@ func (s *HTTPServer) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
-		SameSite: http.SameSiteStrictMode,
+		Secure:   strings.HasPrefix(s.auth.SiteURL, "https://") || r.TLS != nil,
+		SameSite: http.SameSiteLaxMode,
 	})
 
 	writeJSON(w, map[string]bool{"success": true})
@@ -387,7 +391,17 @@ func (s *HTTPServer) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	csrf := ""
+	var err error
+	if s.auth.Enabled {
+		csrf, err = s.auth.Store.RotateCSRF(auth.TokenFromRequest(r))
+	}
+	if s.auth.Enabled && err != nil {
+		writeError(w, 401, "sessão inválida")
+		return
+	}
 	resp := map[string]any{
+		"csrfToken":     csrf,
 		"authenticated": true,
 		"authEnabled":   s.auth.Enabled,
 		"id":            user.ID,
@@ -402,6 +416,15 @@ func (s *HTTPServer) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 			resp["orgRole"] = t.Role
 			resp["canManageOrg"] = t.OrgID != "" && t.CanManageOrg()
 			resp["platformAdmin"] = t.PlatformAdmin
+			if !t.PlatformAdmin && t.OrgID != "" && s.teams != nil {
+				if err := s.teams.Access(r.Context(), t.OrgID, t.UserID); err != nil {
+					resp["orgError"] = "seat_suspended"
+					resp["canManageOrg"] = false
+					resp["seatStatus"] = "suspended"
+				} else {
+					resp["seatStatus"] = "active"
+				}
+			}
 			if code != "" {
 				resp["orgError"] = code
 			}
@@ -433,7 +456,7 @@ func (s *HTTPServer) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.admin == nil {
-		writeError(w, http.StatusServiceUnavailable, "supabase admin não configurado")
+		writeError(w, http.StatusServiceUnavailable, "cadastro local indisponível")
 		return
 	}
 
@@ -481,19 +504,9 @@ func (s *HTTPServer) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid body")
 			return
 		}
-		if strings.TrimSpace(body.OrgID) != "" {
-			role := body.OrgRole
-			if role == "" {
-				role = model.OrgRoleOperator
-			}
-			if !model.ValidOrgRole(role) {
-				writeError(w, http.StatusBadRequest, "papel inválido (use owner ou operator)")
-				return
-			}
-			if _, err := s.controller.Repository().GetOrganization(body.OrgID); err != nil {
-				writeOrgError(w, r, err)
-				return
-			}
+		if body.OrgID != "" {
+			writeError(w, 410, "adicione membros por convite; crie o dono pela organização")
+			return
 		}
 		user, err := s.admin.CreateSubscriber(body.CreateSubscriberRequest)
 		if err != nil {
@@ -527,7 +540,7 @@ func (s *HTTPServer) handleAdminUsersUpdate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if s.admin == nil {
-		writeError(w, http.StatusServiceUnavailable, "supabase admin não configurado")
+		writeError(w, http.StatusServiceUnavailable, "cadastro local indisponível")
 		return
 	}
 	if r.Method != http.MethodPatch && r.Method != http.MethodPut {
@@ -567,7 +580,7 @@ func (s *HTTPServer) handleAdminUsersDelete(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if s.admin == nil {
-		writeError(w, http.StatusServiceUnavailable, "supabase admin não configurado")
+		writeError(w, http.StatusServiceUnavailable, "cadastro local indisponível")
 		return
 	}
 	if r.Method != http.MethodDelete && r.Method != http.MethodPost {
@@ -583,6 +596,23 @@ func (s *HTTPServer) handleAdminUsersDelete(w http.ResponseWriter, r *http.Reque
 	if id == adminUser.ID {
 		writeError(w, http.StatusForbidden, "não é possível remover sua própria conta administrativa")
 		return
+	}
+	if member, err := s.controller.Repository().GetMembership(id); err == nil {
+		summary, err := s.teams.Summary(r.Context(), member.OrgID)
+		if err != nil {
+			writeInternalError(w, r, err)
+			return
+		}
+		if summary.PrimaryOwner == id {
+			writeError(w, 409, "transfira o dono principal antes de desativar a conta")
+			return
+		}
+		if err := s.teams.Revoke(r.Context(), member.OrgID, adminUser.ID, id); err != nil {
+			writeTeamError(w, r, err)
+			return
+		}
+		s.kickSSE("", id)
+		s.tenants.invalidate(id)
 	}
 	if err := s.admin.DeleteSubscriber(id); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

@@ -19,13 +19,12 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.SetPrefix("[tiktok-live-monitor] ")
 
-	// Fail closed: with AUTH_ENABLED on but Supabase unset, auth would be
-	// silently off and every request would act as platform admin.
+	// Production authentication is local and fails closed without its database.
 	if err := auth.CheckConfigFromEnv(); err != nil {
 		log.Fatalf("Configuração de autenticação inválida: %v", err)
 	}
 
-	// Model layer: open the PostgreSQL (Supabase) repository.
+	// Model layer: open the PostgreSQL repository.
 	repo, err := database.OpenFromEnv()
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)

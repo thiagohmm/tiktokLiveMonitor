@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aceitar convite</title>
+<style>body{font:16px system-ui;background:#101322;color:#eef;padding:32px}main{max-width:440px;margin:auto}label,input,button{display:block;margin:12px 0}input{box-sizing:border-box;width:100%;padding:12px}button{padding:12px;cursor:pointer}a{color:#7df}</style></head>
+<body><main><h1>Convite para uma organização</h1><p>Você entrará como ajudante, com acesso somente de leitura.</p>
+<p id="identity"></p><form id="inviteForm"><label>Seu nome<input id="inviteName" maxlength="100"></label><label id="passwordLabel">Senha para conta nova<input id="invitePassword" type="password" minlength="12" maxlength="128" autocomplete="new-password"></label><button>Aceitar convite</button></form>
+<p>Já tem uma conta? <a href="/login.html?next=%2Finvite.html">Entre com o e-mail que recebeu o convite</a>. Se necessário, redefina sua senha no login.</p><p id="result" role="status"></p></main>
+<script src="/config.js"></script><script src="/auth.js"></script><script src="/invite.js"></script></body></html>

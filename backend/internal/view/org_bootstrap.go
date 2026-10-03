@@ -1,56 +1,17 @@
 package view
 
 import (
-	"log"
+	"context"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/teams"
 	"strings"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/auth"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 )
 
-// orgBootstrapMarker is the settings key recording that the one-time account
-// bootstrap already ran.
-const orgBootstrapMarker = "migration:org_bootstrap_v1"
-
-// bootstrapMemberships runs once after the multi-tenant upgrade: every
-// Supabase account (except platform admins) without a membership gets its own
-// organization with itself as owner. Accounts never share an organization
-// by default, so no customer sees another customer's data; the platform admin
-// can later merge people into a team. Accounts live in Supabase (profiles),
-// so this cannot be done by the SQL migration of the operational database.
-func (s *HTTPServer) bootstrapMemberships() {
-	if s.admin == nil || !s.auth.Enabled || s.auth.ServiceRoleKey == "" {
-		return
-	}
-	repo := s.controller.Repository()
-	if done, err := repo.GetSetting(orgBootstrapMarker); err == nil && done != "" {
-		return
-	}
-	users, err := s.admin.ListSubscribers()
-	if err != nil {
-		log.Printf("[View] organizations bootstrap: list accounts: %v", err)
-		return
-	}
-	created, failed := 0, 0
-	for _, u := range users {
-		ok, err := s.ensureOwnOrganization(u)
-		if err != nil {
-			log.Printf("[View] organizations bootstrap: %s: %v", u.ID, err)
-			failed++
-			continue
-		}
-		if ok {
-			created++
-		}
-	}
-	s.tenants.invalidate("")
-	if failed == 0 {
-		if err := repo.SetSetting(orgBootstrapMarker, "done"); err != nil {
-			log.Printf("[View] organizations bootstrap: marker: %v", err)
-		}
-	}
-	log.Printf("[View] organizations bootstrap: %d organizações criadas (%d falhas)", created, failed)
-}
+// bootstrapMemberships is intentionally a no-op: identities and memberships are
+// imported or assigned explicitly. Restarting must never restore revoked access.
+func (s *HTTPServer) bootstrapMemberships() {}
 
 // ensureOwnOrganization gives a non-admin account without membership its own
 // organization. Accounts that already have one only get their e-mail filled.
@@ -59,6 +20,15 @@ func (s *HTTPServer) ensureOwnOrganization(u auth.SubscriberProfile) (bool, erro
 		return false, nil
 	}
 	repo := s.controller.Repository()
+	if local, ok := s.admin.(*auth.Store); ok {
+		revoked, err := local.WasOrganizationRevoked(u.ID)
+		if err != nil {
+			return false, err
+		}
+		if revoked {
+			return false, nil
+		}
+	}
 	if m, err := repo.GetMembership(u.ID); err == nil {
 		if m.Email == "" && u.Email != "" {
 			_, err = repo.UpsertOrgMember(m.OrgID, m.UserID, u.Email, m.Role)
@@ -71,6 +41,11 @@ func (s *HTTPServer) ensureOwnOrganization(u auth.SubscriberProfile) (bool, erro
 	}
 	if _, err := repo.UpsertOrgMember(org.ID, u.ID, u.Email, model.OrgRoleOwner); err != nil {
 		return false, err
+	}
+	if s.teams != nil {
+		if err := s.teams.Allocate(context.Background(), org.ID, u.ID, teams.Allocation{PrimaryOwner: u.ID}, true); err != nil {
+			return false, err
+		}
 	}
 	return true, nil
 }

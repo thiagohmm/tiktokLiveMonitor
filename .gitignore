@@ -65,3 +65,7 @@ feedback.db
 /backend/tiktokmonitor
 /main
 /tiktokmonitor
+
+# Private identity migration artifacts
+/activation-links*.tsv
+/users-export*.json

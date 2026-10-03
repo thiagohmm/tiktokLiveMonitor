@@ -256,8 +256,7 @@ type LiveRef struct {
 
 // --- Organizations (tenants) ---
 
-// Organization member roles. The platform admin role lives in the Supabase
-// app_metadata and is independent from the role inside an organization.
+// Organization member roles. The platform admin role lives in the local users table and is independent from the role inside an organization.
 const (
 	OrgRoleOwner    = "owner"
 	OrgRoleOperator = "operator"
@@ -285,7 +284,7 @@ type Organization struct {
 	Members   int    `json:"members"`
 }
 
-// OrgMember links one Supabase user to exactly one organization.
+// OrgMember links one local user to exactly one organization.
 type OrgMember struct {
 	OrgID     string `json:"orgId"`
 	UserID    string `json:"userId"`

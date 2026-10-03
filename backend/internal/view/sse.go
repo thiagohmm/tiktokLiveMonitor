@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/auth"
 	"log"
 	"net/http"
 	"os"
@@ -35,13 +36,14 @@ type sseClient struct {
 	// receives that organization's events.
 	orgID string
 	// userID lets a removed member be disconnected right away.
-	userID   string
-	w        http.ResponseWriter
-	flusher  http.Flusher
-	ch       chan []byte
-	done     chan struct{}
-	error    chan struct{}
-	doneOnce sync.Once
+	authorize func() bool
+	userID    string
+	w         http.ResponseWriter
+	flusher   http.Flusher
+	ch        chan []byte
+	done      chan struct{}
+	error     chan struct{}
+	doneOnce  sync.Once
 }
 
 func newSSEClient(orgID string, w http.ResponseWriter, flusher http.Flusher) *sseClient {
@@ -68,6 +70,9 @@ func (c *sseClient) finish() {
 }
 
 func (c *sseClient) write(msg []byte) error {
+	if c.authorize != nil && !c.authorize() {
+		return fmt.Errorf("acesso encerrado")
+	}
 	rc := http.NewResponseController(c.w)
 	_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
 	if _, err := c.w.Write(msg); err != nil {
@@ -157,6 +162,23 @@ func (s *HTTPServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 	client := newSSEClient(t.OrgID, w, flusher)
 	client.userID = t.UserID
+	if s.auth.Enabled {
+		token := auth.TokenFromRequest(r)
+		client.authorize = func() bool {
+			u, err := s.auth.ValidateToken(token)
+			if err != nil || !u.Active {
+				return false
+			}
+			resolved, code, err := s.tenants.resolve(u)
+			if err != nil || code != "" || resolved.OrgID != t.OrgID {
+				return false
+			}
+			if u.Role == "admin" {
+				return true
+			}
+			return s.teams.Access(r.Context(), t.OrgID, u.ID) == nil
+		}
+	}
 
 	// Teto de clientes SSE simultâneos (proteção contra esgotamento de
 	// conexões): acima do limite, novos clientes recebem 503 e podem

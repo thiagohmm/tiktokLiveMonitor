@@ -16,7 +16,7 @@ import (
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 )
 
-// OpenPostgres connects to a PostgreSQL database (Supabase) using DATABASE_URL.
+// OpenPostgres connects to a PostgreSQL database on the VPS using DATABASE_URL.
 func OpenPostgres(dsn string) (*DB, error) {
 	conn, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -24,7 +24,7 @@ func OpenPostgres(dsn string) (*DB, error) {
 	}
 	conn.SetMaxOpenConns(maxConns())
 	conn.SetMaxIdleConns(maxConns())
-	// Recicla conexões antigas: provedores em nuvem (Supabase/PgBouncer)
+	// Recicla conexões antigas: provedores em nuvem (provedor anterior/PgBouncer)
 	// derrubam conexões ociosas; pool com conexões mortas causa erros
 	// intermitentes ("connection closed") sob carga alta.
 	conn.SetConnMaxLifetime(30 * time.Minute)
@@ -53,7 +53,7 @@ func maxConns() int {
 func OpenFromEnv() (*DB, error) {
 	dsn := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if dsn == "" {
-		return nil, fmt.Errorf("DATABASE_URL não definido (o backend exige PostgreSQL/Supabase)")
+		return nil, fmt.Errorf("DATABASE_URL não definido (o backend exige PostgreSQL)")
 	}
 	return OpenPostgres(dsn)
 }
@@ -156,8 +156,8 @@ func (db *DB) migratePostgres() error {
 			value TEXT NOT NULL
 		)`,
 		// ── Organizações (tenants) ───────────────────────────────────────
-		// user_id é TEXT (UUID do Supabase Auth) sem FK para auth.users: o
-		// Postgres local do compose não tem o schema auth do Supabase. Cada
+		// user_id é TEXT (ID preservado da identidade) sem FK para identidades históricas: o
+		// Postgres local tem identidades próprias. Cada
 		// usuário pertence a exatamente uma organização (PK user_id).
 		`CREATE TABLE IF NOT EXISTS organizations (
 			id         TEXT PRIMARY KEY,
@@ -263,7 +263,7 @@ func (db *DB) migratePostgres() error {
 		)`,
 		// Sessões de live (uma por conexão de monitor). O delete da administração
 		// apaga por live_sessions.id — live_name é o username do streamer e não
-		// identifica uma sessão. Idempotente; espelha supabase/migrations/004
+		// identifica uma sessão. A migração é idempotente.
 		// (o REVOKE de anon/authenticated fica só lá: bancos de teste não têm
 		// esses papéis).
 		`CREATE TABLE IF NOT EXISTS live_sessions (
@@ -294,13 +294,13 @@ func (db *DB) migratePostgres() error {
 		`ALTER TABLE gift_goals           ADD COLUMN IF NOT EXISTS live_id TEXT`,
 		`ALTER TABLE room_like_totals     ADD COLUMN IF NOT EXISTS live_id TEXT`,
 		// Fila de presentes alvos: prioridade ("fura fila") + momento da
-		// promoção. Idempotente; espelha supabase/migrations/003.
+		// promoção. Idempotente; espelha migração de prioridade.
 		`ALTER TABLE target_gift_history ADD COLUMN IF NOT EXISTS is_priority BOOLEAN NOT NULL DEFAULT FALSE`,
 		`ALTER TABLE target_gift_history ADD COLUMN IF NOT EXISTS priority_at TIMESTAMPTZ`,
 		// RLS (default deny) nas tabelas operacionais: o frontend nunca as
 		// consulta diretamente (todo dado passa pela API Go) e o backend
-		// conecta como superusuário/BYPASSRLS (pooler Supabase = postgres),
-		// que ignora RLS. Idempotente; espelha supabase/migrations/002.
+		// conecta como superusuário/BYPASSRLS (usuário operacional tlm),
+		// que ignora RLS. Idempotente; espelha migração operacional.
 		`ALTER TABLE false_positives      ENABLE ROW LEVEL SECURITY`,
 		`ALTER TABLE anomaly_logs         ENABLE ROW LEVEL SECURITY`,
 		`ALTER TABLE gifts                ENABLE ROW LEVEL SECURITY`,
@@ -313,7 +313,7 @@ func (db *DB) migratePostgres() error {
 		`ALTER TABLE pinned_comments      ENABLE ROW LEVEL SECURITY`,
 		`ALTER TABLE settings             ENABLE ROW LEVEL SECURITY`,
 		// Fila PIX: RLS default deny (sem políticas de cliente), espelhando
-		// supabase/migrations/005_pix_queue.sql.
+		// migração PIX.
 		`ALTER TABLE pix_whatsapp_sessions ENABLE ROW LEVEL SECURITY`,
 		`ALTER TABLE pix_contacts          ENABLE ROW LEVEL SECURITY`,
 		`ALTER TABLE pix_tickets           ENABLE ROW LEVEL SECURITY`,
@@ -333,6 +333,9 @@ func (db *DB) migratePostgres() error {
 		if _, err := db.conn.Exec(s); err != nil {
 			return fmt.Errorf("exec migration: %w", err)
 		}
+	}
+	if err := db.migrateLocalIdentity(); err != nil {
+		return fmt.Errorf("local identity migration: %w", err)
 	}
 	if err := db.migrateLiveSessions(); err != nil {
 		return err

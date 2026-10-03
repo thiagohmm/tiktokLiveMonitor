@@ -3431,6 +3431,7 @@ function renderTargetGifts() {
                 }
                 const tagBtn = document.createElement('button');
                 tagBtn.type = 'button';
+                tagBtn.classList.add('owner-control');
                 tagBtn.className = 'chip-tag-btn';
                 tagBtn.textContent = '🏷';
                 tagBtn.setAttribute('aria-label', `Editar tag de ${giftName}`);
@@ -3442,6 +3443,7 @@ function renderTargetGifts() {
                 span.appendChild(tagBtn);
                 const btn = document.createElement('button');
                 btn.type = 'button';
+                btn.classList.add('owner-control');
                 btn.textContent = '×';
                 btn.setAttribute('aria-label', `Remover ${giftName}`);
                 btn.addEventListener('click', (e) => {
@@ -3884,12 +3886,12 @@ function buildGoalCard(progress) {
     actions.className = 'goal-active-actions';
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'small-btn';
-    cancelBtn.type = 'button';
+    cancelBtn.type = 'button';cancelBtn.classList.add('owner-control');
     cancelBtn.textContent = 'Cancelar';
     cancelBtn.addEventListener('click', e => { e.stopPropagation(); cancelGoal(goal.id); });
     const completeBtn = document.createElement('button');
-    completeBtn.className = 'small-btn';
-    completeBtn.type = 'button';
+    completeBtn.className = 'small-btn owner-control';
+    completeBtn.type = 'button';completeBtn.classList.add('owner-control');
     completeBtn.textContent = 'Concluir';
     completeBtn.addEventListener('click', e => { e.stopPropagation(); completeGoal(goal.id); });
     actions.append(cancelBtn, completeBtn);
@@ -4258,7 +4260,7 @@ async function deleteAdminUser(user) {
 
 // Ajusta a interface conforme sessão e papel (admin) do usuário.
 function setupAuthUI(user) {
-    if (window.TLMAuth && window.TLMAuth.getAccessToken()) {
+    if (window.TLMAuth && window.TLMAuth.getUser()) {
         if (authUserBar) authUserBar.style.display = 'flex';
         if (authUserEmail) {
             const email = user?.email || 'Usuário';
@@ -4444,8 +4446,11 @@ if (adminLivesMoreBtn) {
 // Inicializa a aplicação (auth, gráfico, estado inicial, SSE e admin).
 async function bootstrap() {
     const user = await window.TLMAuth.requireSession();
+    if (!user) return;
     window.fetch = (input, init) => window.TLMAuth.authFetch(input, init);
     setupAuthUI(user);
+    document.documentElement.classList.toggle("read-only", !user.canManageOrg && !user.platformAdmin);
+    await loadAllowedLiveChoices();
 
     renderTargetGifts();
 
@@ -4663,3 +4668,12 @@ function initSearchableSelects() {
 }
 
 initSearchableSelects();
+
+async function loadAllowedLiveChoices() {
+ const response = await fetch('/api/org/allowed-lives');
+ if (!response.ok) return;
+ const data=await response.json();
+ const choices=document.createElement('datalist');choices.id='authorizedLives';
+ (data.lives||[]).filter(l=>l.active).forEach(l=>{const option=document.createElement('option');option.value=l.username;choices.appendChild(option)});
+ document.body.appendChild(choices);usernameInput.setAttribute('list','authorizedLives');
+}

@@ -181,9 +181,9 @@ controller → `writeJSON`.
 
 | Handler | Descrição |
 |---|---|
-| `handleAuthConfig` | GET (público): `enabled`, `supabaseUrl`, `supabaseAnonKey`, limites de lockout e cores do tema. |
-| `handleAuthLogin` | GET (público): resposta **genérica** de lockout (anti-enumeração). POST: aplica lockout, `SignInWithPassword`, `ValidateToken`, exige `Active` (403 se pendente), grava cookie HttpOnly `tlm_access_token` e devolve sessão. |
-| `handleAuthSignup` | POST (público): rate-limit por IP (`SignupLockoutIdentity`), valida body (`auth.SignUpRequest`), `admin.SignUpPending` → 201 `{pending:true}`. Erros: 409 duplicado, 502 problema Supabase, 429 bloqueado. |
+| `handleAuthConfig` | GET (público): `enabled`, limites de lockout e cores do tema. |
+| `handleAuthLogin` | GET (público): resposta genérica de lockout. POST: valida senha Argon2id local e conta ativa, grava cookie HttpOnly `tlm_session` e devolve o token CSRF. |
+| `handleAuthSignup` | POST (público): rate-limit por IP, cria conta local pendente de aprovação → 201 `{pending:true}`. |
 | `handleAuthLogout` | POST: `SignOutGlobal` + limpa cookie. |
 | `handleAuthMe` | GET: retorna usuário do contexto + perfil (via `admin.GetProfileByID` quando disponível). Auth off → `{authenticated:false, authEnabled:false}`. |
 

@@ -94,6 +94,14 @@ func (c *AppController) StartMonitoring(ctx context.Context, orgID, username str
 	if orgID == "" {
 		return model.ErrOrgRequired
 	}
+	username = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	if validator, ok := c.repo.(interface {
+		CheckAllowedLive(context.Context, string, string) error
+	}); ok {
+		if err := validator.CheckAllowedLive(ctx, orgID, username); err != nil {
+			return err
+		}
+	}
 	maxLives := 0
 	org, err := c.repo.GetOrganization(orgID)
 	switch {
@@ -117,6 +125,21 @@ func (c *AppController) StopMonitoring() {
 // username is empty).
 func (c *AppController) StopMonitoringLive(orgID, username string) {
 	c.monitorManager.StopMonitoring(orgID, username)
+}
+
+// EnforceAllowedLives stops monitors that became unauthorized after regularization.
+func (c *AppController) EnforceAllowedLives(ctx context.Context, orgID string) {
+	validator, ok := c.repo.(interface {
+		CheckAllowedLive(context.Context, string, string) error
+	})
+	if !ok {
+		return
+	}
+	for _, live := range c.GetLiveStates(orgID) {
+		if err := validator.CheckAllowedLive(ctx, orgID, live.Live); err != nil {
+			c.StopMonitoringLive(orgID, live.Live)
+		}
+	}
 }
 
 // GetLiveStates returns the state of every live monitored by the organization.

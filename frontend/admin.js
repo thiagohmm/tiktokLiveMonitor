@@ -12,7 +12,7 @@
     // A organização de legado não aceita membros (só o admin da plataforma a vê).
     const LEGACY_ORG_ID = '00000000-0000-0000-0000-000000000001';
     const assignableOrgs = () => organizations.filter(org => org.id !== LEGACY_ORG_ID);
-    const ROLE_LABELS = { owner: 'Dono', operator: 'Operador' };
+    const ROLE_LABELS = { owner: 'Dono', operator: 'Ajudante (leitura)' };
     let organizations = [];
     let me = null;
     // O admin da plataforma sem organização opera o legado: a lista de lives
@@ -318,6 +318,7 @@
             row.appendChild(statusCell);
             cell(row, formatDate(org.createdAt));
             const actions = document.createElement('td');
+            if (org.id !== LEGACY_ORG_ID && window.TeamUI) actions.appendChild(actionButton('Equipe e mensalidade','secondary',()=>window.TeamUI.openAdmin(org)));
             actions.appendChild(actionButton('Renomear', 'secondary', () => editOrg(org, 'name')));
             actions.appendChild(actionButton('Limite de lives', 'secondary', () => editOrg(org, 'maxLives')));
             if (org.id !== LEGACY_ORG_ID) {
@@ -433,7 +434,9 @@
 
     async function loadTeam() {
         try {
-            renderTeam((await api('/api/org/members')).members || []);
+            const members=(await api('/api/org/members')).members || [];
+            renderTeam(members);
+            if(window.TeamUI) await window.TeamUI.loadOwner(members);
         } catch (error) {
             showMessage(error.message);
         }
@@ -441,22 +444,10 @@
 
     async function createMember() {
         clearMessage();
-        const body = {
-            email: byId('memberEmail').value,
-            password: byId('memberPassword').value,
-            displayName: byId('memberName').value,
-            role: byId('memberRole').value,
-        };
         try {
-            await api('/api/org/members', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-            });
-            ['memberEmail', 'memberPassword', 'memberName'].forEach(id => { byId(id).value = ''; });
-            showMessage('Membro adicionado. Ele já pode entrar com o e-mail e a senha informados.', 'success');
-            await loadTeam();
-        } catch (error) {
-            showMessage(error.message);
-        }
+            await api('/api/org/invitations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:byId('memberEmail').value})});
+            byId('memberEmail').value='';showMessage('Convite registrado. Confira a situação do envio.','success');await loadTeam();
+        } catch(error) {showMessage(error.message)}
     }
 
     async function setMemberRole(member, role) {
@@ -474,7 +465,7 @@
     }
 
     async function removeMember(member) {
-        if (!confirm(`Remover ${member.email || member.userId} da equipe? A conta será excluída.`)) return;
+        if (!confirm(`Remover ${member.email || member.userId} da equipe? O acesso será revogado; a conta e o histórico serão preservados.`)) return;
         clearMessage();
         try {
             await api('/api/org/members/delete?userId=' + encodeURIComponent(member.userId), { method: 'POST' });

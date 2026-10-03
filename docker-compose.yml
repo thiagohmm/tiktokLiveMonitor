@@ -1,5 +1,4 @@
 # Uso rápido:
-#   cp .env.example .env    # edite as chaves Supabase (ou AUTH_ENABLED=0)
 #   ./docker-test.sh        # sobe, testa healthcheck e abre no navegador
 #
 # Manual:
@@ -44,10 +43,6 @@ services:
       HOST: "0.0.0.0"
       PORT: "3001"
       AUTH_ENABLED: ${AUTH_ENABLED:-1}
-      SUPABASE_URL: ${SUPABASE_URL:-}
-      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-}
-      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-}
-      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
       DATABASE_URL: ${DATABASE_URL:-postgres://tlm:tlm-local-dev-only@postgres:5432/tiktok_live_monitor?sslmode=disable}
       # CORS para o dev server do frontend (porta 3000).
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}

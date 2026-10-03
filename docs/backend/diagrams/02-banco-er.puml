@@ -1,6 +1,6 @@
 @startuml
-' 02-banco-er.puml — Modelo de dados do Postgres (Supabase)
-title Banco de dados — Entidades (PostgreSQL / Supabase)
+' 02-banco-er.puml — Modelo de dados do Postgres (PostgreSQL local)
+title Banco de dados — Entidades (PostgreSQL / PostgreSQL local)
 caption Sem FKs reais: as relações são por live_name e "uniqueId" (convenção da aplicação).
 
 skinparam defaultFontName "Helvetica"

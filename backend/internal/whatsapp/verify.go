@@ -18,9 +18,7 @@ func VerifyWebhookSignature(secret string, rawBody []byte, header string) bool {
 	if provided == "" {
 		return false
 	}
-	if strings.HasPrefix(provided, "sha512=") {
-		provided = provided[len("sha512="):]
-	}
+	provided = strings.TrimPrefix(provided, "sha512=")
 	provided = strings.ToLower(provided)
 
 	mac := hmac.New(sha512.New, []byte(secret))

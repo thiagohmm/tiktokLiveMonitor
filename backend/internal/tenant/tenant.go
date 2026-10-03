@@ -18,7 +18,7 @@ type Tenant struct {
 	Email  string
 	// Role is the role inside the organization (model.OrgRoleOwner/Operator).
 	Role string
-	// PlatformAdmin is the Supabase app_metadata admin (manages every organization).
+	// PlatformAdmin is the cadastro local admin (manages every organization).
 	PlatformAdmin bool
 }
 

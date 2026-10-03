@@ -1,7 +1,7 @@
 @startuml
 ' 00-arquitetura.puml — Visão geral da arquitetura do backend
 title TikTok Live Monitor — Arquitetura do Backend
-caption Backend Go (API SSE + REST) + ponte Node + Supabase (Postgres/Auth)
+caption Backend Go (API SSE + REST) + ponte Node + PostgreSQL local (Postgres/Auth)
 
 skinparam componentStyle rectangle
 skinparam defaultFontName "Helvetica"
@@ -14,7 +14,7 @@ package "Backend (Go) — internal/" {
     component "monitor\nbridge + estado da live" as MON
     component "ranking\nRanker" as RANK
     component "report\nGenerator" as REP
-    component "auth\nJWT / lockout / Supabase" as AUTH
+    component "auth\nsessões locais / CSRF / lockout" as AUTH
     component "database\nDB (implementa Repository)" as DB
     component "model\nentidades + interfaces" as MODEL
 
@@ -24,8 +24,7 @@ package "Backend (Go) — internal/" {
 }
 
 package "Externo" {
-    component "Supabase Auth\n/auth/v1 + REST /rest/v1" as SUPAUTH
-    component "Supabase Postgres\n(DATABASE_URL)" as SUPAPG
+    component "PostgreSQL local Postgres\n(DATABASE_URL)" as SUPAPG
     component "TikTok Live\nWebcast (WebSocket)" as TIKTOK
 }
 
@@ -53,7 +52,7 @@ DB -right-> SUPAPG : pgx (pool)
 
 ' autenticação
 VIEW ..> AUTH : middleware/RequireAdmin
-AUTH -right-> SUPAUTH : login/admin (anon + service role)
+AUTH -right-> SUPAPG : usuários, hashes, sessões e tokens locais
 
 note bottom of MODEL
   model é o "contrato central": sem

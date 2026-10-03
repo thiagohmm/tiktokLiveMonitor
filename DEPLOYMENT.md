@@ -5,8 +5,8 @@
 Stack local: `docker compose up --build` (ver `docker-compose.yml`).
 Frontend em `frontend/` (HTML/JS); backend Go em `backend/`.
 
-Nunca envie `SUPABASE_SERVICE_ROLE_KEY` ao navegador, à Vercel como variável
-pública ou ao repositório. Ela é usada somente pelo backend Go.
+Autenticação local no PostgreSQL. Login usa cookie HttpOnly e CSRF; usuários,
+sessões e tokens de recuperação são geridos pelo backend. E-mails usam SMTP/Resend.
 
 ## Produção no VPS
 
@@ -19,7 +19,9 @@ TLS e páginas estáticas ficam no nginx de borda compartilhado
 Consulte [PRODUCAO.md](PRODUCAO.md) para deploy, backups, HTTPS e rollback.
 
 Rotas: /promo é a página comercial; /login é o acesso à ferramenta; / é o painel.
-Auth e profiles continuam no Supabase.
+Usuários e autenticação também ficam no PostgreSQL do VPS.
+Antes do primeiro deploy desta versão, execute a migração de identidades
+descrita em [docs/auth-local.md](docs/auth-local.md).
 
 ```sh
 git submodule update --init edge-nginx

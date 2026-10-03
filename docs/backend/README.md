@@ -7,7 +7,7 @@ partir da leitura do código em `backend/`. Escrita em PT-BR.
 > usuário via `tiktok-live-connector` (Node), converte os eventos em tempo real
 > (mensagens, presentes, curtidas, shares, pins), persiste em PostgreSQL
 > (Docker Compose, no VPS) e entrega tudo para uma UI via **SSE** e **REST API**.
-> Autenticação e perfis de usuário continuam no Supabase Auth hospedado.
+> Autenticação e usuários residem no PostgreSQL do VPS; e-mails usam SMTP/Resend.
 
 ---
 
@@ -21,7 +21,7 @@ partir da leitura do código em `backend/`. Escrita em PT-BR.
 | Monitor (estado da live) | `backend/internal/monitor/` | Go |
 | Ponte Node (TikTok) | `backend/internal/monitor/*.js` | Node `tiktok-live-connector` |
 | Ranking / Report | `backend/internal/ranking/`, `.../report/` | Go |
-| Auth (Supabase) | `backend/internal/auth/` | Go + Supabase Auth |
+| Auth (PostgreSQL local) | `backend/internal/auth/` | Go + autenticação local |
 | Model (contratos) | `backend/internal/model/` | Go (interfaces/entidades) |
 | Database (Postgres) | `backend/internal/database/` | Go `pgx` |
 
@@ -44,7 +44,7 @@ compose, que faz proxy para `/api/*` e `/events`.
 | 05 | [`05-controller.md`](05-controller.md) | `AppController`, handlers de eventos, presentes-alvo, tradução PT-BR e metas de presentes |
 | 06 | [`06-ranking.md`](06-ranking.md) | Ranking de engajamento e modo TikTok (diamantes/tiers) |
 | 07 | [`07-report.md`](07-report.md) | Relatório pós-live determinístico |
-| 08 | [`08-auth.md`](08-auth.md) | JWT/middleware, lockout de login, clientes Supabase (auth + admin) |
+| 08 | [`08-auth.md`](08-auth.md) | sessões locais, CSRF e lockout de login (auth + admin) |
 | 09 | [`09-view-http-sse.md`](09-view-http-sse.md) | Servidor HTTP, rotas, fan-out SSE, auth handlers, CORS e hardening |
 | 10 | [`10-entrypoint-ferramentas.md`](10-entrypoint-ferramentas.md) | `main.go` e a ferramenta de load test `cmd/sseload` |
 
@@ -57,7 +57,7 @@ Arquivos `.puml` (fonte) em [`diagrams/`](diagrams/). Renderize com PlantUML
 
 | Diagrama | O que mostra |
 |---|---|
-| [`00-arquitetura.puml`](diagrams/00-arquitetura.puml) | Visão de componentes: View → Controller → Monitor/Database/Ranking/Report, ponte Node e Supabase. |
+| [`00-arquitetura.puml`](diagrams/00-arquitetura.puml) | Visão de componentes: View → Controller → Monitor/Database/Ranking/Report, ponte Node e PostgreSQL local. |
 | [`01-fluxo-eventos.puml`](diagrams/01-fluxo-eventos.puml) | Sequência de um evento da live (chat) até o SSE e o banco (com cache write-behind). |
 | [`02-banco-er.puml`](diagrams/02-banco-er.puml) | Entidades do Postgres (tabelas e colunas) e relações conceituais por `live_name`/`uniqueId`. |
 | [`03-autenticacao.puml`](diagrams/03-autenticacao.puml) | Sequência de login, cadastro, middleware JWT e `RequireAdmin`. |

@@ -11,8 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
-
 	"github.com/thiagohmm/tiktok-live-monitor/internal/auth"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/tenant"
@@ -126,9 +124,7 @@ func TestSSEClientsAreIsolatedByOrganization(t *testing.T) {
 
 // ---- Auth-enabled harness ----
 
-const testJWTSecret = "tenant-test-secret"
-
-// tenantFixture is a server with auth enabled (local HS256 tokens) and two
+// tenantFixture is a server with auth enabled (local sessions) and two
 // customer organizations: A (with live1) and B (with liveB). The legacy
 // organization (testOrg) accepts no members, so A is a real organization.
 type tenantFixture struct {
@@ -145,24 +141,10 @@ type tenantFixture struct {
 	admin     string
 }
 
-func signTestToken(t *testing.T, userID, role string) string {
-	t.Helper()
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub":          userID,
-		"email":        userID + "@example.com",
-		"exp":          time.Now().Add(time.Hour).Unix(),
-		"app_metadata": map[string]any{"role": role, "active": true},
-	}).SignedString([]byte(testJWTSecret))
-	if err != nil {
-		t.Fatalf("sign token: %v", err)
-	}
-	return token
-}
-
 func setupTenantFixture(t *testing.T) *tenantFixture {
 	t.Helper()
 	srv, repo, _, _ := setupTestServer(t)
-	srv.auth = auth.Config{Enabled: true, JWTSecret: testJWTSecret, SupabaseURL: "http://supabase.invalid", SupabaseAnon: "anon"}
+	srv.auth.Enabled = true
 	srv.admin = nil
 
 	orgA, err := repo.CreateOrganization("Org A", 3)
@@ -217,7 +199,17 @@ func (f *tenantFixture) do(t *testing.T, handler http.HandlerFunc, userID, metho
 		role = "admin"
 	}
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+signTestToken(t, userID, role))
+	token := auth.RandomToken()
+	csrf := auth.TokenHash("csrf:" + token)
+	pool := f.srv.auth.Store.DB
+	if _, err := pool.Exec(`INSERT INTO users(id,email,role,active) VALUES($1,$2,$3,true) ON CONFLICT(id) DO UPDATE SET role=excluded.role`, userID, userID+"@example.com", role); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(`INSERT INTO auth_sessions(token_hash,user_id,csrf_hash,expires_at) VALUES($1,$2,$3,now()+interval '1 hour')`, auth.TokenHash(token), userID, auth.TokenHash(csrf)); err != nil {
+		t.Fatal(err)
+	}
+	req.AddCookie(&http.Cookie{Name: auth.AccessTokenCookie, Value: token})
+	req.Header.Set("X-CSRF-Token", csrf)
 	rec := httptest.NewRecorder()
 	f.srv.auth.Middleware(f.srv.tenantMiddleware(handler)).ServeHTTP(rec, req)
 	return rec

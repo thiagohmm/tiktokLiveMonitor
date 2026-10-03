@@ -152,7 +152,7 @@
             <label for="signupEmail">E-mail</label>
             <input id="signupEmail" name="email" type="email" autocomplete="email" required>
             <label for="signupPassword">Senha</label>
-            <input id="signupPassword" name="password" type="password" autocomplete="new-password" minlength="8" required>
+            <input id="signupPassword" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
             <div class="hint">Mínimo de 8 caracteres.</div>
             <label for="signupName">Nome (opcional)</label>
             <input id="signupName" name="displayName" type="text" autocomplete="name">
@@ -318,7 +318,10 @@
             hideSuccess();
             loginBtn.disabled = true;
             try {
-                await window.TLMAuth.signIn(emailInput.value, passwordInput.value);
+                const signedIn = await window.TLMAuth.signIn(emailInput.value, passwordInput.value);
+                if (!signedIn) {
+                    return; // redirecionamento para ativação já iniciado
+                }
                 const next = new URLSearchParams(window.location.search).get('next');
                 window.location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : '/index.html';
             } catch (error) {

@@ -16,8 +16,6 @@
 # `postgres-data`). O frontend roda em /frontend (nginx/Vercel/dev server
 # local apontando para http://PI_IP:3001).
 #
-# Para usar um Supabase externo em vez do Postgres local, defina
-# `DATABASE_URL` no `.env` (URL do pooler).
 
 services:
   postgres:
@@ -53,12 +51,7 @@ services:
       HOST: "0.0.0.0"
       PORT: "3001"
       AUTH_ENABLED: ${AUTH_ENABLED:-1}
-      SUPABASE_URL: ${SUPABASE_URL:-}
-      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-}
-      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-}
-      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
       # Padrão aponta para o Postgres local deste compose; defina DATABASE_URL
-      # no .env para usar o Supabase (pooler) e ignorar o serviço postgres.
       DATABASE_URL: ${DATABASE_URL:-postgres://tlm:tlm-local-dev-only@postgres:5432/tiktok_live_monitor?sslmode=disable}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       AUTH_MAX_LOGIN_ATTEMPTS: ${AUTH_MAX_LOGIN_ATTEMPTS:-5}

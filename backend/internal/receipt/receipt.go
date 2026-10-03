@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"regexp"
@@ -85,7 +86,11 @@ func ExtractTextJPEG(ctx context.Context, data []byte) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("ocr temp file: %w", err)
 	}
-	defer os.Remove(tmp.Name())
+	defer func() {
+		if err := os.Remove(tmp.Name()); err != nil {
+			log.Printf("[receipt] temporary file cleanup: %v", err)
+		}
+	}()
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		return "", fmt.Errorf("ocr temp write: %w", err)

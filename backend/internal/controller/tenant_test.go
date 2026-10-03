@@ -24,6 +24,9 @@ func testDB(t *testing.T, c *AppController) *database.DB {
 func newAttachTestController(t *testing.T) *AppController {
 	t.Helper()
 	c := newTestController(t, "")
+	if err := testDB(t, c).ExecSQL(`INSERT INTO organizations(id,name) VALUES(?,?) ON CONFLICT DO NOTHING`, otherOrgID, "Other org"); err != nil {
+		t.Fatal(err)
+	}
 	useFakeBridge(t)
 	t.Cleanup(c.Stop)
 	return c

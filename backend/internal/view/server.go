@@ -2,11 +2,13 @@ package view
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/auth"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/mail"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/teams"
 	"log"
 	"net/http"
 	"os"
@@ -27,6 +29,7 @@ type HTTPServer struct {
 	cfg           Config
 	auth          auth.Config
 	admin         auth.AccountDirectory
+	teams         *teams.Store
 	lockout       *auth.LoginLockout
 	proxyTrust    auth.ProxyTrust
 	theme         auth.ThemeColors
@@ -44,14 +47,19 @@ type Config struct {
 // New creates a new HTTP server (View).
 func New(cfg Config, ctrl *controller.AppController) *HTTPServer {
 	authCfg := auth.LoadConfigFromEnv()
+	pool := ctrl.Repository().(interface{ SQLDB() *sql.DB }).SQLDB()
+	authCfg.Store = auth.NewStore(pool)
+	lockout := auth.NewLoginLockout(auth.LoadLockoutConfigFromEnv())
+	lockout.UseDatabase(pool)
 	return &HTTPServer{
 		controller:    ctrl,
 		sseClients:    make(map[*sseClient]struct{}),
 		maxSSEClients: sseMaxClientsFromEnv(),
 		cfg:           cfg,
 		auth:          authCfg,
-		admin:         auth.NewAdminClient(authCfg),
-		lockout:       auth.NewLoginLockout(auth.LoadLockoutConfigFromEnv()),
+		admin:         authCfg.Store,
+		teams:         teams.New(pool),
+		lockout:       lockout,
 		proxyTrust:    auth.LoadProxyTrustFromEnv(),
 		theme:         auth.LoadThemeFromEnv(),
 		mailer:        mail.NewMailer(mail.LoadConfigFromEnv()),
@@ -62,6 +70,9 @@ func New(cfg Config, ctrl *controller.AppController) *HTTPServer {
 
 // Start begins listening and returns an error when the server stops.
 func (s *HTTPServer) Start(ctx context.Context) error {
+	maintenanceCtx, cancelMaintenance := context.WithCancel(ctx)
+	defer cancelMaintenance()
+	go s.maintainIdentity(maintenanceCtx)
 	port := 3001
 	if s.cfg.Port > 0 {
 		port = s.cfg.Port
@@ -82,7 +93,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// deadline curto por escrita (sseWriteTimeout): clientes presos são
 	// ejetados em segundos.
 
-	go s.bootstrapMemberships()
+	// Memberships are imported or assigned explicitly, never recreated on boot.
 
 	mux := http.NewServeMux()
 
@@ -158,6 +169,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 		}
 	})
 
+	s.registerTeamRoutes(mux)
 	handler := s.tenantMiddleware(mux)
 	handler = s.auth.Middleware(handler)
 	handler = s.cors(handler)

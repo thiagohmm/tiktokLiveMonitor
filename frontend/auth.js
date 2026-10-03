@@ -4,13 +4,13 @@
 
     let authConfig = {
         enabled: false,
-        supabaseUrl: '',
-        supabaseAnonKey: '',
+        provider: 'local',
         maxLoginAttempts: 5,
         lockoutMinutes: 15,
         theme: { pink: '#fe2c55', cyan: '#25f4ee', bg: '#0b0d12' },
     };
-    let supabaseClient = null;
+    let csrfToken = '';
+    sessionStorage.removeItem(SESSION_KEY);
     let currentUser = null;
 
     // Sem autenticação (dev local), o backend usa a organização padrão com
@@ -22,25 +22,11 @@
 
     const ORG_ERRORS = {
         no_organization: 'Sua conta ainda não está vinculada a nenhuma organização. Peça ao administrador para adicioná-la.',
+        seat_suspended: 'Sua vaga adicional está suspensa. Solicite a renovação ao dono.',
         organization_disabled: 'A organização desta conta está desativada. Fale com o administrador.',
     };
 
-    function readSession() {
-        try {
-            const raw = sessionStorage.getItem(SESSION_KEY);
-            return raw ? JSON.parse(raw) : null;
-        } catch (_) {
-            return null;
-        }
-    }
-
-    function writeSession(session) {
-        if (!session) {
-            sessionStorage.removeItem(SESSION_KEY);
-            return;
-        }
-        sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
-    }
+    function writeSession() { sessionStorage.removeItem(SESSION_KEY); }
 
     function applyTheme(theme) {
         if (!theme) return;
@@ -57,30 +43,18 @@
         }
         authConfig = await response.json();
         applyTheme(authConfig.theme);
-        if (authConfig.enabled && authConfig.supabaseUrl && authConfig.supabaseAnonKey && window.supabase) {
-            supabaseClient = window.supabase.createClient(authConfig.supabaseUrl, authConfig.supabaseAnonKey, {
-                auth: {
-                    persistSession: false,
-                    autoRefreshToken: false,
-                    detectSessionInUrl: false,
-                },
-            });
-        }
+
     }
 
-    function getAccessToken() {
-        const session = readSession();
-        return session && session.access_token ? session.access_token : '';
-    }
+    function getAccessToken() { return ''; }
 
     async function refreshMe() {
-        const token = getAccessToken();
         if (!authConfig.enabled) {
             currentUser = LOCAL_USER;
             return currentUser;
         }
         const headers = {};
-        if (token) headers.Authorization = 'Bearer ' + token;
+
         const response = await nativeFetch('/api/auth/me', { headers });
         if (!response.ok) {
             writeSession(null);
@@ -88,16 +62,15 @@
             return null;
         }
         currentUser = await response.json();
+        csrfToken = currentUser.csrfToken || csrfToken;
         return currentUser;
     }
 
     async function authFetch(input, init) {
         const options = init ? { ...init } : {};
         const headers = new Headers(options.headers || {});
-        const token = getAccessToken();
-        if (token) {
-            headers.set('Authorization', 'Bearer ' + token);
-        }
+        const method = String(options.method || (input && input.method) || "GET").toUpperCase();
+        if (!["GET", "HEAD", "OPTIONS"].includes(method) && csrfToken) headers.set("X-CSRF-Token", csrfToken);
         options.headers = headers;
         const response = await nativeFetch(input, options);
         if (response.status === 401 && authConfig.enabled) {
@@ -143,16 +116,18 @@
 
         async function connectOnce() {
             const headers = {};
-            const token = getAccessToken();
-            if (token) {
-                headers['Authorization'] = 'Bearer ' + token;
-            }
+
             const response = await nativeFetch('/events', { headers, cache: 'no-store' });
             if (response.status === 401 && authConfig.enabled) {
                 writeSession(null);
                 currentUser = null;
+                stopped=true;
                 window.location.href = '/login.html';
                 return;
+            }
+            if (response.status === 403) {
+                const payload=await response.json().catch(()=>({}));
+                stopped=true;notifyOrgError(payload.code || "no_organization");return;
             }
             if (!response.ok || !response.body) {
                 throw new Error('SSE HTTP ' + response.status);
@@ -270,6 +245,10 @@
             }),
         });
         const payload = await response.json().catch(() => ({}));
+        if (payload.needsActivation && payload.redirectTo) {
+            window.location.href = payload.redirectTo;
+            return null;
+        }
         if (!response.ok) {
             const err = new Error(payload.error || 'Não foi possível entrar.');
             err.locked = !!payload.locked;
@@ -277,28 +256,20 @@
             err.remainingAttempts = payload.remainingAttempts;
             throw err;
         }
-        writeSession(payload.session);
+        csrfToken = payload.csrfToken || "";
         return refreshMe();
     }
 
     async function signOut() {
-        const token = getAccessToken();
         try {
             const headers = {};
-            if (token) headers.Authorization = 'Bearer ' + token;
-            await nativeFetch('/api/auth/logout', { method: 'POST', headers });
+
+            await authFetch('/api/auth/logout', { method: 'POST' });
         } catch (_) {
             // ignore network errors; local session is still cleared
         }
         writeSession(null);
         currentUser = null;
-        if (supabaseClient) {
-            try {
-                await supabaseClient.auth.signOut({ scope: 'global' });
-            } catch (_) {
-                // ignore
-            }
-        }
         window.location.href = '/login.html';
     }
 
@@ -314,6 +285,8 @@
             if (window.location.pathname !== '/admin.html') window.location.href = '/admin.html';
             return;
         }
+        document.querySelectorAll('tbody').forEach(body => body.replaceChildren());
+        window.dispatchEvent(new Event('tlm-access-revoked'));
         alert(ORG_ERRORS[code] || ORG_ERRORS.no_organization);
         void signOut();
     }

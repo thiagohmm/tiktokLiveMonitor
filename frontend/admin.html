@@ -85,7 +85,7 @@
                     <input type="text" id="orgName" placeholder="Nome da organização" maxlength="80">
                     <input type="number" id="orgMaxLives" placeholder="Lives simultâneas (padrão 3)" min="1" max="50">
                     <input type="email" id="orgOwnerEmail" placeholder="E-mail do dono (opcional)">
-                    <input type="password" id="orgOwnerPassword" placeholder="Senha do dono (mín. 8)">
+                    <input type="password" id="orgOwnerPassword" placeholder="Senha do dono (mín. 12)">
                     <input type="text" id="orgOwnerName" placeholder="Nome do dono (opcional)">
                     <button id="createOrgBtn" type="button">Criar organização</button>
                 </div>
@@ -120,17 +120,13 @@
                     <h2 id="teamTitle">Equipe</h2>
                     <button id="refreshTeamBtn" class="secondary" type="button">Atualizar</button>
                 </div>
-                <p class="muted" style="margin: 0 0 12px;">Operadores acompanham as lives e a Fila PIX. Apenas donos apagam dados e gerenciam a equipe.</p>
+                <p class="muted" style="margin: 0 0 12px;">Ajudantes possuem acesso somente de leitura. Donos gerenciam a equipe e operam as lives autorizadas.</p>
                 <div class="form-grid">
                     <input type="email" id="memberEmail" placeholder="E-mail do membro">
-                    <input type="password" id="memberPassword" placeholder="Senha (mín. 8 caracteres)">
-                    <input type="text" id="memberName" placeholder="Nome (opcional)">
-                    <select id="memberRole">
-                        <option value="operator">Operador</option>
-                        <option value="owner">Dono</option>
-                    </select>
-                    <button id="createMemberBtn" type="button">Adicionar membro</button>
+                    <input type="text" id="memberName" placeholder="Nome (opcional)" hidden>
+                    <button id="createMemberBtn" type="button">Enviar convite</button>
                 </div>
+                <div id="teamSeats"></div><div id="teamInvitations"></div>
                 <div class="table-wrap">
                     <table>
                         <thead><tr><th>E-mail</th><th>Papel</th><th>Desde</th><th>Ações</th></tr></thead>
@@ -147,7 +143,7 @@
                 <p class="muted" style="margin: 0 0 12px;">Novos cadastros ficam bloqueados até você confirmar o pagamento e clicar em <strong>Aprovar</strong>.</p>
                 <div class="form-grid">
                     <input type="email" id="subscriberEmail" placeholder="E-mail do assinante">
-                    <input type="password" id="subscriberPassword" placeholder="Senha (mín. 8 caracteres)">
+                    <input type="password" id="subscriberPassword" placeholder="Senha (mín. 12 caracteres)">
                     <input type="text" id="subscriberName" placeholder="Nome (opcional)">
                     <input type="datetime-local" id="subscriberExpires" title="Validade da assinatura">
                     <input type="text" id="subscriberNotes" placeholder="Observações / referência do pagamento">
@@ -182,6 +178,7 @@
     </div>
     <script src="/config.js"></script>
     <script src="/auth.js"></script>
+    <script src="/teams-ui.js"></script>
     <script src="/admin.js"></script>
 </body>
 </html>

@@ -7,8 +7,7 @@ PostgreSQL do Docker Compose (serviço `postgres`), usando `database/sql` +
 driver `pgx` (stdlib). Além das consultas, ele é responsável por:
 
 - **Migrar/garantir o schema** na subida (`migratePostgres`) — é o único
-  mecanismo de migração em uso; os SQLs de `supabase/migrations/` são histórico
-  do Supabase;
+  mecanismo de migração em uso. `local_identity.go` adiciona autenticação e equipes;
 - **Traduzir queries com placeholder `?`** para o formato `$n` do Postgres
   (`driver.go`);
 - **Cache write-behind de mensagens** para reduzir escrita no banco
@@ -17,8 +16,8 @@ driver `pgx` (stdlib). Além das consultas, ele é responsável por:
 Convenções importantes do schema:
 - A coluna de usuário é `"uniqueId"` (camel case, aspas duplas no Postgres);
   o helper `bind()` corrige isso automaticamente.
-- Não há **foreign keys** reais: as relações são por `live_name`/`uniqueId`
-  (convenção da aplicação). Veja o diagrama `diagrams/02-banco-er.puml`.
+- Identidade, sessões e equipes usam chaves estrangeiras. Dados de lives também
+  usam `live_id` e `org_id` para manter o vínculo e o isolamento por organização.
 - Timestamps são `TIMESTAMPTZ` gravados/escritos em UTC; datas de dia
   (`day`) são `DATE`.
 
