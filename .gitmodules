@@ -1,0 +1,3 @@
+[submodule "edge-nginx"]
+	path = edge-nginx
+	url = git@github.com:thiagohmm/vps-edge-nginx.git
