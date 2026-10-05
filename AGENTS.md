@@ -15,12 +15,21 @@ rodando com o modelo **`deepseek/deepseek-v4-pro`** (ex.: agente `reviewer` com
 - Frontend (`frontend/`, HTML/JS vanilla) — servido pelo nginx de borda, mesma origem da API
   (proxy de `/api/*` e `/events`); todo dado passa pela API Go
 - Banco operacional: PostgreSQL 17 do compose (volume `postgres-data`). Backend conecta via
-  `DATABASE_URL` (derivada de `POSTGRES_*`) com o usuário dono/superusuário `tlm`, que ignora RLS
+  `DATABASE_URL` com o usuário **`tlm_app`**, dono das tabelas do banco, **sem**
+  `SUPERUSER`/`BYPASSRLS`/`CREATEDB`/`CREATEROLE` (não alcança nem o banco de outros produtos).
+  `tlm` continua como *bootstrap superuser* do cluster, usado apenas para administração
+  (e o PostgreSQL recusa remover `SUPERUSER` dele: é o bootstrap do cluster)
 - **Autenticação local no VPS**: usuários, hashes Argon2id, sessões revogáveis e
   recuperação de senha ficam no PostgreSQL. Cookies HttpOnly + CSRF; nenhum
   JWT externo, SDK ou chamada de identidade remota. SMTP/Resend só entrega e-mails.
 - Schema: o backend cria/migra as tabelas no boot (`migratePostgres()` em
-  `backend/internal/database/postgres.go`), inclusive RLS default deny. Não há CI de migração
+  `backend/internal/database/postgres.go`). Não há CI de migração
+- **Isolamento multi-tenant é feito EXCLUSIVAMENTE na aplicação** (`WHERE org_id`). O RLS está
+  habilitado nas 29 tabelas, mas **não há nenhuma política criada** (`pg_policies` vazio) e o dono
+  das tabelas ignora RLS com `force=false` — ou seja, **RLS NÃO é fronteira de segurança hoje**.
+  Para torná-lo fronteira seria preciso `FORCE ROW LEVEL SECURITY` + política por tabela
+  (`USING (org_id = current_setting('app.org_id'))`) + `SET LOCAL app.org_id` em toda transação.
+  Ver `docs/security/RELATORIO.md` (achado P1-CRIT) e `docs/security/remediacao.md`
 - Migrações locais no boot: `postgres.go` e `local_identity.go`; scripts legados
   foram retirados. Importação de identidades mantém IDs e exige novas senhas.
 - Tabelas operacionais (12, incluindo `live_sessions`) e Fila PIX (WhatsApp/WAHA + MinIO: `pix_*`

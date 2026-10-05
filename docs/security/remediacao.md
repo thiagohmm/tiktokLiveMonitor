@@ -61,6 +61,51 @@ O `.env` de produção continha `SUPABASE_SERVICE_ROLE_KEY` (`sb_secret_…`) em
 
 ---
 
+## Onda 2.5 — Privilégios do banco (P1-CRIT) ✅
+
+O plano original ("remover `SUPERUSER`/`BYPASSRLS` do role `tlm`") **é impossível**: o PostgreSQL recusa remover `SUPERUSER` do *bootstrap superuser* do cluster.
+
+```
+ALTER ROLE tlm NOSUPERUSER ...
+ERROR:  permission denied to alter role
+DETAIL:  The bootstrap superuser must have the SUPERUSER attribute.
+```
+
+Além disso, `tlm` era o **único** superusuário do cluster, então demovê-lo sem substituto travaria a administração. A solução aplicada foi criar um role dedicado sem privilégios para a aplicação:
+
+| Passo | Resultado |
+|---|---|
+| Teste em banco descartável (`tlm_privtest`, criado e removido) | Um role com `NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE` rodou a migração completa: **29 tabelas criadas, RLS habilitado em todas**, API subiu limpa |
+| Novo role `tlm_app` | `super=false bypass=false createdb=false createrole=false` |
+| Transferência de posse | 29 tabelas + 15 sequências + funções passaram para `tlm_app`. Sequências ligadas a colunas serial **não** podem mudar de dono separadamente (`cannot change owner of sequence ... is linked to table`) — seguem a tabela |
+| `GRANT CREATE, USAGE ON SCHEMA public` | Necessário porque no PG 15+ o schema `public` não concede CREATE a PUBLIC |
+| `DATABASE_URL` | Apontado para `tlm_app`; backup do `.env` guardado |
+| Backend reiniciado | `healthy`, log de boot limpo, migração executada **como `tlm_app`** |
+| Verificação | Login de teste exercitou `SELECT users` + `INSERT auth_rate_limits`; `pg_stat_activity` mostra `tlm_app` conectado |
+
+### Ganho concreto de raio de explosão
+
+Antes, uma hipotética injeção de SQL no TikTok Live Monitor rodava como **superusuário** e podia ler o banco `prontuario` — que é de **outro produto** e contém prontuários psicológicos. Agora:
+
+```
+$ psql -U tlm_app -d prontuario
+FATAL:  permission denied for database "prontuario"
+DETAIL:  User does not have CONNECT privilege.
+
+$ psql -U tlm_app -d postgres
+FATAL:  permission denied for database "postgres"
+```
+
+Também perdeu `CREATEDB` e `CREATEROLE`, que permitiam escalar para o cluster inteiro.
+
+### O que NÃO foi resolvido (e por quê)
+
+**O RLS continua sem ser fronteira de segurança.** `tlm_app` é o **dono** das tabelas e, com `relforcerowsecurity=false`, o dono ignora RLS. Continua valendo `pg_policies = 0`.
+
+Para transformar RLS em fronteira real seria necessário: `FORCE ROW LEVEL SECURITY` + uma política por tabela (`USING (org_id = current_setting('app.org_id'))`) + `SET LOCAL app.org_id` em **toda** transação da aplicação. Isso é uma re-arquitetura da camada de dados, não uma correção pontual — e fazê-la agora quebraria a produção. A decisão consciente foi: **reduzir o privilégio (feito) e parar de mentir na documentação (feito em `AGENTS.md`)**.
+
+---
+
 ## Pendente
 
 ### Onda 3 — auth e integrações
