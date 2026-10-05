@@ -1,6 +1,10 @@
 module github.com/thiagohmm/tiktok-live-monitor
 
-go 1.26.2
+// Toolchain alinhada a imagem de build (backend/Dockerfile): o binario em
+// producao e construido com go1.26.8. Declarar a versao exata aqui evita que
+// um build local (dev, Raspberry, CI futuro) reintroduza as vulnerabilidades de
+// stdlib corrigidas entre 1.26.3 e 1.26.6.
+go 1.26.8
 
 require (
 	github.com/jackc/pgx/v5 v5.10.0

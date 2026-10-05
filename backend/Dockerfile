@@ -14,7 +14,9 @@
 #   Dica para Pi 4: --build-arg SKIP_TESTS=1 deixa o build mais rápido.
 
 ARG TARGETPLATFORM
-FROM --platform=$TARGETPLATFORM golang:1.26-bookworm AS builder
+# Versao de patch fixada: builds reprodutiveis e sem risco de o mesmo
+# Dockerfile resolver para uma toolchain com CVEs conhecidas.
+FROM --platform=$TARGETPLATFORM golang:1.26.8-bookworm AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
