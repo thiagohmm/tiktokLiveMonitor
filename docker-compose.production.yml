@@ -46,6 +46,11 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-tlm}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tiktok_live_monitor}?sslmode=disable}
       CORS_ALLOWED_ORIGINS: https://${DOMAIN:-livemonitortk.com.br}
       SITE_URL: https://${DOMAIN:-livemonitortk.com.br}
+      # IP do container de borda (vps-edge-nginx) NA REDE DA APLICACAO — nao a
+      # faixa Docker inteira. O backend so honra X-Forwarded-For/X-Real-IP de um
+      # peer confiavel; com 172.16.0.0/12 qualquer container do host poderia
+      # forjar o IP usado no lockout de login. Ver docs/security/RELATORIO.md.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       WAHA_ENABLED: ${WAHA_ENABLED:-0}
       WAHA_URL: ${WAHA_URL:-http://waha:3000}
       WAHA_API_KEY: ${WAHA_API_KEY:-}
