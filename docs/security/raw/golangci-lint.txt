@@ -1,0 +1,66 @@
+internal/auth/legacy_bridge.go:64:23: Error return value of `resp.Body.Close` is not checked (errcheck)
+	defer resp.Body.Close()
+	                     ^
+internal/auth/legacy_bridge.go:52:40: G704: SSRF via taint analysis (gosec)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/auth/v1/token?grant_type=password", bytes.NewReader(body))
+	                                      ^
+internal/auth/legacy_bridge.go:60:24: G704: SSRF via taint analysis (gosec)
+	resp, err := client.Do(req)
+	                      ^
+internal/auth/local_test.go:29:21: G104: Errors unhandled (gosec)
+	t.Cleanup(func() { db.Close() })
+	                   ^
+internal/database/postgres.go:417:25: G202: SQL string concatenation (gosec)
+		rows, err := tx.Query(`SELECT DISTINCT owner_user_id FROM ` + t + ` WHERE owner_user_id <> ''`)
+		                      ^
+internal/database/postgres.go:460:24: G202: SQL string concatenation (gosec)
+		if _, err := tx.Exec(`UPDATE `+t+` p SET org_id = COALESCE(
+			(SELECT m.org_id FROM organization_members m WHERE m.user_id = p.org_id), $1)`, model.DefaultOrgID); err != nil {
+internal/mail/mail.go:210:24: G402: TLS InsecureSkipVerify may be set to true. (gosec)
+			InsecureSkipVerify: m.cfg.InsecureSkipVerify,
+			                    ^
+internal/mail/mail.go:233:24: G402: TLS InsecureSkipVerify may be set to true. (gosec)
+			InsecureSkipVerify: m.cfg.InsecureSkipVerify,
+			                    ^
+internal/monitor/bridge.go:73:9: G204: Subprocess launched with variable (gosec)
+	cmd := exec.Command("node", bridgePath)
+	       ^
+internal/monitor/bridge.go:173:26: G404: Use of weak random number generator (math/rand or math/rand/v2 instead of crypto/rand) (gosec)
+	jitter := time.Duration(rand.Float64() * math.Float64frombits(reconnectJitterPct.Load()) * float64(d))
+	                        ^
+internal/monitor/monitor_test.go:172:21: G104: Errors unhandled (gosec)
+	t.Cleanup(func() { db.Close() })
+	                   ^
+internal/receipt/receipt.go:102:9: G204: Subprocess launched with variable (gosec)
+	cmd := exec.CommandContext(ctx, bin, tmp.Name(), "stdout", "-l", "por")
+	       ^
+internal/teams/store_test.go:32:21: G104: Errors unhandled (gosec)
+	t.Cleanup(func() { db.Close() })
+	                   ^
+internal/teams/store_test.go:86:66: G115: integer overflow conversion int -> rune (gosec)
+			_, _, err := s.CreateInvitation(ctx, org, "owner", string(rune('a'+n))+"@example.com")
+			                                                              ^
+internal/view/auth_handlers.go:623:14: G706: Log injection via taint analysis (gosec)
+			log.Printf("[View] remove membership of deleted user %s: %v", id, err)
+			          ^
+internal/view/handlers.go:716:12: G706: Log injection via taint analysis (gosec)
+	log.Printf("[View] erro interno (%s %s): %v", r.Method, r.URL.Path, err)
+	          ^
+internal/view/handlers_pix.go:95:14: G706: Log injection via taint analysis (gosec)
+			log.Printf("[View] pix qr (%s): %v", orgID, err)
+			          ^
+internal/view/handlers_pix.go:103:22: G705: XSS via taint analysis (gosec)
+	if _, err := w.Write(png); err != nil {
+	                    ^
+internal/view/handlers_pix.go:368:22: G705: XSS via taint analysis (gosec)
+	if _, err := w.Write(data); err != nil {
+	                    ^
+internal/view/server.go:242:2: G118: Goroutine uses context.Background/TODO while request-scoped context is available (gosec)
+	go func() {
+	^
+internal/view/sse_load_test.go:62:11: G204: Subprocess launched with variable (gosec)
+	build := exec.Command("go", "build", "-o", bin, "github.com/thiagohmm/tiktok-live-monitor/cmd/sseload")
+	         ^
+internal/view/sse_load_test.go:68:16: G303: File creation in shared tmp directory without using ioutil.Tempfile (gosec)
+	logFile, _ := os.Create("/tmp/ldt/server_load.log")
+	              ^
