@@ -1496,9 +1496,9 @@ function renderProfile(profile) {
             row.style.borderLeftColor = 'var(--pink)';
             row.innerHTML = '<div style="font-weight:600;">' + escapeHtml(live.liveName || 'Live') + '</div>' +
                 '<div style="font-size:0.8em;color:var(--text-muted);">' +
-                (live.messages != null ? live.messages + ' mensagens, ' : '') +
-                (live.gifts != null ? live.gifts + ' presentes. ' : '') +
-                ('Primeira: ' + (live.firstSeen || '—') + ' • Última: ' + (live.lastSeen || '—')) +
+                (live.messages != null ? escapeHtml(String(live.messages)) + ' mensagens, ' : '') +
+                (live.gifts != null ? escapeHtml(String(live.gifts)) + ' presentes. ' : '') +
+                ('Primeira: ' + escapeHtml(String(live.firstSeen || '—')) + ' • Última: ' + escapeHtml(String(live.lastSeen || '—'))) +
                 '</div>';
             profileModalBody.appendChild(row);
         });

@@ -1,6 +1,8 @@
 (async function () {
-    const token = new URLSearchParams(location.hash.slice(1)).get('token') || sessionStorage.getItem('tlm.invitation') || '';
-    if (token) sessionStorage.setItem('tlm.invitation', token);
+    // O token do convite fica apenas em memoria: nao e persistido em
+    // sessionStorage (evita que qualquer script same-origin o leia depois),
+    // e a URL e limpa logo em seguida.
+    const token = new URLSearchParams(location.hash.slice(1)).get('token') || '';
     history.replaceState(null, '', location.pathname);
     await TLMAuth.loadAuthConfig();
     const user = await TLMAuth.refreshMe();

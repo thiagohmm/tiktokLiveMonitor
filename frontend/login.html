@@ -323,7 +323,20 @@
                     return; // redirecionamento para ativação já iniciado
                 }
                 const next = new URLSearchParams(window.location.search).get('next');
-                window.location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : '/index.html';
+                window.location.href = (() => {
+                    if (!next) return '/index.html';
+                    // O parser WHATWG trata "\\" como "/" em posicao de autoridade,
+                    // entao next=/\evil.com resolveria para https://evil.com/.
+                    // Exigir mesma origem cobre isso e qualquer variacao futura.
+                    if (next.includes('\\')) return '/index.html';
+                    try {
+                        const url = new URL(next, window.location.origin);
+                        if (url.origin !== window.location.origin) return '/index.html';
+                        return url.pathname + url.search + url.hash;
+                    } catch (error) {
+                        return '/index.html';
+                    }
+                })();
             } catch (error) {
                 if (error.locked && error.retryAfterSec) {
                     startLockoutCountdown(error.retryAfterSec);

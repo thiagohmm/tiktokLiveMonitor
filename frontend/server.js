@@ -28,9 +28,26 @@ const MIME = {
 };
 
 const server = http.createServer((req, res) => {
-  const requestPath = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+  let requestPath;
+  try {
+    requestPath = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+  } catch (error) {
+    // Percent-encoding invalido (ex.: GET /%) lancava URIError e derrubava o
+    // processo do dev server.
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('bad request');
+    return;
+  }
   const urlPath = /^\/promo\/?$/.test(requestPath) ? '/landing.html'
     : /^\/login\/?$/.test(requestPath) ? '/login.html' : requestPath;
+  // Dotfiles (.env.local, .git/config, .vercel/...) nunca sao servidos: o
+  // arquivo frontend/.env.local guarda credenciais e ficava acessivel via
+  // GET /.env.local com o dev server rodando.
+  if (urlPath.split('/').some(segment => segment.startsWith('.'))) {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('not found');
+    return;
+  }
   let file = path.normalize(path.join(ROOT, urlPath));
   if (!file.startsWith(ROOT + path.sep) && file !== ROOT) {
     res.writeHead(403);
