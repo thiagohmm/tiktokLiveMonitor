@@ -108,6 +108,26 @@ Para transformar RLS em fronteira real seria necessário: `FORCE ROW LEVEL SECUR
 
 ## Pendente
 
+### Onda 3 parcial ✅ (L4-1 e L4-4 entregues)
+
+Deployado e verificado: backend `healthy`, log de boot com `Fila PIX: habilitada` (a nova validação de comprimento do segredo não desabilitou o recurso — o segredo em produção tem 64 caracteres).
+
+| Achado | Correção |
+|---|---|
+| L4-4 PII em log | O comentário do usuário era gravado em disco (`question=%q`, até 120 chars). Agora só o tamanho. O stderr do conector Node ia integral para o log (pode conter conversa e dados de usuário) — agora só o tamanho, com o conteúdo atrás de `LOG_BRIDGE_STDERR=1`. O erro de unmarshal JSON deixou de despejar 80 bytes da linha |
+| L4-1 segredo curto no webhook | O HMAC é a única autenticação da rota pública. Segredo com menos de 32 caracteres passa a desabilitar a Fila PIX no boot (fail-closed) em vez de aceitar assinatura fraca |
+
+### Onda 3 — itens adiados (tarefa #10)
+
+Avaliados como **materialmente menos urgentes depois das correções de borda**:
+
+| Achado | Por que pode esperar |
+|---|---|
+| L4-2 dedup antes de baixar mídia | Exige assinatura HMAC válida para o replay (segredo capturado ou comprometido). Precisa de novo método no repositório |
+| L4-3 teto de SSE por organização | O `limit_conn 24` por IP na borda já contém a exaustão, e o backend tem teto global de 10 000 |
+| L2-4 teto de lockout por conta | A rotação de IP (que viabilizava brute force distribuído) foi fechada: `TRUSTED_PROXIES` em `/32` + `X-Forwarded-For` sobrescrito com `$remote_addr` |
+| L3-3 papel checado no handler | A barreira central (`operatorReadPath`) é fail-closed: rota nova fora da whitelist já retorna 403 para operador |
+
 ### Onda 3 — auth e integrações
 - L2-4: teto global de lockout por conta (hoje só `email|ip`).
 - L4-1: rate limit do webhook — **coberto pela borda** nesta rodada; guarda de comprimento do segredo (o segredo atual tem 64 caracteres, então a validação entra sem quebrar nada).
