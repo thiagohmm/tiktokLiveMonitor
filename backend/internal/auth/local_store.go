@@ -170,12 +170,24 @@ func (s *Store) RotateCSRF(token string) (string, error) {
 	return secret, nil
 }
 
+// ErrSessionNotFound indicates the presented token does not match any active
+// (non-revoked, non-expired) session, so nothing was revoked.
+var ErrSessionNotFound = errors.New("sessão não encontrada ou já revogada")
+
 // SignOutGlobal revokes all sessions belonging to the authenticated identity.
+// It reports ErrSessionNotFound when the token matches no active session
+// instead of silently claiming success.
 func (s *Store) SignOutGlobal(token string) error {
 	ctx, cancel := dbContext()
 	defer cancel()
-	_, err := s.DB.ExecContext(ctx, `UPDATE auth_sessions SET revoked_at=now() WHERE user_id=(SELECT user_id FROM auth_sessions WHERE token_hash=$1)`, TokenHash(token))
-	return err
+	res, err := s.DB.ExecContext(ctx, `UPDATE auth_sessions SET revoked_at=now() WHERE revoked_at IS NULL AND expires_at>now() AND user_id=(SELECT user_id FROM auth_sessions WHERE token_hash=$1)`, TokenHash(token))
+	if err != nil {
+		return err
+	}
+	if n, rowsErr := res.RowsAffected(); rowsErr == nil && n == 0 {
+		return ErrSessionNotFound
+	}
+	return nil
 }
 
 // UpdatePassword consumes one recovery/activation token and revokes old sessions atomically.

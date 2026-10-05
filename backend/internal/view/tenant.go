@@ -70,14 +70,21 @@ func (tr *tenantResolver) resolve(user *auth.User) (tenant.Tenant, string, error
 // invalidate is retained for callers; authorization is no longer cached.
 func (tr *tenantResolver) invalidate(userID string) {}
 
+// tenantExemptAdmin lists the platform-administration paths that skip tenant
+// resolution. They are exempt from organization resolution but NOT from the
+// platform-admin check enforced in tenantMiddleware — antes, a checagem de
+// papel ficava inteiramente a cargo do RequireAdmin de cada handler.
+func tenantExemptAdmin(path string) bool {
+	return strings.HasPrefix(path, "/api/admin/users") ||
+		strings.HasPrefix(path, "/api/admin/orgs") ||
+		path == "/api/admin/lives/assign"
+}
+
 // tenantExempt lists authenticated paths that work without an organization:
 // the session endpoints (the UI must be able to explain the missing
 // membership) and the platform administration.
 func tenantExempt(path string) bool {
-	return strings.HasPrefix(path, "/api/auth/") ||
-		strings.HasPrefix(path, "/api/admin/users") ||
-		strings.HasPrefix(path, "/api/admin/orgs") ||
-		path == "/api/admin/lives/assign"
+	return strings.HasPrefix(path, "/api/auth/") || tenantExemptAdmin(path)
 }
 
 // tenantMiddleware resolves the organization of every authenticated request
@@ -102,6 +109,15 @@ func (s *HTTPServer) tenantMiddleware(next http.Handler) http.Handler {
 		user, ok := auth.UserFromContext(r.Context())
 		if !ok || user == nil || strings.TrimSpace(user.ID) == "" {
 			writeError(w, http.StatusUnauthorized, "não autorizado")
+			return
+		}
+		// Defesa em profundidade: as rotas de administração da plataforma sao
+		// isentas de resolucao de organizacao, entao o papel admin passa a ser
+		// verificado aqui tambem — nao apenas no RequireAdmin interno de cada
+		// handler. Uma rota nova sob esses prefixos sem RequireAdmin deixa de
+		// ficar acessivel a qualquer usuario autenticado.
+		if tenantExemptAdmin(r.URL.Path) && user.Role != "admin" {
+			writeError(w, http.StatusForbidden, "apenas o administrador da plataforma")
 			return
 		}
 		t, code, err := s.tenants.resolve(user)

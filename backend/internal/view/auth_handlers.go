@@ -181,10 +181,22 @@ func (s *HTTPServer) handleAuthSignup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, err := s.admin.SignUpPending(body)
+	// O contador de signup e um rate limit por IP para conter criacao de contas
+	// em massa — por isso conta tanto sucesso quanto falha. Isso e intencional:
+	// trocar por RecordSuccess no caminho felizico removeria o unico freio
+	// contra cadastro automatizado.
 	s.lockout.RecordFailure(auth.SignupLockoutIdentity, ip)
 	if err != nil {
 		if errors.Is(err, auth.ErrDuplicateSignup) {
-			writeError(w, http.StatusConflict, err.Error())
+			// Anti-enumeracao: resposta IDENTICA ao cadastro bem-sucedido.
+			// O conflito fica apenas no log do servidor, para que a resposta
+			// nao sirva de oraculo de existencia de e-mail.
+			log.Printf("[View] signup recusado: e-mail já cadastrado")
+			w.WriteHeader(http.StatusCreated)
+			writeJSON(w, map[string]any{
+				"pending": true,
+				"message": "Cadastro recebido. Após a confirmação do pagamento, o administrador libera o acesso.",
+			})
 			return
 		}
 		msg := err.Error()
@@ -312,6 +324,23 @@ func (s *HTTPServer) handleAuthResetPassword(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	if !s.auth.Enabled {
+		writeError(w, http.StatusBadRequest, "autenticação desativada")
+		return
+	}
+	// O endpoint nao tinha nenhum limitador. O token tem 256 bits (forca bruta
+	// inviavel), mas tentativas ilimitadas sustentam abuso/DoS, e o fluxo nao
+	// pode seguir operando quando a autenticacao esta desligada.
+	ip := auth.ClientIP(r, s.proxyTrust)
+	if status := s.lockout.Status(auth.ResetLockoutIdentity, ip); status.Locked {
+		w.WriteHeader(http.StatusTooManyRequests)
+		writeJSON(w, map[string]any{
+			"error":         "muitas tentativas. tente novamente em instantes",
+			"locked":        true,
+			"retryAfterSec": status.RetryAfterSec,
+		})
+		return
+	}
 
 	var body struct {
 		Token    string `json:"token"`
@@ -336,10 +365,12 @@ func (s *HTTPServer) handleAuthResetPassword(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusBadGateway, "serviço de autenticação indisponível, tente novamente")
 			return
 		}
+		s.lockout.RecordFailure(auth.ResetLockoutIdentity, ip)
 		writeError(w, http.StatusBadRequest, "link inválido ou expirado")
 		return
 	}
 
+	s.lockout.RecordSuccess(auth.ResetLockoutIdentity, ip)
 	writeJSON(w, map[string]bool{"success": true})
 }
 
@@ -355,7 +386,8 @@ func (s *HTTPServer) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.auth.SignOutGlobal(token); err != nil {
+	logoutErr := s.auth.SignOutGlobal(token)
+	if logoutErr != nil && !errors.Is(logoutErr, auth.ErrSessionNotFound) {
 		writeError(w, http.StatusBadGateway, "falha ao encerrar sessão")
 		return
 	}
@@ -368,6 +400,13 @@ func (s *HTTPServer) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		Secure:   strings.HasPrefix(s.auth.SiteURL, "https://") || r.TLS != nil,
 		SameSite: http.SameSiteLaxMode,
 	})
+
+	if errors.Is(logoutErr, auth.ErrSessionNotFound) {
+		// O cookie e limpo de qualquer forma, mas o cliente nao recebe um
+		// "sucesso" falso por uma revogacao que nao aconteceu.
+		writeError(w, http.StatusUnauthorized, "sessão não encontrada ou já revogada")
+		return
+	}
 
 	writeJSON(w, map[string]bool{"success": true})
 }

@@ -84,8 +84,10 @@ func (c Config) Middleware(next http.Handler) http.Handler {
 			return
 		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions && r.URL.Path != "/api/webhooks/whatsapp" {
-			origin := r.Header.Get("Origin")
-			if c.SiteURL != "" && origin != c.SiteURL {
+			// Compara origem normalizada: o browser pode enviar (ou omitir) a
+			// barra final, e SITE_URL e carregado sem barra.
+			origin := strings.TrimRight(strings.TrimSpace(r.Header.Get("Origin")), "/")
+			if c.SiteURL != "" && origin != strings.TrimRight(c.SiteURL, "/") {
 				writeAuthError(w, http.StatusForbidden, "origem não autorizada")
 				return
 			}

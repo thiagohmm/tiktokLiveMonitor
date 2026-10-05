@@ -15,12 +15,15 @@ import (
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 	"log"
 	"net/http"
-	"runtime"
 	"strconv"
 	"strings"
 )
 
 func (s *HTTPServer) handleState(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
 	t, ok := requestTenant(w, r)
 	if !ok {
 		return
@@ -211,13 +214,14 @@ func (s *HTTPServer) handleClearHistory(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *HTTPServer) handleReadiness(w http.ResponseWriter, r *http.Request) {
-	s.sseMu.Lock()
-	sse := len(s.sseClients)
-	s.sseMu.Unlock()
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	// Endpoint publico: devolve apenas o sinal de prontidao. As metricas
+	// internas (goroutines/clientes SSE) sairam da resposta publica.
 	writeJSON(w, map[string]interface{}{
-		"ready":      true,
-		"sseClients": sse,
-		"goroutines": runtime.NumGoroutine(),
+		"ready": true,
 	})
 }
 

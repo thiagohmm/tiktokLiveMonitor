@@ -20,6 +20,12 @@ const SignupLockoutIdentity = "*signup*"
 // signup attempts). It prevents abuse of e-mail sending.
 const RecoverLockoutIdentity = "*recover*"
 
+// ResetLockoutIdentity is the lockout key used to rate-limit attempts to
+// consume a password-reset token per client IP. The token itself has 256 bits
+// of entropy, so this is abuse/DoS protection for the endpoint, which
+// previously had no limiter at all.
+const ResetLockoutIdentity = "*reset*"
+
 // LockoutConfig controls brute-force protection on the login endpoint.
 type LockoutConfig struct {
 	MaxAttempts int
