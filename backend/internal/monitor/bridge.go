@@ -93,7 +93,15 @@ func (m *Monitor) startBridge() error {
 	go func() {
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
-			log.Printf("[Bridge stderr] %s", scanner.Text())
+			line := scanner.Text()
+			// O stderr do conector Node pode conter conteudo de chat e dados de
+			// usuario. Por padrao registramos apenas o tamanho; o conteudo sai
+			// somente sob LOG_BRIDGE_STDERR=1 (debug explicito).
+			if os.Getenv("LOG_BRIDGE_STDERR") == "1" {
+				log.Printf("[Bridge stderr] %s", line)
+				continue
+			}
+			log.Printf("[Bridge stderr] %d bytes (LOG_BRIDGE_STDERR=1 para ver o conteudo)", len(line))
 		}
 	}()
 
@@ -333,7 +341,7 @@ func (m *Monitor) readBridge(stdout io.Reader, ended chan struct{}) {
 		line := scanner.Text()
 		var msg bridgeMsg
 		if err := json.Unmarshal([]byte(line), &msg); err != nil {
-			log.Printf("[Monitor] Bridge JSON unmarshal error: %v (line: %s)", err, line[:min(len(line), 80)])
+			log.Printf("[Monitor] Bridge JSON unmarshal error: %v (%d bytes)", err, len(line))
 			continue
 		}
 		m.handleBridgeEvent(msg.Type, dataToEvent(msg.Data))

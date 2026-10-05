@@ -26,6 +26,11 @@ import (
 // DefaultMaxMediaBytes bounds inbound receipt downloads (16 MB).
 const DefaultMaxMediaBytes int64 = 16 * 1024 * 1024
 
+// MinWebhookSecretLen is the minimum accepted length for the WAHA webhook
+// secret. The HMAC signature is the only authentication on that public route,
+// so a short secret would be guessable.
+const MinWebhookSecretLen = 32
+
 // Config holds the WAHA connection settings (env-driven).
 type Config struct {
 	Enabled        bool

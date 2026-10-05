@@ -332,6 +332,8 @@ func logCorrelation(event string, gift GiftPayload, pick *correlationPick) {
 		confidence = pick.confidence
 		qUser = displayUser(pick.match.UniqueID, pick.match.Nickname)
 	}
-	log.Printf("[Correlation] %s | gift=%s | giftUser=%s | method=%s | confidence=%s | questionUser=%s | question=%q",
-		event, gift.GiftName, displayUser(gift.UniqueID, gift.Nickname), method, confidence, qUser, question)
+	// O conteudo do comentario do usuario NAO vai para o log (PII em disco):
+	// registramos apenas o tamanho, o suficiente para correlacionar o evento.
+	log.Printf("[Correlation] %s | gift=%s | giftUser=%s | method=%s | confidence=%s | questionUser=%s | questionLen=%d",
+		event, gift.GiftName, displayUser(gift.UniqueID, gift.Nickname), method, confidence, qUser, len(question))
 }
