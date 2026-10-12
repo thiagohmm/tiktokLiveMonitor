@@ -62,6 +62,7 @@ services:
       MINIO_USE_SSL: ${MINIO_USE_SSL:-0}
       PIX_MEDIA_MAX_BYTES: ${PIX_MEDIA_MAX_BYTES:-16777216}
       TESSERACT_BIN: ${TESSERACT_BIN:-tesseract}
+      FORECAST_ENABLED: ${FORECAST_ENABLED:-0}
     expose:
       - "3001"
     depends_on:
@@ -83,6 +84,30 @@ services:
     networks:
       default: {}
       tlm_minio: {}
+
+  # Inferência ONNX, fora do processo da captura. Sobe com
+  # COMPOSE_PROFILES=forecast (pode combinar com pix). O healthcheck do
+  # backend não espera este serviço.
+  forecast:
+    profiles: ["forecast"]
+    build:
+      context: ./ml
+      dockerfile: forecast/Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-tlm}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tiktok_live_monitor}?sslmode=disable}
+      FORECAST_MODEL_PATH: /models/engagement.onnx
+      FORECAST_POLL_SECONDS: ${FORECAST_POLL_SECONDS:-60}
+      FORECAST_MIN_MINUTES: ${FORECAST_MIN_MINUTES:-15}
+    volumes:
+      - forecast-models:/models
+    mem_limit: ${FORECAST_MEM_LIMIT:-512m}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
 
   # WAHA e MinIO ficam apenas na rede interna.
   # Só sobem com o profile (COMPOSE_PROFILES=pix ou pix,pix-minio no .env).
@@ -134,3 +159,4 @@ volumes:
   postgres-data:
   waha_sessions:
   minio_data:
+  forecast-models:

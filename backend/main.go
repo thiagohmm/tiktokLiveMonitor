@@ -9,6 +9,7 @@ import (
 	"github.com/thiagohmm/tiktok-live-monitor/internal/auth"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/forecast"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/media"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/view"
@@ -53,6 +54,13 @@ func main() {
 	// and live; global cap in MAX_MONITORS, per-org cap in organizations).
 	ctrl := controller.NewAppController(mon, repo)
 	ctrl.SetMessageCache(msgCache)
+	if forecast.Enabled() {
+		counter := forecast.NewCounter(repo)
+		counter.Start()
+		defer counter.Stop()
+		ctrl.SetForecastCounter(counter)
+		log.Println("Previsão de engajamento: coleta por minuto ligada.")
+	}
 
 	// Fila PIX: WAHA (WhatsApp) + MinIO (comprovantes). Best-effort: sem as
 	// envs o recurso fica indisponível, mas o monitor de lives continua normal.

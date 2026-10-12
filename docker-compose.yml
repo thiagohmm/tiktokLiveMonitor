@@ -70,6 +70,10 @@ services:
       PIX_MEDIA_MAX_BYTES: ${PIX_MEDIA_MAX_BYTES:-16777216}
       # OCR dos comprovantes (filtro de valores). O binário vem na imagem.
       TESSERACT_BIN: ${TESSERACT_BIN:-tesseract}
+      # No compose local a previsão sobe ligada. Produção continua em 0
+      # até COMPOSE_PROFILES=forecast.
+      FORECAST_ENABLED: ${FORECAST_ENABLED:-1}
+      FORECAST_MIN_MINUTES: ${FORECAST_MIN_MINUTES:-2}
     ports:
       - "${TLM_BACKEND_PORT:-3001}:3001"
     depends_on:
@@ -116,6 +120,28 @@ services:
       - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio_data:/bitnami/minio/data
+
+  # Inferência ONNX do compose local. Sobe junto com o resto.
+  # O backend não espera este serviço no healthcheck.
+  forecast:
+    build:
+      context: ./ml
+      dockerfile: forecast/Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://tlm:tlm-local-dev-only@postgres:5432/tiktok_live_monitor?sslmode=disable}
+      FORECAST_MODEL_PATH: /models/engagement.onnx
+      FORECAST_POLL_SECONDS: ${FORECAST_POLL_SECONDS:-60}
+      FORECAST_MIN_MINUTES: ${FORECAST_MIN_MINUTES:-2}
+    volumes:
+      - ./ml/models/engagement.onnx:/models/engagement.onnx:ro
+    mem_limit: ${FORECAST_MEM_LIMIT:-512m}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
 
   frontend:
     build:

@@ -319,6 +319,40 @@ func (db *DB) migratePostgres() error {
 		`ALTER TABLE pix_tickets           ENABLE ROW LEVEL SECURITY`,
 		`ALTER TABLE pix_messages          ENABLE ROW LEVEL SECURITY`,
 		`ALTER TABLE pix_value_rules       ENABLE ROW LEVEL SECURITY`,
+		// Série por minuto e previsões da live. Nascem com live_id NOT NULL
+		// (não há linha legada para backfill). O delete da sessão as cobre
+		// porque entram em liveIDColumns; a migração antiga é pulada em
+		// legacyLiveBackfill.
+		`CREATE TABLE IF NOT EXISTS live_minute_metrics (
+			org_id TEXT NOT NULL,
+			live_id TEXT NOT NULL,
+			bucket TIMESTAMPTZ NOT NULL,
+			messages BIGINT NOT NULL DEFAULT 0,
+			likes BIGINT NOT NULL DEFAULT 0,
+			shares BIGINT NOT NULL DEFAULT 0,
+			gift_units BIGINT NOT NULL DEFAULT 0,
+			gift_diamonds BIGINT NOT NULL DEFAULT 0,
+			PRIMARY KEY (live_id, bucket)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_live_minute_metrics_org_live
+			ON live_minute_metrics (org_id, live_id, bucket)`,
+		`ALTER TABLE live_minute_metrics ENABLE ROW LEVEL SECURITY`,
+		`CREATE TABLE IF NOT EXISTS live_forecasts (
+			org_id TEXT NOT NULL,
+			live_id TEXT NOT NULL,
+			horizon_min INTEGER NOT NULL CHECK (horizon_min IN (5, 10)),
+			messages BIGINT NOT NULL DEFAULT 0,
+			likes BIGINT NOT NULL DEFAULT 0,
+			shares BIGINT NOT NULL DEFAULT 0,
+			gift_units BIGINT NOT NULL DEFAULT 0,
+			gift_diamonds BIGINT NOT NULL DEFAULT 0,
+			model_version TEXT NOT NULL DEFAULT '',
+			computed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (live_id, horizon_min)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_live_forecasts_org_live
+			ON live_forecasts (org_id, live_id)`,
+		`ALTER TABLE live_forecasts ENABLE ROW LEVEL SECURITY`,
 	}
 
 	for _, s := range stmts {
@@ -521,6 +555,24 @@ var liveIDColumns = []liveSource{
 	{"target_gift_history", "(received_at AT TIME ZONE 'UTC')::date", "received_at"},
 	{"gift_goals", "(COALESCE(created_at, CURRENT_TIMESTAMP) AT TIME ZONE 'UTC')::date", "COALESCE(created_at, CURRENT_TIMESTAMP)"},
 	{"room_like_totals", "(COALESCE(updated_at, CURRENT_TIMESTAMP) AT TIME ZONE 'UTC')::date", "COALESCE(updated_at, CURRENT_TIMESTAMP)"},
+	// Tabelas da previsão: live_id já nasce NOT NULL. dayExpr/tsExpr não são
+	// usados porque legacyLiveBackfill as exclui do backfill.
+	{"live_minute_metrics", "CURRENT_DATE", "bucket"},
+	{"live_forecasts", "CURRENT_DATE", "computed_at"},
+}
+
+// legacyLiveBackfill reports whether migrateLiveSessions should invent a
+// session for rows that predate live_id. Forecast tables are created with
+// live_id NOT NULL and have no live_name column, so that backfill does not
+// apply to them. They stay in liveIDColumns so DeleteLiveSession still
+// removes them.
+func legacyLiveBackfill(table string) bool {
+	switch table {
+	case "live_minute_metrics", "live_forecasts":
+		return false
+	default:
+		return true
+	}
 }
 
 // migrateLiveSessions runs the non-additive part of the live_sessions migration,
@@ -626,6 +678,9 @@ func (db *DB) migrateLiveSessions() error {
 	//    stays small. COALESCE on the instant too: a legacy row with a NULL
 	//    timestamp would make MIN/MAX NULL and break the NOT NULL session columns.
 	for _, s := range liveIDColumns {
+		if !legacyLiveBackfill(s.table) {
+			continue
+		}
 		if err := exec(fmt.Sprintf(`
 			INSERT INTO live_sessions (id, live_name, day, started_at, last_seen_at)
 			SELECT %s, live_name, %s AS day,
@@ -641,6 +696,9 @@ func (db *DB) migrateLiveSessions() error {
 
 	// 3) Stamp the old rows with the id of their synthetic session, in batches.
 	for _, s := range liveIDColumns {
+		if !legacyLiveBackfill(s.table) {
+			continue
+		}
 		if err := backfillLiveID(ctx, conn, s); err != nil {
 			return err
 		}
@@ -648,6 +706,9 @@ func (db *DB) migrateLiveSessions() error {
 
 	// 4) With no NULLs left, lock the column down.
 	for _, s := range liveIDColumns {
+		if !legacyLiveBackfill(s.table) {
+			continue
+		}
 		if err := setLiveIDNotNull(ctx, conn, s.table); err != nil {
 			return err
 		}

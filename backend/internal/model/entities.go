@@ -319,6 +319,36 @@ func (r LiveRef) Valid() bool {
 	return r.ID != ""
 }
 
+// Forecast statuses shown while a live is monitored.
+const (
+	ForecastDisabled    = "disabled"
+	ForecastIdle        = "idle"
+	ForecastCollecting  = "collecting"
+	ForecastReady       = "ready"
+	ForecastUnavailable = "unavailable"
+)
+
+// ForecastHorizon is the estimated activity over one window.
+type ForecastHorizon struct {
+	Minutes      int `json:"minutes"`
+	Messages     int `json:"messages"`
+	Likes        int `json:"likes"`
+	Shares       int `json:"shares"`
+	GiftUnits    int `json:"giftUnits"`
+	GiftDiamonds int `json:"giftDiamonds"`
+}
+
+// EngagementForecast is the payload of GET /api/forecast and the
+// engagement-forecast SSE event.
+type EngagementForecast struct {
+	Status       string            `json:"status"`
+	LiveID       string            `json:"liveId,omitempty"`
+	LiveName     string            `json:"liveName,omitempty"`
+	ComputedAt   string            `json:"computedAt,omitempty"`
+	ModelVersion string            `json:"modelVersion,omitempty"`
+	Horizons     []ForecastHorizon `json:"horizons,omitempty"`
+}
+
 // --- Fila PIX (WhatsApp/WAHA) ---
 
 // Pix WhatsApp session statuses (normalized from WAHA).

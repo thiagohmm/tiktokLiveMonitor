@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/auth"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/controller"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/forecast"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/mail"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/teams"
@@ -130,6 +131,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/target-gift-history/priority", s.handleTargetGiftHistoryPriority)
 	mux.HandleFunc("/api/pinned-comments", s.handlePinnedComments)
 	mux.HandleFunc("/api/ranking", s.handleRanking)
+	mux.HandleFunc("/api/forecast", s.handleForecast)
 	mux.HandleFunc("/api/report", s.handleReport)
 	mux.HandleFunc("/api/profile", s.handleProfile)
 	mux.HandleFunc("/api/goals", s.handleGoals)
@@ -226,6 +228,12 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 		}
 	})
 
+	forecastCtx, cancelForecast := context.WithCancel(context.Background())
+	defer cancelForecast()
+	if forecast.Enabled() {
+		go s.publishForecasts(forecastCtx)
+	}
+
 	addr := fmt.Sprintf("%s:%d", host, port)
 	s.httpServer = &http.Server{
 		Addr:    addr,
@@ -247,6 +255,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 		case <-ctx.Done():
 		}
 		log.Println("[View] Shutting down...")
+		cancelForecast()
 		s.controller.StopMonitoring()
 		s.controller.Stop()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

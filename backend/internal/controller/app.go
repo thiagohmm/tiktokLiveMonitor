@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
+	"github.com/thiagohmm/tiktok-live-monitor/internal/forecast"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/monitor"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/ranking"
@@ -43,6 +44,7 @@ type AppController struct {
 	goals          goalState
 	attachments    *MonitorAttachmentStore
 	pixQueue       *PixQueueService
+	forecast       *forecast.Counter
 }
 
 // SetMonitorManager replaces the concurrent monitor manager.
@@ -683,6 +685,8 @@ func (c *AppController) HandleGiftEvent(data monitor.EventData) {
 		log.Printf("[Controller] Error resolving live session for gift: %v", err)
 		return
 	}
+	diamonds := model.GiftValue(giftName) * repeatCount
+	c.noteForecast(ref, forecast.Delta{GiftUnits: repeatCount, GiftDiamonds: diamonds})
 	if _, err := c.repo.AddGift(ref, uniqueID, nickname, giftName, repeatCount, giftType); err != nil {
 		log.Printf("[Controller] Error storing gift: %v", err)
 	}
@@ -714,6 +718,7 @@ func (c *AppController) HandleChatMessageEvent(data monitor.EventData) {
 		log.Printf("[Controller] Error resolving live session for message: %v", err)
 		return
 	}
+	c.noteForecast(ref, forecast.Delta{Messages: 1})
 	if c.msgCache != nil {
 		c.msgCache.Add(ref, uniqueID, nickname, comment)
 		return
@@ -744,6 +749,7 @@ func (c *AppController) HandleShareEvent(data monitor.EventData) {
 		log.Printf("[Controller] Error resolving live session for share: %v", err)
 		return
 	}
+	c.noteForecast(ref, forecast.Delta{Shares: 1})
 	if err := c.repo.AddShare(ref, uniqueID, nickname); err != nil {
 		log.Printf("[Controller] Error storing share: %v", err)
 	}
@@ -774,6 +780,7 @@ func (c *AppController) HandleLikeEvent(data monitor.EventData) {
 		log.Printf("[Controller] Error resolving live session for like: %v", err)
 		return
 	}
+	c.noteForecast(ref, forecast.Delta{Likes: likeCount})
 	if err := c.repo.AddLike(ref, uniqueID, nickname, likeCount); err != nil {
 		log.Printf("[Controller] Error storing like: %v", err)
 	}

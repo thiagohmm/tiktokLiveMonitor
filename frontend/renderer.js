@@ -1883,6 +1883,7 @@ function applyDisconnectedState(error) {
     disconnectBtn.disabled = false;
     usernameInput.disabled = false;
     clearTables();
+    hideForecast();
 }
 
 // Limpa as tabelas, timers e históricos da interface.
@@ -1918,6 +1919,7 @@ function handleConnectionStatus(data) {
     if (data.success) {
         applyConnectedState(data.username);
         loadAvailableGifts();
+        loadForecast();
         console.log('[Frontend] handleConnectionStatus: restaurando históricos...');
         loadAllGifts();
         loadPendingTargetGifts();
@@ -2733,8 +2735,85 @@ async function loadInitialState() {
         // Carrega ranking e metas mesmo desconectado (vazio se não houver live).
         loadRanking();
         loadGoals();
+        loadForecast();
     } catch (error) {
         setStatus('Servidor indisponível', 'error');
+    }
+}
+
+function hideForecast() {
+    const section = document.getElementById('forecastSection');
+    if (section) {
+        section.hidden = true;
+    }
+}
+
+function forecastNumber(horizon, key) {
+    const value = horizon && Number(horizon[key]);
+    return Number.isFinite(value) ? value.toLocaleString('pt-BR') : '—';
+}
+
+function fillForecastCard(id, horizon) {
+    const root = document.getElementById(id);
+    if (!root) {
+        return;
+    }
+    for (const key of ['messages', 'likes', 'giftUnits', 'giftDiamonds']) {
+        const node = root.querySelector(`[data-metric="${key}"]`);
+        if (node) {
+            node.textContent = forecastNumber(horizon, key);
+        }
+    }
+}
+
+function renderForecast(payload) {
+    const section = document.getElementById('forecastSection');
+    const note = document.getElementById('forecastNote');
+    const grid = document.getElementById('forecastGrid');
+    if (!section || !note || !grid) {
+        return;
+    }
+    const status = payload && payload.status;
+    if (!status || status === 'disabled' || status === 'idle') {
+        section.hidden = true;
+        return;
+    }
+    const currentLive = (usernameInput?.value || '').trim().replace(/^@/, '').toLowerCase();
+    const forecastLive = (payload.liveName || '').trim().replace(/^@/, '').toLowerCase();
+    if (currentLive && forecastLive && currentLive !== forecastLive) {
+        return;
+    }
+    section.hidden = false;
+    if (status === 'collecting') {
+        grid.hidden = true;
+        note.textContent = 'Coletando o ritmo desta live';
+        return;
+    }
+    if (status !== 'ready') {
+        grid.hidden = true;
+        note.textContent = 'Previsão indisponível';
+        return;
+    }
+    grid.hidden = false;
+    const horizons = payload.horizons || [];
+    fillForecastCard('forecast5', horizons.find((item) => item.minutes === 5));
+    fillForecastCard('forecast10', horizons.find((item) => item.minutes === 10));
+    const computed = payload.computedAt ? new Date(payload.computedAt) : null;
+    note.textContent = computed && !Number.isNaN(computed.getTime())
+        ? `Atualizado às ${computed.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
+        : '';
+}
+
+async function loadForecast() {
+    try {
+        const response = await fetch('/api/forecast');
+        if (!response.ok) {
+            hideForecast();
+            return;
+        }
+        renderForecast(await response.json());
+    } catch (error) {
+        hideForecast();
     }
 }
 
@@ -2832,6 +2911,14 @@ function setupEventStream() {
 
     eventSource.addEventListener('settings-update', event => {
         renderTargetGifts();
+    });
+
+    eventSource.addEventListener('engagement-forecast', event => {
+        try {
+            renderForecast(JSON.parse(event.data));
+        } catch (error) {
+            console.error('[Frontend] Falha ao processar previsão:', error);
+        }
     });
 
     eventSource.addEventListener('goal-update', event => {

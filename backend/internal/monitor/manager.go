@@ -231,6 +231,25 @@ func (m *Manager) OnEvent(handler EventHandler) {
 	m.mu.Unlock()
 }
 
+// ActiveLive is one live the process is monitoring right now.
+type ActiveLive struct {
+	OrgID  string
+	Live   string
+	LiveID string
+}
+
+// ActiveLives lists the sessions currently monitored. The forecast publisher
+// uses it to decide who receives an update; an empty list publishes nothing.
+func (m *Manager) ActiveLives() []ActiveLive {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]ActiveLive, 0, len(m.monitors))
+	for key, mon := range m.monitors {
+		out = append(out, ActiveLive{OrgID: key.org, Live: key.live, LiveID: mon.CurrentLiveID()})
+	}
+	return out
+}
+
 // Close stops every live monitor and releases all bridge processes.
 func (m *Manager) Close() { m.StopAll() }
 

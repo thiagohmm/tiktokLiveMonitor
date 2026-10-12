@@ -381,6 +381,44 @@
             width: 100% !important;
             height: 180px !important;
         }
+        .forecast-note {
+            margin: 0 0 12px;
+            color: var(--text-muted);
+            font-size: 0.92em;
+        }
+        .forecast-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+        }
+        .forecast-card {
+            padding: 12px 14px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: rgba(255, 255, 255, 0.02);
+        }
+        .forecast-card h4 {
+            margin: 0 0 10px;
+            font-size: 0.95em;
+            font-weight: 600;
+        }
+        .forecast-card dl {
+            display: grid;
+            gap: 6px;
+            margin: 0;
+        }
+        .forecast-card dl div {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .forecast-card dt {
+            color: var(--text-muted);
+        }
+        .forecast-card dd {
+            margin: 0;
+            font-variant-numeric: tabular-nums;
+        }
         .chips-row {
             display: flex;
             gap: 6px;
@@ -1904,6 +1942,33 @@
                 <h3>Chat em Tempo Real</h3>
             </div>
             <canvas id="messageChart"></canvas>
+        </div>
+
+        <div id="forecastSection" class="chart-section forecast-section" hidden>
+            <div class="section-title">
+                <h3>Previsão de engajamento</h3>
+            </div>
+            <p id="forecastNote" class="forecast-note"></p>
+            <div id="forecastGrid" class="forecast-grid">
+                <div class="forecast-card" id="forecast5">
+                    <h4>Próximos 5 minutos</h4>
+                    <dl>
+                        <div><dt>Mensagens</dt><dd data-metric="messages">—</dd></div>
+                        <div><dt>Curtidas</dt><dd data-metric="likes">—</dd></div>
+                        <div><dt>Presentes</dt><dd data-metric="giftUnits">—</dd></div>
+                        <div><dt>Diamantes</dt><dd data-metric="giftDiamonds">—</dd></div>
+                    </dl>
+                </div>
+                <div class="forecast-card" id="forecast10">
+                    <h4>Próximos 10 minutos</h4>
+                    <dl>
+                        <div><dt>Mensagens</dt><dd data-metric="messages">—</dd></div>
+                        <div><dt>Curtidas</dt><dd data-metric="likes">—</dd></div>
+                        <div><dt>Presentes</dt><dd data-metric="giftUnits">—</dd></div>
+                        <div><dt>Diamantes</dt><dd data-metric="giftDiamonds">—</dd></div>
+                    </dl>
+                </div>
+            </div>
         </div>
 
         <div class="section-title">
