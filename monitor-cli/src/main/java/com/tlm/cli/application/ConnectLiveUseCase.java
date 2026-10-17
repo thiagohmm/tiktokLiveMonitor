@@ -1,39 +1,30 @@
 package com.tlm.cli.application;
 
-import com.tlm.cli.domain.model.ApiException;
-import com.tlm.cli.domain.model.UserSession;
-import com.tlm.cli.domain.port.LiveApiPort;
+import com.tlm.cli.domain.model.MonitorException;
+import com.tlm.cli.domain.port.MonitorEnginePort;
 
-/** Caso de uso: conectar a uma live do TikTok ({@code POST /api/connect}). */
+/** Caso de uso: conectar a uma live do TikTok ({@code :connect <user>}). */
 public final class ConnectLiveUseCase {
 
-    private final LiveApiPort api;
-    private final SessionManager sessions;
+    private final MonitorEnginePort engine;
     private final MonitorHub hub;
 
-    public ConnectLiveUseCase(LiveApiPort api, SessionManager sessions, MonitorHub hub) {
-        this.api = api;
-        this.sessions = sessions;
+    public ConnectLiveUseCase(MonitorEnginePort engine, MonitorHub hub) {
+        this.engine = engine;
         this.hub = hub;
     }
 
-    public void execute(String username) throws ApiException {
-        try {
-            sessions.send(session -> {
-                api.connect(session, username);
-                return null;
-            });
-        } catch (ApiException error) {
-            if (error.status() == 401 && sessions.recoverAfter401()) {
-                sessions.send(session -> {
-                    api.connect(session, username);
-                    return null;
-                });
-            } else {
-                throw error;
-            }
+    public void execute(String username) throws MonitorException {
+        String target = username == null ? "" : username.trim();
+        if (target.isEmpty()) {
+            throw new MonitorException("informe o username da live");
         }
-        hub.notice("Monitorando @" + username);
+        if (engine.isConnected() && engine.currentLive().equalsIgnoreCase(target)) {
+            hub.notice("já monitorando @" + target);
+            return;
+        }
+        engine.connect(target);
         hub.refreshState();
+        hub.notice("conectando a @" + target + "...");
     }
 }

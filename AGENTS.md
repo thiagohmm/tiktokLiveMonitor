@@ -14,16 +14,18 @@ rodando com o modelo **`deepseek/deepseek-v4-pro`** (ex.: agente `reviewer` com
 - Backend Go (`backend/`, API pura SSE + REST)
 - Frontend (`frontend/`, HTML/JS vanilla) — servido pelo nginx de borda, mesma origem da API
   (proxy de `/api/*` e `/events`); todo dado passa pela API Go
-- Cliente de terminal em Java 21 (`monitor-cli/`, TUI Lanterna + Clean Architecture): consome a
-  API de produção (login via `Set-Cookie`, `Authorization: Bearer`, SSE `/events` com backoff
-  1s→15s, `:connect`/`:disconnect` com Origin+CSRF). Comandos da TUI: `:gift` (catálogo +
-  seleção múltipla que filtra o feed por presente), `:pinned [list]` (fixados ao vivo em
-  categoria/número próprios; `list` traz os últimos 20) e `:filter` incluindo `pinned`;
-  `:quit`/Ctrl+C desconneta a live best-effort (`POST /api/disconnect`, timeout 3s, sem prompt).
-  Testes: `mvn -f monitor-cli/pom.xml test`;
-  jar: `mvn -f monitor-cli/pom.xml package` → `target/monitor-cli.jar`. E-mail salvo pode ser
-  trocado no prompt de login (Enter mantém) ou apagado com `--esquecer`; senha nunca é gravada
-  (só base URL + e-mail em `~/.config/tlm-cli/config.properties`, perm 600)
+- Cliente de terminal em Java 21 (`monitor-cli/`, TUI Lanterna + Clean Architecture) — **monitoração
+  LOCAL standalone nesta branch**: conecta direto ao push do TikTok (TikTokLiveJava via JitPack,
+  assinatura Euler Stream; `TLM_TIKTOK_API_KEY` opcional) e grava em SQLite local
+  (`./data/tlm-local.db`, override com `--db`/`TLM_DB`). Não há login, API remota, SSE nem node;
+  este modo não vai para o VPS (a produção Go/Postgres segue intacta no `main`). Comandos da TUI:
+  `:connect <user>`/`:disconnect` (uma live por vez), `:gift` (catálogo da lib + seleção múltipla
+  que filtra o feed por presente), `:pinned [list]` (fixados ao vivo em categoria própria; sem
+  pins no feed o filtro faz backfill dos últimos 20 do banco; `list` imprime o histórico) e
+  `:filter` incluindo `pinned`; `:quit`/Ctrl+C desconecta a engine. Pins fixados ANTES do connect
+  não são capturados (estado inicial da sala não é retransmitido). Testes:
+  `mvn -f monitor-cli/pom.xml test`; jar: `mvn -f monitor-cli/pom.xml package` →
+  `target/monitor-cli.jar`. Ver `monitor-cli/README.md`
 - Banco operacional: PostgreSQL 17 do compose (volume `postgres-data`). Backend conecta via
   `DATABASE_URL` com o usuário **`tlm_app`**, dono das tabelas do banco, **sem**
   `SUPERUSER`/`BYPASSRLS`/`CREATEDB`/`CREATEROLE` (não alcança nem o banco de outros produtos).

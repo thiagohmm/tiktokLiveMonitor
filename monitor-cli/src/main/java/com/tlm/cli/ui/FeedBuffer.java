@@ -110,6 +110,16 @@ public final class FeedBuffer {
         return view.isEmpty();
     }
 
+    /** Existe alguma linha daquela categoria no histórico completo? */
+    public synchronized boolean hasCategory(Category category) {
+        for (FeedLine line : all) {
+            if (line.category() == category) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void rebuildView() {
         view.clear();
         for (FeedLine line : all) {

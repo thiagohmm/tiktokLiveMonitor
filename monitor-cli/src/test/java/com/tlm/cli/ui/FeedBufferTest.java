@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FeedBufferTest {
@@ -112,6 +113,19 @@ class FeedBufferTest {
 
         feed.jumpToBottom();
         assertEquals(List.of("l17", "l18", "l19", "l20", "nova"), names(feed.window(5)));
+    }
+
+    @Test
+    void hasCategoryScansFullHistoryEvenWhenFiltered() {
+        FeedBuffer feed = new FeedBuffer();
+        assertFalse(feed.hasCategory(Category.PINNED));
+        feed.add(line("p1", Category.PINNED));
+        feed.add(line("c1", Category.CHAT));
+        assertTrue(feed.hasCategory(Category.PINNED));
+        assertFalse(feed.hasCategory(Category.GIFT));
+        // sob filtro que esconde o pin, o histórico ainda conta
+        feed.setFilter(l -> l.category() == Category.CHAT);
+        assertTrue(feed.hasCategory(Category.PINNED));
     }
 
     private static List<String> names(List<FeedLine> lines) {

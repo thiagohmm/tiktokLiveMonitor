@@ -7,27 +7,24 @@ import com.googlecode.lanterna.graphics.TextGraphics;
 import com.googlecode.lanterna.input.KeyStroke;
 import com.googlecode.lanterna.input.KeyType;
 import com.googlecode.lanterna.screen.Screen;
-import com.googlecode.lanterna.screen.TerminalScreen;
 import com.googlecode.lanterna.terminal.DefaultTerminalFactory;
-import com.tlm.cli.application.ApiErrors;
 import com.tlm.cli.application.ConnectLiveUseCase;
 import com.tlm.cli.application.DisconnectLiveUseCase;
 import com.tlm.cli.application.MonitorHub;
-import com.tlm.cli.application.MonitorListener;
-import com.tlm.cli.application.WatchEventsUseCase;
-import com.tlm.cli.domain.model.ApiException;
 import com.tlm.cli.domain.model.ChatMessage;
 import com.tlm.cli.domain.model.DomainEvent;
 import com.tlm.cli.domain.model.FollowEvent;
 import com.tlm.cli.domain.model.GiftEvent;
 import com.tlm.cli.domain.model.LikeEvent;
 import com.tlm.cli.domain.model.LiveMonitorState;
+import com.tlm.cli.domain.model.MonitorException;
 import com.tlm.cli.domain.model.PinnedCommentEntry;
 import com.tlm.cli.domain.model.PinnedCommentEvent;
 import com.tlm.cli.domain.model.SystemNotice;
-import com.tlm.cli.domain.port.PasswordSource;
+import com.tlm.cli.domain.port.EventSink;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -38,28 +35,23 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
-import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 
 /**
  * TUI principal (Lanterna): header com status, feed rolável com cores por
- * tipo, contadores no rodapé e linha de comando ':' (estilo vi). Também
- * implementa o prompt de senha usado pela recuperação de sessão.
+ * tipo, contadores no rodapé e linha de comando ':' (estilo vi). Modo local:
+ * consome eventos da engine direta e histórico do SQLite via hub.
  */
-public final class TerminalUi implements MonitorListener, PasswordSource, AutoCloseable {
+public final class TerminalUi implements EventSink, AutoCloseable {
 
-    /** Tamanho do histórico buscado em {@code :pinned list}. */
+    /** Tamanho do histórico buscado em {@code :pinned list} e no backfill. */
     private static final int PINNED_HISTORY = 20;
-
-    private enum Mode { COMMAND, PROMPT_PASSWORD }
 
     private final Screen screen;
     private final ExecutorService executor;
-    private final String baseUrl;
-    private final String userEmail;
+    private final String dbLabel;
     private final Instant startedAt = Instant.now();
 
     private final FeedBuffer feed = new FeedBuffer();
@@ -69,27 +61,20 @@ public final class TerminalUi implements MonitorListener, PasswordSource, AutoCl
 
     private ConnectLiveUseCase connectUseCase;
     private DisconnectLiveUseCase disconnectUseCase;
-    private WatchEventsUseCase watchUseCase;
     private MonitorHub hub;
 
     private volatile LiveMonitorState state = LiveMonitorState.offline();
-    private volatile boolean streamUp;
     private volatile boolean closed;
 
     private volatile List<String> giftCatalog = List.of();
     private volatile Set<String> selectedGifts = Set.of();
 
-    private Mode mode = Mode.COMMAND;
     private final StringBuilder input = new StringBuilder();
-    private String promptInfo = "";
-    private CompletableFuture<Optional<char[]>> passwordFuture;
-    private final Object promptLock = new Object();
     private final Object screenLock = new Object();
     private boolean screenStopped;
 
-    public TerminalUi(String baseUrl, String userEmail, ExecutorService executor) throws IOException {
-        this.baseUrl = baseUrl;
-        this.userEmail = userEmail == null ? "" : userEmail;
+    public TerminalUi(Path dbFile, ExecutorService executor) throws IOException {
+        this.dbLabel = dbFile == null ? "data/tlm-local.db" : dbFile.toString();
         this.executor = executor;
         DefaultTerminalFactory factory = new DefaultTerminalFactory();
         Screen created = factory.createScreen();
@@ -99,14 +84,13 @@ public final class TerminalUi implements MonitorListener, PasswordSource, AutoCl
 
     /** Liga os casos de uso e o hub de dados aos comandos da linha ':' da TUI. */
     public void bind(ConnectLiveUseCase connectUseCase, DisconnectLiveUseCase disconnectUseCase,
-                     WatchEventsUseCase watchUseCase, MonitorHub hub) {
+                     MonitorHub hub) {
         this.connectUseCase = connectUseCase;
         this.disconnectUseCase = disconnectUseCase;
-        this.watchUseCase = watchUseCase;
         this.hub = hub;
     }
 
-    // ---------------------------------------------------------------- MonitorListener
+    // ---------------------------------------------------------------- EventSink
 
     @Override
     public void onDomainEvent(DomainEvent event) {
@@ -122,22 +106,6 @@ public final class TerminalUi implements MonitorListener, PasswordSource, AutoCl
     }
 
     @Override
-    public void onStreamUp() {
-        post(() -> {
-            streamUp = true;
-            feed.add(new FeedLine("Escuta SSE conectada; aguardando eventos.", Category.INFO));
-        });
-    }
-
-    @Override
-    public void onStreamDown(String reason) {
-        post(() -> {
-            streamUp = false;
-            feed.add(new FeedLine("Escuta encerrada: " + reason, Category.SYSTEM));
-        });
-    }
-
-    @Override
     public void onNotice(String message) {
         post(() -> feed.add(new FeedLine(message, Category.INFO)));
     }
@@ -145,61 +113,6 @@ public final class TerminalUi implements MonitorListener, PasswordSource, AutoCl
     @Override
     public void onAlert(String message) {
         post(() -> feed.add(new FeedLine(message, Category.SYSTEM)));
-    }
-
-    // ---------------------------------------------------------------- PasswordSource
-
-    @Override
-    public Optional<char[]> promptPassword(String info) {
-        CompletableFuture<Optional<char[]>> mine = new CompletableFuture<>();
-        synchronized (promptLock) {
-            // Serializa prompts: duas recuperações 401 simultâneas não podem
-            // roubar o campo passwordFuture uma da outra.
-            while (passwordFuture != null && !closed) {
-                try {
-                    promptLock.wait(500);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return Optional.empty();
-                }
-            }
-            if (closed) {
-                return Optional.empty();
-            }
-            passwordFuture = mine;
-        }
-        post(() -> {
-            promptInfo = info;
-            mode = Mode.PROMPT_PASSWORD;
-            input.setLength(0);
-        });
-        try {
-            return mine.get();
-        } catch (Exception e) {
-            return Optional.empty();
-        } finally {
-            synchronized (promptLock) {
-                if (passwordFuture == mine) {
-                    passwordFuture = null;
-                }
-                promptLock.notifyAll();
-            }
-        }
-    }
-
-    private void completePassword(Optional<char[]> value) {
-        CompletableFuture<Optional<char[]>> future;
-        synchronized (promptLock) {
-            future = passwordFuture;
-            passwordFuture = null;
-            mode = Mode.COMMAND;
-            input.setLength(0);
-            promptInfo = "";
-            promptLock.notifyAll();
-        }
-        if (future != null) {
-            future.complete(value);
-        }
     }
 
     // ---------------------------------------------------------------- loop principal
@@ -229,15 +142,12 @@ public final class TerminalUi implements MonitorListener, PasswordSource, AutoCl
 
     public void requestQuit() {
         closed = true;
-        stopWatch();
         drainPending();
     }
 
     @Override
     public void close() {
         closed = true;
-        stopWatch();
-        completePassword(Optional.empty());
         // Garante a restauração do terminal mesmo que o encerramento venha do
         // shutdown hook (SIGTERM/SIGINT externo), quando run() pode não
         // alcançar a saída normal.
@@ -255,13 +165,6 @@ public final class TerminalUi implements MonitorListener, PasswordSource, AutoCl
             screen.stopScreen();
         } catch (IOException | IllegalStateException e) {
             // terminal já fechado ou nunca inicializado
-        }
-    }
-
-    private void stopWatch() {
-        WatchEventsUseCase current = watchUseCase;
-        if (current != null) {
-            current.stop();
         }
     }
 
@@ -285,13 +188,7 @@ public final class TerminalUi implements MonitorListener, PasswordSource, AutoCl
         }
         switch (key.getKeyType()) {
             case Enter -> submitInput();
-            case Escape -> {
-                if (mode == Mode.PROMPT_PASSWORD) {
-                    completePassword(Optional.empty());
-                } else {
-                    input.setLength(0);
-                }
-            }
+            case Escape -> input.setLength(0);
             case Backspace -> {
                 if (input.length() > 0) {
                     input.deleteCharAt(input.length() - 1);
@@ -320,10 +217,6 @@ public final class TerminalUi implements MonitorListener, PasswordSource, AutoCl
     private void submitInput() {
         String typed = input.toString();
         input.setLength(0);
-        if (mode == Mode.PROMPT_PASSWORD) {
-            completePassword(Optional.of(typed.toCharArray()));
-            return;
-        }
         CommandParser.parse(typed).ifPresent(this::dispatch);
     }
 
@@ -335,7 +228,7 @@ public final class TerminalUi implements MonitorListener, PasswordSource, AutoCl
                     runSafely(() -> disconnectUseCase.execute(disconnect.username())));
             case CommandParser.Gift gift -> handleGift(gift.argument());
             case CommandParser.Pinned pinned -> handlePinned(pinned.argument());
-            case CommandParser.Filter filter -> applyFilter(filter.category());
+            case CommandParser.Filter filter -> handleFilter(filter.category());
             case CommandParser.Clear ignored -> feed.clear();
             case CommandParser.Help ignored -> showHelp();
             case CommandParser.Quit ignored -> requestQuit();
@@ -372,7 +265,7 @@ public final class TerminalUi implements MonitorListener, PasswordSource, AutoCl
 
     private void fetchGiftCatalog() {
         executor.submit(() -> runSafely(() -> {
-            List<String> catalog = hub.availableGifts(state.username());
+            List<String> catalog = hub.availableGifts();
             giftCatalog = catalog;
             post(() -> {
                 if (catalog.isEmpty()) {
@@ -396,14 +289,49 @@ public final class TerminalUi implements MonitorListener, PasswordSource, AutoCl
             fetchPinnedHistory();
             return;
         }
-        applyFilter(Category.PINNED);
+        applyPinnedFilter();
+    }
+
+    private void handleFilter(Category category) {
+        if (category == Category.PINNED) {
+            applyPinnedFilter();
+            return;
+        }
+        applyFilter(category);
+    }
+
+    /**
+     * Filtro de fixados com backfill: sem fixados ao vivo no feed, busca os
+     * últimos do banco local (marcados como histórico) e então aplica o filtro.
+     */
+    private void applyPinnedFilter() {
+        if (feed.hasCategory(Category.PINNED)) {
+            applyFilter(Category.PINNED);
+            return;
+        }
+        executor.submit(() -> runSafely(() -> {
+            String live = state.username();
+            List<PinnedCommentEntry> entries = hub.pinnedComments(live, PINNED_HISTORY);
+            boolean allLives = live.isBlank();
+            post(() -> {
+                if (entries.isEmpty()) {
+                    feed.add(new FeedLine("nenhum comentário fixado no histórico local", Category.INFO));
+                } else {
+                    feed.add(new FeedLine(entries.size() + " fixados do histórico:", Category.INFO));
+                    for (PinnedCommentEntry entry : entries) {
+                        feed.add(new FeedLine(describePinned(entry, allLives) + " (histórico)", Category.PINNED));
+                    }
+                }
+                applyFilter(Category.PINNED);
+            });
+        }));
     }
 
     private void fetchPinnedHistory() {
         executor.submit(() -> runSafely(() -> {
             String live = state.username();
             List<PinnedCommentEntry> entries = hub.pinnedComments(live, PINNED_HISTORY);
-            boolean orgWide = live.isBlank();
+            boolean allLives = live.isBlank();
             post(() -> {
                 if (entries.isEmpty()) {
                     feed.add(new FeedLine("nenhum comentário fixado", Category.INFO));
@@ -411,15 +339,15 @@ public final class TerminalUi implements MonitorListener, PasswordSource, AutoCl
                 }
                 feed.add(new FeedLine("últimos " + entries.size() + " fixados:", Category.INFO));
                 for (PinnedCommentEntry entry : entries) {
-                    feed.add(new FeedLine(describePinned(entry, orgWide), Category.INFO));
+                    feed.add(new FeedLine(describePinned(entry, allLives), Category.INFO));
                 }
             });
         }));
     }
 
-    private static String describePinned(PinnedCommentEntry entry, boolean orgWide) {
+    private static String describePinned(PinnedCommentEntry entry, boolean allLives) {
         String who = entry.nickname().isBlank() ? entry.uniqueId() : entry.nickname();
-        String liveAt = orgWide && !entry.liveName().isBlank() ? "@" + entry.liveName() + " " : "";
+        String liveAt = allLives && !entry.liveName().isBlank() ? "@" + entry.liveName() + " " : "";
         String when = pinnedStamp(entry.timestamp());
         return "[fixado" + when + "] " + liveAt + "@" + who + ": " + entry.comment();
     }
@@ -453,19 +381,19 @@ public final class TerminalUi implements MonitorListener, PasswordSource, AutoCl
         }
     }
 
-    private void runSafely(ApiCallable callable) {
+    private void runSafely(LocalCallable callable) {
         try {
             callable.run();
-        } catch (ApiException error) {
-            post(() -> feed.add(new FeedLine(ApiErrors.describe(error), Category.SYSTEM)));
+        } catch (MonitorException error) {
+            post(() -> feed.add(new FeedLine(error.getMessage(), Category.SYSTEM)));
         } catch (RuntimeException runtime) {
             post(() -> feed.add(new FeedLine("Erro inesperado: " + runtime.getMessage(), Category.SYSTEM)));
         }
     }
 
     @FunctionalInterface
-    private interface ApiCallable {
-        void run() throws ApiException;
+    private interface LocalCallable {
+        void run() throws MonitorException;
     }
 
     // ---------------------------------------------------------------- desenho
@@ -494,26 +422,23 @@ public final class TerminalUi implements MonitorListener, PasswordSource, AutoCl
         LiveMonitorState st = state;
         String status;
         TextColor statusColor;
-        if (streamUp && st.connected()) {
+        if (st.connected()) {
             status = "Monitorando " + st.displayName();
             statusColor = TextColor.ANSI.GREEN_BRIGHT;
-        } else if (streamUp) {
-            status = "Conectado ao servidor; aguardando 'live'";
-            statusColor = TextColor.ANSI.YELLOW_BRIGHT;
         } else {
             status = "Desconectado";
             statusColor = TextColor.ANSI.RED_BRIGHT;
         }
         g.setForegroundColor(TextColor.ANSI.WHITE_BRIGHT);
-        g.putString(0, 0, "TikTok Live Monitor");
+        g.putString(0, 0, "TikTok Live Monitor (local)");
         g.setForegroundColor(statusColor);
-        g.putString(21, 0, truncate(status, cols - 22));
+        g.putString(28, 0, truncate(status, cols - 29));
         g.setForegroundColor(TextColor.ANSI.WHITE_BRIGHT);
         String uptime = "no ar " + formatUptime(Duration.between(startedAt, Instant.now()));
         g.putString(Math.max(0, cols - uptime.length()), 0, uptime);
 
         g.setForegroundColor(TextColor.ANSI.BLACK_BRIGHT);
-        String meta = baseUrl + "  usuário: " + userEmail
+        String meta = "SQLite: " + dbLabel
                 + "  live: " + (st.connected() ? st.displayName() : "-");
         g.putString(0, 1, truncate(meta, cols));
     }
@@ -547,9 +472,7 @@ public final class TerminalUi implements MonitorListener, PasswordSource, AutoCl
     }
 
     private void drawInput(TextGraphics g, int rows, int cols) {
-        String prompt = mode == Mode.PROMPT_PASSWORD ? promptInfo + ": " : ": ";
-        String typed = mode == Mode.PROMPT_PASSWORD ? "*".repeat(input.length()) : input.toString();
-        String line = prompt + typed;
+        String line = ": " + input;
         g.setForegroundColor(TextColor.ANSI.WHITE_BRIGHT);
         g.putString(0, rows - 1, truncate(line, Math.max(0, cols - 2)));
         g.setBackgroundColor(TextColor.ANSI.WHITE_BRIGHT);

@@ -1,13 +1,22 @@
 package com.tlm.cli.infrastructure.config;
 
-/** Flags da linha de comando (--url, --email, --esquecer, --help). */
-public record Options(String url, String email, boolean help, boolean forget) {
+import java.nio.file.Path;
+
+/** Flags da linha de comando: {@code --db <path>} e {@code --help}. */
+public record Options(Path db, boolean help) {
+
+    /** Banco padrão: {@code ./data/tlm-local.db} (ou env {@code TLM_DB}). */
+    public static Path defaultDb() {
+        String env = System.getenv("TLM_DB");
+        if (env != null && !env.isBlank()) {
+            return Path.of(env.trim());
+        }
+        return Path.of("data", "tlm-local.db");
+    }
 
     public static Options parse(String... args) {
-        String url = null;
-        String email = null;
+        Path db = null;
         boolean help = false;
-        boolean forget = false;
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
             String value = null;
@@ -20,13 +29,11 @@ public record Options(String url, String email, boolean help, boolean forget) {
             }
             switch (name) {
                 case "--help", "-h" -> help = true;
-                case "--url" -> url = value != null ? value : nextValue(args, ++i);
-                case "--email" -> email = value != null ? value : nextValue(args, ++i);
-                case "--esquecer", "--forget" -> forget = true;
+                case "--db" -> db = Path.of(value != null ? value : nextValue(args, ++i));
                 default -> throw new IllegalArgumentException("flag desconhecida: " + arg);
             }
         }
-        return new Options(url, email, help, forget);
+        return new Options(db == null ? defaultDb() : db, help);
     }
 
     private static String nextValue(String[] args, int index) {

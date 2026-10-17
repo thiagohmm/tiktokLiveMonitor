@@ -26,8 +26,9 @@ public final class CommandParser {
     }
 
     /**
-     * Fixados: {@code argument} vazio ativa o acompanhamento ao vivo;
-     * {@code "list"} imprime o histórico dos últimos 20.
+     * Fixados: {@code argument} vazio ativa o filtro (com backfill do histórico
+     * local quando o feed não tem nenhum pin); {@code "list"} imprime os
+     * últimos 20 do banco.
      */
     public record Pinned(String argument) implements Command {
     }
@@ -122,12 +123,13 @@ public final class CommandParser {
     public static String helpText() {
         return """
                 Comandos:
-                  :connect <user>       conecta a uma live (@ pode ser omitido)
-                  :disconnect [user]    desconecta o monitor (corrente, se omitido)
+                  :connect <user>       conecta direto à live (@ pode ser omitido; uma por vez)
+                  :disconnect [user]    desconecta a live atual
                   :gift [seleção]       lista o catálogo ou filtra pelos presentes escolhidos
                                         (ex.: :gift 1,4 | :gift Rosa,Dino | :gift all volta a tudo)
                   :filter <tipo|all>    mostra só chat/gift/like/follow/pinned/system
-                  :pinned [list]        fixados ao vivo; :pinned list imprime os últimos 20
+                  :pinned [list]        fixados ao vivo (busca o histórico do banco quando o
+                                        feed não tem nenhum); :pinned list imprime os últimos 20
                   :clear                limpa o feed
                   :help                 esta ajuda
                   :quit                 encerra e desconecta a live (Ctrl+C também sai)
