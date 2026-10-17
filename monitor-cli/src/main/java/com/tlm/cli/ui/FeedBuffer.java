@@ -110,6 +110,11 @@ public final class FeedBuffer {
         return view.isEmpty();
     }
 
+    /** Cópia cronológica da visão filtrada (a mais antiga primeiro). */
+    public synchronized List<FeedLine> lines() {
+        return List.copyOf(view);
+    }
+
     /** Existe alguma linha daquela categoria no histórico completo? */
     public synchronized boolean hasCategory(Category category) {
         for (FeedLine line : all) {

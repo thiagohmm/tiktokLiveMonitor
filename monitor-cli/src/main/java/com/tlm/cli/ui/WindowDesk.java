@@ -150,14 +150,30 @@ public final class WindowDesk {
         focus(windows.get((index + 1) % windows.size()));
     }
 
-    public void onClick(int col, int row, int cols, int rows) {
+    public void commitLimitEdits() {
+        commitLimitsExcept(null);
+    }
+
+    public DosWindow.Zone onClick(int col, int row, int cols, int rows) {
         drag = null;
         for (int i = windows.size() - 1; i >= 0; i--) {
             DosWindow window = windows.get(i);
-            switch (window.hit(col, row, cols, rows)) {
-                case CLOSE -> {
-                    close(window);
-                    return;
+            DosWindow.Zone zone = window.hit(col, row, cols, rows);
+            if (zone == DosWindow.Zone.MISS) {
+                continue;
+            }
+            if (zone == DosWindow.Zone.LIMIT) {
+                commitLimitsExcept(window);
+                focus(window);
+                window.beginLimitEdit();
+                return zone;
+            }
+            commitLimitsExcept(null);
+            switch (zone) {
+                case CLOSE -> close(window);
+                case ORDER -> {
+                    focus(window);
+                    window.toggleOrder();
                 }
                 case TITLE -> {
                     focus(window);
@@ -165,17 +181,24 @@ public final class WindowDesk {
                     drag = window;
                     grabDx = col - box.x();
                     grabDy = row - box.y();
-                    return;
                 }
-                case BODY -> {
-                    focus(window);
-                    return;
-                }
-                case MISS -> {
+                case BODY -> focus(window);
+                case LIMIT, MISS -> {
                 }
             }
+            return zone;
         }
+        commitLimitsExcept(null);
         clearFocus();
+        return DosWindow.Zone.MISS;
+    }
+
+    private void commitLimitsExcept(DosWindow keep) {
+        for (DosWindow window : windows) {
+            if (window != keep) {
+                window.commitLimitEdit();
+            }
+        }
     }
 
     public void onDrag(int col, int row, int cols, int rows) {

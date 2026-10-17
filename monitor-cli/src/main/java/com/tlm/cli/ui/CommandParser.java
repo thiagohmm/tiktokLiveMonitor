@@ -184,6 +184,8 @@ public final class CommandParser {
                   :help                 esta ajuda
                   :quit                 encerra e desconecta a live (Ctrl+C também sai)
                 Menu no topo e [X] usam o mouse. Arraste a barra para mover.
+                Na barra: Conectar [canal] (Enter) e, ligado, Desconectar.
+                No rodapé da janela: crescente/decrescente e [n] últimos registros.
                 Tab troca a janela em foco; setas e a roda rolam a janela (ou o fundo).""";
     }
 }

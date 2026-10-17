@@ -88,6 +88,63 @@ class WindowDeskTest {
     }
 
     @Test
+    void limitKeepsTheLastLinesAndOrderFlipsThem() {
+        WindowDesk desk = new WindowDesk();
+        DosWindow gifts = desk.open(WindowKind.GIFTS);
+        for (int i = 0; i < 30; i++) {
+            desk.publish(new FeedLine("g" + i, Category.GIFT, "Rosa", "Ana", 1));
+        }
+
+        assertEquals("g0", gifts.texts(30).get(0));
+        assertEquals("g29", gifts.texts(30).get(29));
+
+        gifts.setLimit(15);
+        List<String> ascending = gifts.texts(20);
+        assertEquals(15, ascending.size());
+        assertEquals("g15", ascending.get(0));
+        assertEquals("g29", ascending.get(14));
+
+        gifts.toggleOrder();
+        List<String> descending = gifts.texts(20);
+        assertEquals("g29", descending.get(0));
+        assertEquals("g15", descending.get(14));
+    }
+
+    void footerClickTogglesOrderAndArmsTheLimitField() {
+        WindowDesk desk = new WindowDesk();
+        DosWindow gifts = desk.open(WindowKind.GIFTS);
+        gifts.place(0, 2, 40, 12);
+        DosWindow.Controls controls = gifts.controls(COLS, ROWS);
+        Frame box = gifts.visible(COLS, ROWS);
+        int footer = box.y() + box.height() - 1;
+
+        assertEquals(DosWindow.Zone.ORDER, desk.onClick(controls.orderX(), footer, COLS, ROWS));
+        assertTrue(gifts.descending());
+
+        controls = gifts.controls(COLS, ROWS);
+        assertEquals(DosWindow.Zone.LIMIT, desk.onClick(controls.limitX(), footer, COLS, ROWS));
+        assertTrue(gifts.editingLimit());
+        gifts.typeLimit('1');
+        gifts.typeLimit('5');
+        gifts.commitLimitEdit();
+        assertEquals(15, gifts.limit());
+    }
+
+    void menuConnectAndDisconnectDoNotOpenAWindow() {
+        MenuBar menu = new MenuBar();
+        MenuBar.Chrome disconnected = menu.chrome(80, false, "live");
+        MenuBar.Target field = menu.hit(disconnected.fieldX(), 1, 80, false, "live").orElseThrow();
+        MenuBar.Target submit = menu.hit(disconnected.actionX(), 1, 80, false, "live").orElseThrow();
+        assertTrue(field instanceof MenuBar.Target.ConnectField);
+        assertTrue(submit instanceof MenuBar.Target.ConnectSubmit);
+        assertFalse(menu.hit(disconnected.fieldX(), 1, 80).isPresent());
+
+        MenuBar.Chrome connected = menu.chrome(80, true, "");
+        MenuBar.Target disconnect = menu.hit(connected.actionX(), 1, 80, true, "").orElseThrow();
+        assertTrue(disconnect instanceof MenuBar.Target.Disconnect);
+        assertFalse(menu.hit(connected.actionX(), 1, 80).isPresent());
+    }
+
     void menuHitMatchesTheDrawnLabel() {
         MenuBar menu = new MenuBar();
         List<MenuBar.Item> items = menu.layout(80);

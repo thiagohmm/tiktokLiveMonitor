@@ -6,6 +6,7 @@ import com.googlecode.lanterna.TextColor;
 import com.googlecode.lanterna.graphics.TextGraphics;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -17,7 +18,11 @@ import java.util.Set;
 public final class DosWindow {
 
     public enum Zone {
-        MISS, CLOSE, TITLE, BODY
+        MISS, CLOSE, TITLE, BODY, ORDER, LIMIT
+    }
+
+    /** Faixa clicável do rodapé: ordem e campo do limite. */
+    public record Controls(int orderX, int orderWidth, int limitX, int limitWidth) {
     }
 
     private static final int MIN_WIDTH = 24;
@@ -34,6 +39,11 @@ public final class DosWindow {
     private String giftLabel = "";
     private int minCount;
     private String user = "";
+    private boolean descending;
+    private int limit;
+    private String limitDraft = "";
+    private boolean editingLimit;
+    private int scrollOffset;
 
     private int x;
     private int y;
@@ -103,6 +113,68 @@ public final class DosWindow {
         return user;
     }
 
+    public boolean descending() {
+        return descending;
+    }
+
+    public void toggleOrder() {
+        descending = !descending;
+        scrollOffset = 0;
+    }
+
+    /** {@code 0} mostra o fluxo inteiro; acima disso, só os últimos N. */
+    public int limit() {
+        return limit;
+    }
+
+    public void setLimit(int limit) {
+        this.limit = Math.max(0, limit);
+        limitDraft = "";
+        editingLimit = false;
+        scrollOffset = 0;
+    }
+
+    public boolean editingLimit() {
+        return editingLimit;
+    }
+
+    public void beginLimitEdit() {
+        if (editingLimit) {
+            return;
+        }
+        editingLimit = true;
+        limitDraft = limit > 0 ? Integer.toString(limit) : "";
+    }
+
+    public void typeLimit(char digit) {
+        if (!editingLimit || digit < '0' || digit > '9' || limitDraft.length() >= 4) {
+            return;
+        }
+        limitDraft += digit;
+    }
+
+    public void backspaceLimit() {
+        if (!editingLimit || limitDraft.isEmpty()) {
+            return;
+        }
+        limitDraft = limitDraft.substring(0, limitDraft.length() - 1);
+    }
+
+    public void commitLimitEdit() {
+        if (!editingLimit) {
+            return;
+        }
+        editingLimit = false;
+        limit = limitDraft.isBlank() ? 0 : Integer.parseInt(limitDraft);
+        limitDraft = "";
+        scrollOffset = 0;
+    }
+
+    public void cancelLimitEdit() {
+        editingLimit = false;
+        limitDraft = "";
+    }
+
     public boolean focused() {
         return focused;
     }
@@ -117,11 +189,14 @@ public final class DosWindow {
 
     public void inject(List<FeedLine> lines) {
         extras.addAll(lines);
+        int added = 0;
         for (FeedLine line : lines) {
             if (matches(line)) {
                 feed.add(line);
+                added++;
             }
         }
+        holdScroll(added);
     }
 
     /** Troca o histórico injetado (backfill) e reconstrói com o fluxo ao vivo. */
@@ -141,11 +216,13 @@ public final class DosWindow {
     public void offer(FeedLine line) {
         if (kind.tracksLive() && matches(line)) {
             feed.add(line);
+            holdScroll(1);
         }
     }
 
     /** Reconstrói o conteúdo a partir do histórico ao vivo (e dos extras). */
     public void replay(List<FeedLine> live) {
+        scrollOffset = 0;
         feed.clear();
         List<FeedLine> source = kind.tracksLive() ? live : snapshot;
         for (FeedLine line : source) {
@@ -179,10 +256,11 @@ public final class DosWindow {
     }
 
     public void scrollLines(int delta) {
+        int max = Math.max(0, presentation().size() - 1);
         if (delta < 0) {
-            feed.pageUp(-delta);
+            scrollOffset = Math.min(scrollOffset + (-delta), max);
         } else if (delta > 0) {
-            feed.pageDown(delta);
+            scrollOffset = Math.max(0, scrollOffset - delta);
         }
     }
 
@@ -192,7 +270,7 @@ public final class DosWindow {
 
     public List<String> texts(int rows) {
         List<String> texts = new ArrayList<>();
-        for (FeedLine line : feed.window(rows)) {
+        for (FeedLine line : visibleLines(rows)) {
             texts.add(line.text());
         }
         return texts;
@@ -250,9 +328,20 @@ public final class DosWindow {
             return Zone.TITLE;
         }
         if (row == box.y() + box.height() - 1) {
+            Controls controls = controls(box);
+            if (col >= controls.orderX() && col < controls.orderX() + controls.orderWidth()) {
+                return Zone.ORDER;
+            }
+            if (col >= controls.limitX() && col < controls.limitX() + controls.limitWidth()) {
+                return Zone.LIMIT;
+            }
             return Zone.TITLE;
         }
         return Zone.BODY;
+    }
+
+    public Controls controls(int cols, int rows) {
+        return controls(visible(cols, rows));
     }
 
     public void draw(TextGraphics g, int cols, int rows) {
@@ -284,8 +373,10 @@ public final class DosWindow {
 
         int innerWidth = Math.max(1, w - 4);
         int inner = Math.max(0, h - 2);
-        List<FeedLine> lines = feed.window(inner);
-        int start = y0 + 1 + Math.max(0, inner - lines.size());
+        List<FeedLine> lines = visibleLines(inner);
+        int start = descending
+                ? y0 + 1
+                : y0 + 1 + Math.max(0, inner - lines.size());
         if (lines.isEmpty()) {
             g.setBackgroundColor(TextColor.ANSI.BLUE);
             g.setForegroundColor(TextColor.ANSI.WHITE);
@@ -298,13 +389,89 @@ public final class DosWindow {
             g.putString(x0 + 2, start + i, TerminalText.fit(line.text(), innerWidth));
         }
         if (h > 1) {
+            int footerRow = y0 + h - 1;
             g.setBackgroundColor(bar);
             g.setForegroundColor(TextColor.ANSI.WHITE_BRIGHT);
-            String status = TerminalText.fit(footer.isBlank() ? summary() : footer, Math.max(0, w - 4));
-            int at = x0 + Math.max(1, (w - status.codePointCount(0, status.length())) / 2);
-            g.putString(at, y0 + h - 1, status);
+            g.putString(x0 + 1, footerRow, " ".repeat(Math.max(0, w - 2)));
+            Controls controls = controls(box);
+            g.setBackgroundColor(TextColor.ANSI.WHITE);
+            g.setForegroundColor(TextColor.ANSI.BLACK);
+            g.putString(controls.orderX(), footerRow, orderLabel());
+            if (editingLimit) {
+                g.setBackgroundColor(TextColor.ANSI.CYAN);
+            }
+            g.putString(controls.limitX(), footerRow, limitText());
+            g.setBackgroundColor(bar);
+            g.setForegroundColor(TextColor.ANSI.WHITE_BRIGHT);
+            String status = footer.isBlank() ? summary() : footer;
+            int statusX = controls.limitX() + controls.limitWidth() + 1;
+            int room = Math.max(0, x0 + w - 1 - statusX);
+            if (room > 0) {
+                g.putString(statusX, footerRow, TerminalText.fit(status, room));
+            }
         }
         g.setBackgroundColor(TextColor.ANSI.DEFAULT);
+    }
+
+    private Controls controls(Frame box) {
+        int orderX = box.x() + 1;
+        String order = orderLabel();
+        int limitX = orderX + order.length() + 1;
+        String limitField = limitText();
+        return new Controls(orderX, order.length(), limitX, limitField.length());
+    }
+
+    private String orderLabel() {
+        return descending ? "decrescente" : "crescente";
+    }
+
+    private String limitText() {
+        String value;
+        if (editingLimit) {
+            value = limitDraft.isEmpty() ? " " : limitDraft;
+        } else {
+            value = limit > 0 ? Integer.toString(limit) : " ";
+        }
+        return "[" + value + "]";
+    }
+
+    private List<FeedLine> presentation() {
+        List<FeedLine> lines = new ArrayList<>(feed.lines());
+        if (limit > 0 && lines.size() > limit) {
+            lines = new ArrayList<>(lines.subList(lines.size() - limit, lines.size()));
+        }
+        if (descending) {
+            Collections.reverse(lines);
+        }
+        return lines;
+    }
+
+    private List<FeedLine> visibleLines(int rows) {
+        List<FeedLine> lines = presentation();
+        if (lines.isEmpty() || rows <= 0) {
+            return List.of();
+        }
+        if (!descending) {
+            int last = lines.size() - 1 - scrollOffset;
+            if (last < 0) {
+                return List.of();
+            }
+            int first = Math.max(0, last - rows + 1);
+            return new ArrayList<>(lines.subList(first, last + 1));
+        }
+        int first = Math.min(scrollOffset, lines.size());
+        int last = Math.min(lines.size(), first + rows);
+        if (first >= last) {
+            return List.of();
+        }
+        return new ArrayList<>(lines.subList(first, last));
+    }
+
+    /** Mantém a linha que estava na tela quando chega evento e a pessoa rolou. */
+    private void holdScroll(int added) {
+        if (scrollOffset > 0 && added > 0) {
+            scrollOffset = Math.min(scrollOffset + added, Math.max(0, presentation().size() - 1));
+        }
     }
 
     private String summary() {

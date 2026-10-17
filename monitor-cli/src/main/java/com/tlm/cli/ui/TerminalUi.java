@@ -82,7 +82,13 @@ public final class TerminalUi implements EventSink, AutoCloseable {
 
     private volatile List<String> giftCatalog = List.of();
 
+    private enum Typing {
+        COMMAND, CHANNEL, LIMIT
+    }
+
     private final StringBuilder input = new StringBuilder();
+    private final StringBuilder channel = new StringBuilder();
+    private Typing typing = Typing.COMMAND;
     private final Object screenLock = new Object();
     private boolean screenStopped;
     private PrintStream savedOut;
@@ -121,7 +127,15 @@ public final class TerminalUi implements EventSink, AutoCloseable {
 
     @Override
     public void onStateChanged(LiveMonitorState newState) {
-        post(() -> this.state = newState);
+        post(() -> {
+            this.state = newState;
+            if (newState.connected()) {
+                channel.setLength(0);
+                if (typing == Typing.CHANNEL) {
+                    typing = Typing.COMMAND;
+                }
+            }
+        });
     }
 
     @Override
@@ -260,11 +274,25 @@ public final class TerminalUi implements EventSink, AutoCloseable {
             return;
         }
         if (key.isCtrlDown() && key.getCharacter() != null && key.getCharacter() == 'w') {
+            desk.commitLimitEdits();
+            typing = Typing.COMMAND;
             desk.closeFocused();
             return;
         }
         if (key.getKeyType() == KeyType.Tab) {
+            desk.commitLimitEdits();
+            if (typing != Typing.CHANNEL) {
+                typing = Typing.COMMAND;
+            }
             desk.cycleFocus();
+            return;
+        }
+        if (typing == Typing.CHANNEL) {
+            handleChannelKey(key);
+            return;
+        }
+        if (typing == Typing.LIMIT) {
+            handleLimitKey(key);
             return;
         }
         switch (key.getKeyType()) {
@@ -333,9 +361,12 @@ public final class TerminalUi implements EventSink, AutoCloseable {
         int col = mouse.getPosition().getColumn();
         int row = mouse.getPosition().getRow();
         switch (mouse.getActionType()) {
-            case CLICK_DOWN -> menu.hit(col, row, cols).ifPresentOrElse(
-                    this::openFromMenu,
-                    () -> desk.onClick(col, row, cols, rows));
+            case CLICK_DOWN -> menu.hit(col, row, cols, state.connected(), channel.toString()).ifPresentOrElse(
+                    this::handleMenu,
+                    () -> {
+                        DosWindow.Zone zone = desk.onClick(col, row, cols, rows);
+                        typing = zone == DosWindow.Zone.LIMIT ? Typing.LIMIT : Typing.COMMAND;
+                    });
             case DRAG -> desk.onDrag(col, row, cols, rows);
             case SCROLL_UP -> {
                 if (!desk.onScroll(col, row, -1, cols, rows)) {
@@ -345,6 +376,85 @@ public final class TerminalUi implements EventSink, AutoCloseable {
             case SCROLL_DOWN -> {
                 if (!desk.onScroll(col, row, 1, cols, rows)) {
                     feed.pageDown(1);
+                }
+            }
+            default -> {
+            }
+        }
+    }
+
+    private void handleMenu(MenuBar.Target target) {
+        desk.commitLimitEdits();
+        switch (target) {
+            case MenuBar.Target.Open open -> {
+                typing = Typing.COMMAND;
+                openFromMenu(open.kind());
+            }
+            case MenuBar.Target.ConnectField ignored -> typing = Typing.CHANNEL;
+            case MenuBar.Target.ConnectSubmit ignored -> {
+                if (channel.isEmpty()) {
+                    typing = Typing.CHANNEL;
+                } else {
+                    submitChannel();
+                }
+            }
+            case MenuBar.Target.Disconnect ignored -> {
+                typing = Typing.COMMAND;
+                dispatch(new CommandParser.Disconnect(""));
+            }
+        }
+    }
+
+    private void handleChannelKey(KeyStroke key) {
+        switch (key.getKeyType()) {
+            case Enter -> submitChannel();
+            case Escape -> {
+                channel.setLength(0);
+                typing = Typing.COMMAND;
+            }
+            case Backspace -> {
+                if (!channel.isEmpty()) {
+                    channel.deleteCharAt(channel.length() - 1);
+                }
+            }
+            case Character -> {
+                Character character = key.getCharacter();
+                if (character != null && character.charValue() > 32 && channel.length() < 32) {
+                    channel.append(character.charValue());
+                }
+            }
+            default -> {
+            }
+        }
+    }
+
+    private void submitChannel() {
+        String typed = channel.toString().trim();
+        channel.setLength(0);
+        typing = Typing.COMMAND;
+        CommandParser.parse(":connect " + typed).ifPresent(this::dispatch);
+    }
+
+    private void handleLimitKey(KeyStroke key) {
+        DosWindow window = desk.focused().filter(DosWindow::editingLimit).orElse(null);
+        if (window == null) {
+            typing = Typing.COMMAND;
+            return;
+        }
+        switch (key.getKeyType()) {
+            case Enter -> {
+                window.commitLimitEdit();
+                typing = Typing.COMMAND;
+            }
+            case Escape -> {
+                window.cancelLimitEdit();
+                typing = Typing.COMMAND;
+            }
+            case Backspace -> window.backspaceLimit();
+            case Character -> {
+                Character character = key.getCharacter();
+                if (character != null && character.charValue() >= '0' && character.charValue() <= '9') {
+                    window.typeLimit(character.charValue());
                 }
             }
             default -> {
@@ -728,10 +838,22 @@ public final class TerminalUi implements EventSink, AutoCloseable {
         g.setForegroundColor(TextColor.ANSI.BLACK);
         g.setBackgroundColor(TextColor.ANSI.WHITE);
         g.putString(0, 1, " ".repeat(Math.max(0, cols)));
-        for (MenuBar.Item item : menu.layout(cols)) {
+        MenuBar.Chrome bar = menu.chrome(cols, state.connected(), channel.toString());
+        for (MenuBar.Item item : bar.windows()) {
             g.putString(item.x(), 1, item.label());
         }
+        g.putString(bar.actionX(), 1, bar.action());
+        if (!bar.connected()) {
+            if (typing == Typing.CHANNEL) {
+                g.setBackgroundColor(TextColor.ANSI.CYAN);
+            } else {
+                g.setBackgroundColor(TextColor.ANSI.BLACK);
+                g.setForegroundColor(TextColor.ANSI.WHITE_BRIGHT);
+            }
+            g.putString(bar.fieldX(), 1, bar.field());
+        }
         g.setBackgroundColor(TextColor.ANSI.DEFAULT);
+        g.setForegroundColor(TextColor.ANSI.WHITE_BRIGHT);
     }
 
     private void drawFeed(TextGraphics g, int rows, int cols) {
@@ -767,9 +889,11 @@ public final class TerminalUi implements EventSink, AutoCloseable {
         String line = ": " + input;
         g.setForegroundColor(TextColor.ANSI.WHITE_BRIGHT);
         g.putString(0, rows - 1, TerminalText.fit(line, Math.max(0, cols - 2)));
-        g.setBackgroundColor(TextColor.ANSI.WHITE_BRIGHT);
-        g.putString(Math.min(cols - 2, line.length()), rows - 1, " ");
-        g.setBackgroundColor(TextColor.ANSI.DEFAULT);
+        if (typing == Typing.COMMAND) {
+            g.setBackgroundColor(TextColor.ANSI.WHITE_BRIGHT);
+            g.putString(Math.min(cols - 2, line.length()), rows - 1, " ");
+            g.setBackgroundColor(TextColor.ANSI.DEFAULT);
+        }
     }
 
     private TextColor colorOf(Category category) {
