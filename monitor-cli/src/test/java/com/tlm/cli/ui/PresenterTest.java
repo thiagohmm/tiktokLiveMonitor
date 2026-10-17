@@ -49,6 +49,8 @@ class PresenterTest {
     void giftLineCarriesOriginalGiftNameForFiltering() {
         FeedLine line = presenter.line(new GiftEvent(NOW, "user2", "Ana", "Fenix", 3));
         assertEquals("Fenix", line.giftName());
+        assertEquals("Ana", line.user());
+        assertEquals(3, line.giftCount());
     }
 
     @Test

@@ -19,10 +19,12 @@ rodando com o modelo **`deepseek/deepseek-v4-pro`** (ex.: agente `reviewer` com
   assinatura Euler Stream; `TLM_TIKTOK_API_KEY` opcional) e grava em SQLite local
   (`./data/tlm-local.db`, override com `--db`/`TLM_DB`). Não há login, API remota, SSE nem node;
   este modo não vai para o VPS (a produção Go/Postgres segue intacta no `main`). Comandos da TUI:
-  `:connect <user>`/`:disconnect` (uma live por vez), `:gift` (catálogo da lib + seleção múltipla
-  que filtra o feed por presente), `:pinned [list]` (fixados ao vivo em categoria própria; sem
-  pins no feed o filtro faz backfill dos últimos 20 do banco; `list` imprime o histórico) e
-  `:filter` incluindo `pinned`; `:quit`/Ctrl+C desconecta a engine. Pins fixados ANTES do connect
+  `:connect <user>`/`:disconnect` (uma live por vez). Cada visão abre uma janela DOS
+  (mouse no menu e em `[X]`, arrastar a barra, `:close`/Esc): `:comentarios [user]`,
+  `:gift` (catálogo + seleção que filtra a janela; `:qty <n>` quantidade mínima;
+  `:gift all` histórico no SQLite, até 200), `:pinned [list]` (sem pins ao vivo, backfill
+  dos últimos 20), `:mensagens`, `:user` na janela em foco e `:filter` no feed de fundo.
+  `:quit`/Ctrl+C desconecta a engine. Pins fixados ANTES do connect
   não são capturados (estado inicial da sala não é retransmitido). Testes:
   `mvn -f monitor-cli/pom.xml test`; jar: `mvn -f monitor-cli/pom.xml package` →
   `target/monitor-cli.jar`. Ver `monitor-cli/README.md`

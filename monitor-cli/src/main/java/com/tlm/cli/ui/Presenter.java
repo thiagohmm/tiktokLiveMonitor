@@ -24,15 +24,22 @@ public final class Presenter {
     public FeedLine line(DomainEvent event) {
         String stamp = stamp(event.at());
         return switch (event) {
-            case ChatMessage m -> new FeedLine(stamp + "@" + m.displayName() + ": " + m.comment(), Category.CHAT);
-            case GiftEvent g ->
-                    new FeedLine(stamp + "@" + g.displayName() + " enviou " + giftText(g), Category.GIFT, g.giftName());
-            case LikeEvent l -> new FeedLine(stamp + "@" + l.displayName() + " " + likeText(l), Category.LIKE);
-            case FollowEvent f -> new FeedLine(stamp + "@" + f.displayName() + " " + followText(f), Category.FOLLOW);
-            case PinnedCommentEvent p ->
-                    new FeedLine(stamp + "[fixado] @" + p.displayName() + ": " + p.comment(), Category.PINNED);
-            case SystemNotice n -> new FeedLine(stamp + noticeText(n), Category.SYSTEM);
+            case ChatMessage m -> line(stamp + "@" + m.displayName() + ": " + m.comment(),
+                    Category.CHAT, "", m.displayName(), 0);
+            case GiftEvent g -> line(stamp + "@" + g.displayName() + " enviou " + giftText(g),
+                    Category.GIFT, g.giftName(), g.displayName(), g.count());
+            case LikeEvent l -> line(stamp + "@" + l.displayName() + " " + likeText(l),
+                    Category.LIKE, "", l.displayName(), 0);
+            case FollowEvent f -> line(stamp + "@" + f.displayName() + " " + followText(f),
+                    Category.FOLLOW, "", f.displayName(), 0);
+            case PinnedCommentEvent p -> line(stamp + "[fixado] @" + p.displayName() + ": " + p.comment(),
+                    Category.PINNED, "", p.displayName(), 0);
+            case SystemNotice n -> line(stamp + noticeText(n), Category.SYSTEM, "", "", 0);
         };
+    }
+
+    private static FeedLine line(String text, Category category, String giftName, String user, int giftCount) {
+        return new FeedLine(text, category, giftName, user, giftCount);
     }
 
     private static String giftText(GiftEvent gift) {

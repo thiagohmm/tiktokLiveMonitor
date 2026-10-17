@@ -73,6 +73,29 @@ class CommandParserTest {
     }
 
     @Test
+    void windowsOpenByCommand() {
+        assertEquals(new CommandParser.Open(WindowKind.CHAT, "ana"),
+                CommandParser.parse(":comentários @ana").orElseThrow());
+        assertEquals(new CommandParser.Open(WindowKind.MESSAGES, ""),
+                CommandParser.parse(":mensagens").orElseThrow());
+        assertEquals(new CommandParser.Open(WindowKind.LIKES, ""),
+                CommandParser.parse(":curtidas").orElseThrow());
+        assertEquals(new CommandParser.Open(WindowKind.FOLLOWS, "bia"),
+                CommandParser.parse(":seguidores @bia").orElseThrow());
+        assertEquals(new CommandParser.Close(), CommandParser.parse(":fechar").orElseThrow());
+        assertEquals(new CommandParser.UserFilter("ana"), CommandParser.parse(":user @ana").orElseThrow());
+        assertEquals(new CommandParser.UserFilter(""), CommandParser.parse(":usuario").orElseThrow());
+        assertEquals(new CommandParser.Quantity(5), CommandParser.parse(":qty 5").orElseThrow());
+        assertEquals(new CommandParser.Quantity(0), CommandParser.parse(":quantidade 0").orElseThrow());
+    }
+
+    @Test
+    void quantityWithoutNumberIsUnknown() {
+        CommandParser.Command command = CommandParser.parse(":qtd muita").orElseThrow();
+        assertTrue(command instanceof CommandParser.Unknown unknown && unknown.message().contains(":qty"));
+    }
+
+    @Test
     void pinnedWithInvalidArgumentIsUnknownWithUsage() {
         CommandParser.Command command = CommandParser.parse(":pinned ontem").orElseThrow();
         assertTrue(command instanceof CommandParser.Unknown unknown && unknown.message().contains(":pinned"));
@@ -119,6 +142,12 @@ class CommandParserTest {
         assertTrue(help.contains(":connect"));
         assertTrue(help.contains(":disconnect"));
         assertTrue(help.contains(":gift"));
+        assertTrue(help.contains(":gift all abre o histórico"));
+        assertTrue(help.contains(":comentarios"));
+        assertTrue(help.contains(":qty"));
+        assertTrue(help.contains(":user"));
+        assertTrue(help.contains(":close"));
+        assertTrue(help.contains("[X]"));
         assertTrue(help.contains(":pinned"));
         assertTrue(help.contains(":filter"));
         assertTrue(help.contains(":clear"));

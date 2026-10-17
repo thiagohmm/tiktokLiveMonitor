@@ -1,5 +1,6 @@
 package com.tlm.cli.infrastructure.sqlite;
 
+import com.tlm.cli.domain.model.GiftEntry;
 import com.tlm.cli.domain.model.PinnedCommentEntry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -82,6 +83,28 @@ class SqliteStoreTest {
         List<PinnedCommentEntry> limited = store.recentPinned("", 2);
         assertEquals(2, limited.size());
         assertEquals("a-t3", limited.get(0).comment());
+    }
+
+    @Test
+    void recentGiftsFiltersByLiveOrdersDescAndLimits() throws Exception {
+        Instant t1 = Instant.parse("2026-10-17T01:00:00Z");
+        Instant t2 = Instant.parse("2026-10-17T02:00:00Z");
+        Instant t3 = Instant.parse("2026-10-17T03:00:00Z");
+        store.recordGift("alice", "u1", "Nick", "Rosa", 1, t1);
+        store.recordGift("bob", "u2", "Bob", "Dino", 2, t2);
+        store.recordGift("alice", "u1", "Ana", "Fenix", 3, t3);
+
+        List<GiftEntry> alice = store.recentGifts("alice", 10);
+        assertEquals(List.of("Fenix", "Rosa"), alice.stream().map(GiftEntry::giftName).toList());
+        assertEquals(3, alice.get(0).count());
+        assertEquals("Ana", alice.get(0).nickname());
+
+        assertTrue(store.recentGifts("", 10).isEmpty());
+        assertTrue(store.recentGifts("ninguem", 10).isEmpty());
+
+        List<GiftEntry> limited = store.recentGifts("alice", 1);
+        assertEquals(1, limited.size());
+        assertEquals("Fenix", limited.get(0).giftName());
     }
 
     @Test

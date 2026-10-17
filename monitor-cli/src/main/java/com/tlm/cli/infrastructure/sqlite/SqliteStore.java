@@ -1,5 +1,6 @@
 package com.tlm.cli.infrastructure.sqlite;
 
+import com.tlm.cli.domain.model.GiftEntry;
 import com.tlm.cli.domain.model.MonitorException;
 import com.tlm.cli.domain.model.PinnedCommentEntry;
 import com.tlm.cli.domain.port.LocalStorePort;
@@ -270,6 +271,35 @@ public final class SqliteStore implements LocalStorePort {
             }
         } catch (SQLException e) {
             throw new MonitorException("consultar fixados: " + e.getMessage(), e);
+        }
+        return out;
+    }
+
+    @Override
+    public synchronized List<GiftEntry> recentGifts(String liveName, int limit) throws MonitorException {
+        if (liveName == null || liveName.isBlank()) {
+            return List.of();
+        }
+        int bounded = Math.min(200, Math.max(1, limit));
+        String sql = """
+                SELECT g.nickname, g.gift_name, g.repeat_count, g.timestamp
+                FROM gifts g
+                JOIN lives l ON l.id = g.live_id
+                WHERE l.live_name = ?
+                ORDER BY g.timestamp DESC, g.id DESC
+                LIMIT ?
+                """;
+        List<GiftEntry> out = new ArrayList<>();
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, liveName.trim());
+            ps.setInt(2, bounded);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    out.add(new GiftEntry(rs.getString(1), rs.getString(2), rs.getInt(3), rs.getString(4)));
+                }
+            }
+        } catch (SQLException e) {
+            throw new MonitorException("consultar presentes: " + e.getMessage(), e);
         }
         return out;
     }

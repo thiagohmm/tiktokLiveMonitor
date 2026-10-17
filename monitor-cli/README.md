@@ -28,18 +28,26 @@ A primeira build baixa a lib do JitPack (precisa de rede).
 ```
 :connect <user>     conecta direto à live (@ opcional; uma live por vez)
 :disconnect         desconecta a live atual
-:gift               lista o catálogo de presentes da live
-:gift 1,4 | :gift Rosa,Dino   filtra o feed pelos presentes escolhidos
-:gift all           desfaz o filtro de presente
-:pinned             fixados ao vivo; se o feed não tem nenhum, busca os
-                    últimos 20 do banco local (marcados como histórico)
-:pinned list        imprime os últimos 20 fixados do banco
-:filter <all|chat|gift|like|follow|pinned|system>
+:comentarios [user] janela de comentários ao vivo (filtro opcional de usuário)
+:gift               abre a janela de presentes e lista o catálogo
+:gift 1,4 | :gift Rosa,Dino   filtra essa janela pelos presentes escolhidos
+:qty <n>            quantidade mínima na janela de presentes (0 limpa)
+:gift todos         tira o filtro de nome e de quantidade
+:gift all           janela com o histórico de presentes da live (SQLite, até 200)
+:pinned [list]      janela de fixados; sem pins ao vivo, busca os últimos 20
+:mensagens [user]   janela com os eventos da live ao vivo
+:curtidas :seguidores
+:user <nome>        filtra a janela em foco por usuário (vazio limpa)
+:close              fecha a janela em foco (Esc também, com o campo vazio; Ctrl+W idem)
+:filter <all|chat|gift|like|follow|pinned|system>   filtra só o feed de fundo
 :clear | :help | :quit (Ctrl+C também encerra, desconectando a live)
 ```
 
-PageUp/PageDown rolam o feed; Esc limpa o campo de digitação. O rodapé conta
-comentários, presentes, curtidas, seguidores e fixados da sessão.
+A barra no topo abre as mesmas janelas com o mouse. Cada janela é uma caixa
+estilo DOS: arraste a barra de título para mover, clique em `[X]` para fechar,
+use a roda ou as setas para rolar. Tab troca a janela em foco. O feed de fundo
+continua com todos os eventos. O rodapé conta comentários, presentes, curtidas,
+seguidores e fixados da sessão.
 
 ## Banco local
 

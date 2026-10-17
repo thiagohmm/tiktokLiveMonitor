@@ -6,7 +6,8 @@ import java.util.Optional;
 public final class CommandParser {
 
     public sealed interface Command
-            permits Connect, Disconnect, Gift, Pinned, Filter, Clear, Help, Quit, Unknown {
+            permits Connect, Disconnect, Gift, Pinned, Filter, Open, Close, UserFilter, Quantity,
+            Clear, Help, Quit, Unknown {
     }
 
     /** @param username username do TikTok (sem '@'). */
@@ -35,6 +36,25 @@ public final class CommandParser {
 
     /** @param category alvo do filtro; {@code null} = all. */
     public record Filter(Category category) implements Command {
+    }
+
+    /**
+     * Abre (ou foca) a janela do tipo. {@code argument} vazio não aplica filtro;
+     * quando preenchido, é o usuário daquela janela.
+     */
+    public record Open(WindowKind kind, String argument) implements Command {
+    }
+
+    /** Fecha a janela em foco. */
+    public record Close() implements Command {
+    }
+
+    /** Filtro de usuário da janela em foco; vazio remove o filtro. */
+    public record UserFilter(String user) implements Command {
+    }
+
+    /** Quantidade mínima de presentes na janela de presentes; 0 remove o filtro. */
+    public record Quantity(int minimum) implements Command {
     }
 
     public record Clear() implements Command {
@@ -81,6 +101,15 @@ public final class CommandParser {
             case "gift", "gifts", "presente", "presentes" -> new Gift(argument);
             case "pinned", "pin", "fixado", "fixados" -> parsePinned(argument);
             case "filter" -> parseFilter(argument);
+            case "chat", "comentario", "comentarios", "comentário", "comentários" ->
+                    new Open(WindowKind.CHAT, stripAt(argument));
+            case "mensagens", "live", "feed" -> new Open(WindowKind.MESSAGES, stripAt(argument));
+            case "like", "likes", "curtida", "curtidas" -> new Open(WindowKind.LIKES, stripAt(argument));
+            case "follow", "follows", "seguidor", "seguidores" ->
+                    new Open(WindowKind.FOLLOWS, stripAt(argument));
+            case "close", "fechar" -> new Close();
+            case "user", "usuario", "usuário" -> new UserFilter(stripAt(argument));
+            case "qty", "qtd", "quantidade" -> parseQuantity(argument);
             case "clear" -> new Clear();
             case "help", "h", "?" -> new Help();
             case "quit", "q" -> new Quit();
@@ -104,6 +133,19 @@ public final class CommandParser {
         }
     }
 
+    private static Command parseQuantity(String argument) {
+        String value = argument == null ? "" : argument.trim();
+        try {
+            int minimum = Integer.parseInt(value);
+            if (minimum < 0 || minimum > 1_000_000) {
+                return new Unknown("Uso: :qty <número>  (0 tira o filtro de quantidade)");
+            }
+            return new Quantity(minimum);
+        } catch (NumberFormatException e) {
+            return new Unknown("Uso: :qty <número>  (0 tira o filtro de quantidade)");
+        }
+    }
+
     private static Command parsePinned(String argument) {
         String value = argument.trim().toLowerCase();
         if (value.isEmpty()) {
@@ -122,17 +164,26 @@ public final class CommandParser {
 
     public static String helpText() {
         return """
-                Comandos:
+                Comandos (cada visão abre uma janela; [X] no mouse ou :close fecha):
                   :connect <user>       conecta direto à live (@ pode ser omitido; uma por vez)
                   :disconnect [user]    desconecta a live atual
-                  :gift [seleção]       lista o catálogo ou filtra pelos presentes escolhidos
-                                        (ex.: :gift 1,4 | :gift Rosa,Dino | :gift all volta a tudo)
-                  :filter <tipo|all>    mostra só chat/gift/like/follow/pinned/system
-                  :pinned [list]        fixados ao vivo (busca o histórico do banco quando o
-                                        feed não tem nenhum); :pinned list imprime os últimos 20
-                  :clear                limpa o feed
+                  :comentarios [user]   janela de comentários ao vivo (filtro opcional de usuário)
+                  :gift [seleção]       janela de presentes; :gift lista o catálogo
+                                        :gift 1,4 | :gift Rosa,Dino filtra essa janela
+                                        :gift todos limpa o filtro de nome
+                                        :gift all abre o histórico da live numa janela
+                  :qty <n>              quantidade mínima na janela de presentes (0 limpa)
+                  :pinned [list]        janela de fixados (busca o histórico do banco quando
+                                        ainda não há nenhum ao vivo)
+                  :mensagens [user]     janela com os eventos da live ao vivo
+                  :curtidas :seguidores janelas desses eventos
+                  :user <nome>          filtra a janela em foco por usuário (vazio limpa)
+                  :close                fecha a janela em foco (Esc também, se o campo estiver vazio)
+                  :filter <tipo|all>    filtra o fundo: chat/gift/like/follow/pinned/system
+                  :clear                limpa o feed de fundo
                   :help                 esta ajuda
                   :quit                 encerra e desconecta a live (Ctrl+C também sai)
-                PageUp/PageDown rolam o feed; Esc limpa o campo de digitação.""";
+                Menu no topo e [X] usam o mouse. Arraste a barra para mover.
+                Tab troca a janela em foco; setas e a roda rolam a janela (ou o fundo).""";
     }
 }

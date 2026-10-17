@@ -24,6 +24,11 @@ public final class Main {
     }
 
     public static void main(String[] args) {
+        // Antes da TUI: o protobuf avisa no stderr nativo ao conectar e apaga
+        // as janelas. O filho já sobe com o acesso permitido.
+        if (JvmRelaunch.handOffIfNeeded(args)) {
+            return;
+        }
         // A biblioteca loga em stderr (slf4j-simple + java.util.logging), o que
         // corromperia a tela da Lanterna: silencia antes de qualquer conexão.
         System.setProperty("org.slf4j.simpleLogger.defaultLogLevel", "off");

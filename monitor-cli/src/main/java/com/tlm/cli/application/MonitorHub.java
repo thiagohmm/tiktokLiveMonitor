@@ -1,6 +1,7 @@
 package com.tlm.cli.application;
 
 import com.tlm.cli.domain.model.DomainEvent;
+import com.tlm.cli.domain.model.GiftEntry;
 import com.tlm.cli.domain.model.LiveMonitorState;
 import com.tlm.cli.domain.model.MonitorException;
 import com.tlm.cli.domain.model.PinnedCommentEntry;
@@ -15,7 +16,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * Barramento de eventos da sessão local: a engine publica aqui (implementa
  * {@link EventSink}) e o hub reencaminha para os listeners (a UI). Também
  * expõe as consultas usadas pelos comandos (catálogo de presentes via engine,
- * histórico de fixados via store).
+ * histórico de fixados e de presentes via store).
  */
 public final class MonitorHub implements EventSink {
 
@@ -94,5 +95,14 @@ public final class MonitorHub implements EventSink {
             throw new MonitorException("banco local indisponível");
         }
         return current.recentPinned(live == null ? "" : live.trim(), limit);
+    }
+
+    /** Histórico local de presentes da live; nome vazio devolve lista vazia. */
+    public List<GiftEntry> recentGifts(String live, int limit) throws MonitorException {
+        LocalStorePort current = store;
+        if (current == null) {
+            throw new MonitorException("banco local indisponível");
+        }
+        return current.recentGifts(live == null ? "" : live.trim(), limit);
     }
 }

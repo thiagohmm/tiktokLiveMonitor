@@ -1,5 +1,6 @@
 package com.tlm.cli.domain.port;
 
+import com.tlm.cli.domain.model.GiftEntry;
 import com.tlm.cli.domain.model.MonitorException;
 import com.tlm.cli.domain.model.PinnedCommentEntry;
 
@@ -40,6 +41,12 @@ public interface LocalStorePort extends AutoCloseable {
      * Fixados mais recentes; {@code liveName} vazio traz todas as lives.
      */
     List<PinnedCommentEntry> recentPinned(String liveName, int limit) throws MonitorException;
+
+    /**
+     * Presentes mais recentes da live. Nome vazio devolve lista vazia.
+     * Ordem: mais novo primeiro.
+     */
+    List<GiftEntry> recentGifts(String liveName, int limit) throws MonitorException;
 
     @Override
     void close();
