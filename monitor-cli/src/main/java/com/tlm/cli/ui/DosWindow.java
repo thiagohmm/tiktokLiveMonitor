@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -39,11 +40,14 @@ public final class DosWindow {
     private String giftLabel = "";
     private int minCount;
     private String user = "";
+    private String userLower = "";
     private boolean descending;
     private int limit;
     private String limitDraft = "";
     private boolean editingLimit;
     private int scrollOffset;
+    /** Cópia materializada de {@link #presentation()}; nula quando precisa refazer. */
+    private List<FeedLine> presentationCache;
 
     private int x;
     private int y;
@@ -90,10 +94,12 @@ public final class DosWindow {
         }
         giftNames = Set.copyOf(chosen);
         giftLabel = String.join(", ", labels);
+        invalidatePresentation();
     }
 
     public void minCount(int minCount) {
         this.minCount = Math.max(0, minCount);
+        invalidatePresentation();
     }
 
     public int minCount() {
@@ -103,10 +109,14 @@ public final class DosWindow {
     public void user(String user) {
         if (user == null) {
             this.user = "";
+            this.userLower = "";
+            invalidatePresentation();
             return;
         }
         String trimmed = user.trim();
         this.user = trimmed.startsWith("@") ? trimmed.substring(1) : trimmed;
+        this.userLower = this.user.toLowerCase(Locale.ROOT);
+        invalidatePresentation();
     }
 
     public String user() {
@@ -120,6 +130,7 @@ public final class DosWindow {
     public void toggleOrder() {
         descending = !descending;
         scrollOffset = 0;
+        invalidatePresentation();
     }
 
     /** {@code 0} mostra o fluxo inteiro; acima disso, só os últimos N. */
@@ -132,6 +143,7 @@ public final class DosWindow {
         limitDraft = "";
         editingLimit = false;
         scrollOffset = 0;
+        invalidatePresentation();
     }
 
     public boolean editingLimit() {
@@ -168,6 +180,7 @@ public final class DosWindow {
         limit = limitDraft.isBlank() ? 0 : Integer.parseInt(limitDraft);
         limitDraft = "";
         scrollOffset = 0;
+        invalidatePresentation();
     }
 
     public void cancelLimitEdit() {
@@ -196,6 +209,7 @@ public final class DosWindow {
                 added++;
             }
         }
+        invalidatePresentation();
         holdScroll(added);
     }
 
@@ -216,6 +230,7 @@ public final class DosWindow {
     public void offer(FeedLine line) {
         if (kind.tracksLive() && matches(line)) {
             feed.add(line);
+            invalidatePresentation();
             holdScroll(1);
         }
     }
@@ -237,22 +252,46 @@ public final class DosWindow {
                 }
             }
         }
+        invalidatePresentation();
     }
 
     public boolean matches(FeedLine line) {
         if (kind.category() != null && line.category() != kind.category()) {
             return false;
         }
-        if (!giftNames.isEmpty() && !giftNames.contains(line.giftName().toLowerCase())) {
+        if (!giftNames.isEmpty() && !giftMatch(line.giftName())) {
             return false;
         }
         if (minCount > 0 && line.giftCount() < minCount) {
             return false;
         }
-        if (!user.isBlank() && !line.user().toLowerCase().contains(user.toLowerCase())) {
+        if (!userLower.isEmpty() && !containsIgnoreCase(line.user(), userLower)) {
             return false;
         }
         return true;
+    }
+
+    private boolean giftMatch(String giftName) {
+        for (String name : giftNames) {
+            if (name.equalsIgnoreCase(giftName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean containsIgnoreCase(String haystack, String needleLower) {
+        int needle = needleLower.length();
+        if (needle == 0) {
+            return true;
+        }
+        int last = haystack.length() - needle;
+        for (int i = 0; i <= last; i++) {
+            if (haystack.regionMatches(true, i, needleLower, 0, needle)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public void scrollLines(int delta) {
@@ -436,6 +475,9 @@ public final class DosWindow {
     }
 
     private List<FeedLine> presentation() {
+        if (presentationCache != null) {
+            return presentationCache;
+        }
         List<FeedLine> lines = new ArrayList<>(feed.lines());
         if (limit > 0 && lines.size() > limit) {
             lines = new ArrayList<>(lines.subList(lines.size() - limit, lines.size()));
@@ -443,7 +485,12 @@ public final class DosWindow {
         if (descending) {
             Collections.reverse(lines);
         }
+        presentationCache = lines;
         return lines;
+    }
+
+    private void invalidatePresentation() {
+        presentationCache = null;
     }
 
     private List<FeedLine> visibleLines(int rows) {
@@ -470,7 +517,11 @@ public final class DosWindow {
     /** Mantém a linha que estava na tela quando chega evento e a pessoa rolou. */
     private void holdScroll(int added) {
         if (scrollOffset > 0 && added > 0) {
-            scrollOffset = Math.min(scrollOffset + added, Math.max(0, presentation().size() - 1));
+            int size = feed.size();
+            if (limit > 0) {
+                size = Math.min(size, limit);
+            }
+            scrollOffset = Math.min(scrollOffset + added, Math.max(0, size - 1));
         }
     }
 

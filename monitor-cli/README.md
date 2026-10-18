@@ -9,16 +9,23 @@ monitoração local e **não vai para o VPS**.
 ## Rodar
 
 ```bash
-./start.sh            # build + TUI (requer Java 21+ e Maven)
+./start.sh            # recompila só se preciso + TUI (requer Java 21+ e Maven)
 # ou:
 mvn -f monitor-cli/pom.xml package && java -jar monitor-cli/target/monitor-cli.jar
 ```
+
+O `start.sh` reaproveita `monitor-cli/target/monitor-cli.jar` quando ele está mais
+novo que `monitor-cli/src` e o `pom.xml`; só roda o Maven quando algo mudou (ou
+na primeira build). O heap padrão é `-Xmx256m`; use `TLM_JAVA_OPTS` para trocar
+(ex.: `TLM_JAVA_OPTS=-Xmx512m ./start.sh`). No JDK 23+ o script já passa
+`--sun-misc-unsafe-memory-access=allow` direto, sem relançar um segundo JVM.
 
 Opções:
 
 | Flag / env              | Efeito                                                    |
 |-------------------------|-----------------------------------------------------------|
 | `--db ARQUIVO` / `TLM_DB` | caminho do SQLite (padrão `./data/tlm-local.db`)        |
+| `TLM_JAVA_OPTS`         | opções da JVM no `./start.sh` (padrão `-Xmx256m`)         |
 | `TLM_TIKTOK_API_KEY`    | chave opcional do Euler Stream (assinatura do WebSocket) quando o limite gratuito faltar |
 
 A primeira build baixa a lib do JitPack (precisa de rede).

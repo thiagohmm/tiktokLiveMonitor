@@ -16,7 +16,9 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Persistência local em SQLite (arquivo único, conexão única com lock).
@@ -95,6 +97,17 @@ public final class SqliteStore implements LocalStorePort {
     };
 
     private final Connection connection;
+    /** Cache nome da live → id; evita um SELECT por evento. */
+    private final Map<String, Long> liveIds = new HashMap<>();
+    private final PreparedStatement selectLiveId;
+    private final PreparedStatement insertLive;
+    private final PreparedStatement insertChat;
+    private final PreparedStatement insertGift;
+    private final PreparedStatement insertShare;
+    private final PreparedStatement insertLike;
+    private final PreparedStatement upsertLikeTotal;
+    private final PreparedStatement insertPinned;
+    private final PreparedStatement insertPinnedIgnore;
 
     public SqliteStore(Path file) throws MonitorException {
         try {
@@ -110,6 +123,9 @@ public final class SqliteStore implements LocalStorePort {
             this.connection.setAutoCommit(true);
             try (Statement statement = connection.createStatement()) {
                 statement.execute("PRAGMA journal_mode=WAL");
+                // WAL + NORMAL: sem fsync por INSERT; no pior caso (queda de
+                // energia) perdem-se os últimos eventos, sem corromper o banco.
+                statement.execute("PRAGMA synchronous=NORMAL");
                 statement.execute("PRAGMA busy_timeout=5000");
                 statement.execute("PRAGMA foreign_keys=ON");
             }
@@ -118,6 +134,31 @@ public final class SqliteStore implements LocalStorePort {
                     statement.execute(ddl);
                 }
             }
+            // Statements do caminho quente reutilizados; os métodos são
+            // synchronized, então não há uso concorrente.
+            selectLiveId = connection.prepareStatement("SELECT id FROM lives WHERE live_name = ?");
+            insertLive = connection.prepareStatement(
+                    "INSERT INTO lives (live_name, started_at, last_seen_at) VALUES (?, ?, ?)",
+                    Statement.RETURN_GENERATED_KEYS);
+            insertChat = connection.prepareStatement(
+                    "INSERT INTO user_messages (live_id, unique_id, nickname, message, timestamp) VALUES (?, ?, ?, ?, ?)");
+            insertGift = connection.prepareStatement(
+                    "INSERT INTO gifts (live_id, unique_id, nickname, gift_name, repeat_count, timestamp) VALUES (?, ?, ?, ?, ?, ?)");
+            insertShare = connection.prepareStatement(
+                    "INSERT INTO shares (live_id, unique_id, nickname, timestamp) VALUES (?, ?, ?, ?)");
+            insertLike = connection.prepareStatement(
+                    "INSERT INTO likes (live_id, unique_id, nickname, like_count, timestamp) VALUES (?, ?, ?, ?, ?)");
+            upsertLikeTotal = connection.prepareStatement(
+                    "INSERT INTO room_like_totals (live_id, total, updated_at) VALUES (?, ?, ?) "
+                            + "ON CONFLICT(live_id) DO UPDATE SET "
+                            + "total = MAX(room_like_totals.total, excluded.total), updated_at = excluded.updated_at");
+            insertPinned = connection.prepareStatement(
+                    "INSERT INTO pinned_comments (live_id, live_name, unique_id, nickname, comment, pin_id, is_follower, timestamp)"
+                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+            insertPinnedIgnore = connection.prepareStatement(
+                    "INSERT OR IGNORE INTO pinned_comments "
+                            + "(live_id, live_name, unique_id, nickname, comment, pin_id, is_follower, timestamp)"
+                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
         } catch (SQLException e) {
             throw new MonitorException("falha ao abrir o banco local: " + e.getMessage(), e);
         }
@@ -127,14 +168,13 @@ public final class SqliteStore implements LocalStorePort {
     public synchronized void recordChat(String liveName, String uniqueId, String nickname, String message,
                                         Instant at) throws MonitorException {
         long live = liveId(liveName);
-        try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO user_messages (live_id, unique_id, nickname, message, timestamp) VALUES (?, ?, ?, ?, ?)")) {
-            ps.setLong(1, live);
-            ps.setString(2, safe(uniqueId));
-            ps.setString(3, safe(nickname));
-            ps.setString(4, message == null ? "" : message);
-            ps.setString(5, stamp(at));
-            ps.executeUpdate();
+        try {
+            insertChat.setLong(1, live);
+            insertChat.setString(2, safe(uniqueId));
+            insertChat.setString(3, safe(nickname));
+            insertChat.setString(4, message == null ? "" : message);
+            insertChat.setString(5, stamp(at));
+            insertChat.executeUpdate();
         } catch (SQLException e) {
             throw new MonitorException("gravar mensagem: " + e.getMessage(), e);
         }
@@ -144,15 +184,14 @@ public final class SqliteStore implements LocalStorePort {
     public synchronized void recordGift(String liveName, String uniqueId, String nickname, String giftName,
                                         int count, Instant at) throws MonitorException {
         long live = liveId(liveName);
-        try (PreparedStatement check = connection.prepareStatement(
-                "INSERT INTO gifts (live_id, unique_id, nickname, gift_name, repeat_count, timestamp) VALUES (?, ?, ?, ?, ?, ?)")) {
-            check.setLong(1, live);
-            check.setString(2, safe(uniqueId));
-            check.setString(3, safe(nickname));
-            check.setString(4, giftName == null || giftName.isBlank() ? "um presente" : giftName);
-            check.setInt(5, Math.max(1, count));
-            check.setString(6, stamp(at));
-            check.executeUpdate();
+        try {
+            insertGift.setLong(1, live);
+            insertGift.setString(2, safe(uniqueId));
+            insertGift.setString(3, safe(nickname));
+            insertGift.setString(4, giftName == null || giftName.isBlank() ? "um presente" : giftName);
+            insertGift.setInt(5, Math.max(1, count));
+            insertGift.setString(6, stamp(at));
+            insertGift.executeUpdate();
         } catch (SQLException e) {
             throw new MonitorException("gravar presente: " + e.getMessage(), e);
         }
@@ -162,13 +201,12 @@ public final class SqliteStore implements LocalStorePort {
     public synchronized void recordShare(String liveName, String uniqueId, String nickname, Instant at)
             throws MonitorException {
         long live = liveId(liveName);
-        try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO shares (live_id, unique_id, nickname, timestamp) VALUES (?, ?, ?, ?)")) {
-            ps.setLong(1, live);
-            ps.setString(2, safe(uniqueId));
-            ps.setString(3, safe(nickname));
-            ps.setString(4, stamp(at));
-            ps.executeUpdate();
+        try {
+            insertShare.setLong(1, live);
+            insertShare.setString(2, safe(uniqueId));
+            insertShare.setString(3, safe(nickname));
+            insertShare.setString(4, stamp(at));
+            insertShare.executeUpdate();
         } catch (SQLException e) {
             throw new MonitorException("gravar compartilhamento: " + e.getMessage(), e);
         }
@@ -178,26 +216,22 @@ public final class SqliteStore implements LocalStorePort {
     public synchronized void recordLike(String liveName, String uniqueId, String nickname, int likeCount,
                                         Integer totalLikes, Instant at) throws MonitorException {
         long live = liveId(liveName);
-        try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO likes (live_id, unique_id, nickname, like_count, timestamp) VALUES (?, ?, ?, ?, ?)")) {
-            ps.setLong(1, live);
-            ps.setString(2, safe(uniqueId));
-            ps.setString(3, safe(nickname));
-            ps.setInt(4, Math.max(1, likeCount));
-            ps.setString(5, stamp(at));
-            ps.executeUpdate();
+        try {
+            insertLike.setLong(1, live);
+            insertLike.setString(2, safe(uniqueId));
+            insertLike.setString(3, safe(nickname));
+            insertLike.setInt(4, Math.max(1, likeCount));
+            insertLike.setString(5, stamp(at));
+            insertLike.executeUpdate();
         } catch (SQLException e) {
             throw new MonitorException("gravar curtida: " + e.getMessage(), e);
         }
         if (totalLikes != null && totalLikes >= 0) {
-            try (PreparedStatement ps = connection.prepareStatement(
-                    "INSERT INTO room_like_totals (live_id, total, updated_at) VALUES (?, ?, ?) "
-                            + "ON CONFLICT(live_id) DO UPDATE SET "
-                            + "total = MAX(room_like_totals.total, excluded.total), updated_at = excluded.updated_at")) {
-                ps.setLong(1, live);
-                ps.setLong(2, totalLikes);
-                ps.setString(3, stamp(at));
-                ps.executeUpdate();
+            try {
+                upsertLikeTotal.setLong(1, live);
+                upsertLikeTotal.setLong(2, totalLikes);
+                upsertLikeTotal.setString(3, stamp(at));
+                upsertLikeTotal.executeUpdate();
             } catch (SQLException e) {
                 throw new MonitorException("gravar total de curtidas: " + e.getMessage(), e);
             }
@@ -209,23 +243,8 @@ public final class SqliteStore implements LocalStorePort {
                                              String pinId, Boolean isFollower, Instant at) throws MonitorException {
         long live = liveId(liveName);
         String pin = pinId == null ? "" : pinId.trim();
-        if (!pin.isEmpty()) {
-            try (PreparedStatement ps = connection.prepareStatement(
-                    "SELECT 1 FROM pinned_comments WHERE live_id = ? AND pin_id = ?")) {
-                ps.setLong(1, live);
-                ps.setString(2, pin);
-                try (ResultSet rs = ps.executeQuery()) {
-                    if (rs.next()) {
-                        return false;
-                    }
-                }
-            } catch (SQLException e) {
-                throw new MonitorException("consultar fixado: " + e.getMessage(), e);
-            }
-        }
-        try (PreparedStatement ps = connection.prepareStatement(
-                "INSERT INTO pinned_comments (live_id, live_name, unique_id, nickname, comment, pin_id, is_follower, timestamp)"
-                        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?)")) {
+        PreparedStatement ps = pin.isEmpty() ? insertPinned : insertPinnedIgnore;
+        try {
             ps.setLong(1, live);
             ps.setString(2, safe(liveName));
             ps.setString(3, uniqueId == null || uniqueId.isBlank() ? "unknown" : uniqueId);
@@ -242,11 +261,12 @@ public final class SqliteStore implements LocalStorePort {
                 ps.setInt(7, isFollower ? 1 : 0);
             }
             ps.setString(8, stamp(at));
-            ps.executeUpdate();
+            // O índice único parcial (live_id, pin_id) ignora replays; o retorno
+            // preserva o contrato: true = fixado novo, false = duplicado.
+            return ps.executeUpdate() > 0;
         } catch (SQLException e) {
             throw new MonitorException("gravar fixado: " + e.getMessage(), e);
         }
-        return true;
     }
 
     @Override
@@ -306,6 +326,14 @@ public final class SqliteStore implements LocalStorePort {
 
     @Override
     public synchronized void close() {
+        for (PreparedStatement statement : List.of(selectLiveId, insertLive, insertChat, insertGift,
+                insertShare, insertLike, upsertLikeTotal, insertPinned, insertPinnedIgnore)) {
+            try {
+                statement.close();
+            } catch (SQLException ignored) {
+                // Encerramento: fechar o statement não é acionável aqui.
+            }
+        }
         try {
             connection.close();
         } catch (SQLException ignored) {
@@ -318,35 +346,53 @@ public final class SqliteStore implements LocalStorePort {
         if (name.isEmpty()) {
             name = "desconhecida";
         }
+        Long cached = liveIds.get(name);
+        if (cached != null) {
+            return cached;
+        }
         try {
-            try (PreparedStatement ps = connection.prepareStatement("SELECT id FROM lives WHERE live_name = ?")) {
-                ps.setString(1, name);
-                try (ResultSet rs = ps.executeQuery()) {
-                    if (rs.next()) {
-                        return rs.getLong(1);
-                    }
+            selectLiveId.setString(1, name);
+            try (ResultSet rs = selectLiveId.executeQuery()) {
+                if (rs.next()) {
+                    long id = rs.getLong(1);
+                    liveIds.put(name, id);
+                    return id;
                 }
             }
             String now = stampNow();
-            try (PreparedStatement ps = connection.prepareStatement(
-                    "INSERT INTO lives (live_name, started_at, last_seen_at) VALUES (?, ?, ?)",
-                    Statement.RETURN_GENERATED_KEYS)) {
-                ps.setString(1, name);
-                ps.setString(2, now);
-                ps.setString(3, now);
-                ps.executeUpdate();
-                try (ResultSet keys = ps.getGeneratedKeys()) {
-                    if (keys.next()) {
-                        return keys.getLong(1);
-                    }
+            insertLive.setString(1, name);
+            insertLive.setString(2, now);
+            insertLive.setString(3, now);
+            insertLive.executeUpdate();
+            long id;
+            try (ResultSet keys = insertLive.getGeneratedKeys()) {
+                if (keys.next()) {
+                    id = keys.getLong(1);
+                } else {
+                    id = lastInsertRowId();
                 }
             }
-            try (Statement statement = connection.createStatement();
-                 ResultSet rs = statement.executeQuery("SELECT last_insert_rowid()")) {
-                return rs.getLong(1);
-            }
+            liveIds.put(name, id);
+            return id;
         } catch (SQLException e) {
             throw new MonitorException("sessão da live: " + e.getMessage(), e);
+        }
+    }
+
+    private long lastInsertRowId() throws SQLException {
+        try (Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery("SELECT last_insert_rowid()")) {
+            return rs.next() ? rs.getLong(1) : 0L;
+        }
+    }
+
+    /** Exposto ao teste: 0=OFF, 1=NORMAL, 2=FULL. */
+    synchronized int synchronousMode() {
+        try (Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery("PRAGMA synchronous")) {
+            return rs.next() ? rs.getInt(1) : -1;
+        } catch (SQLException e) {
+            return -1;
         }
     }
 

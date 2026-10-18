@@ -58,6 +58,31 @@ class JvmRelaunchTest {
     }
 
     @Test
+    void runtimeWithoutTheFlagDoesNotRelaunch() {
+        assertTrue(JvmRelaunch.command(
+                "/usr/bin/java",
+                List.of("-Dfile.encoding=UTF-8"),
+                "cp",
+                "com.tlm.cli.Main",
+                new String[0],
+                21).isEmpty());
+        assertTrue(JvmRelaunch.command(
+                "/usr/bin/java",
+                List.of("-Dfile.encoding=UTF-8"),
+                "cp",
+                "com.tlm.cli.Main",
+                new String[0],
+                22).isEmpty());
+        assertFalse(JvmRelaunch.command(
+                "/usr/bin/java",
+                List.of("-Dfile.encoding=UTF-8"),
+                "cp",
+                "com.tlm.cli.Main",
+                new String[0],
+                JvmRelaunch.MIN_FEATURE_WITH_FLAG).isEmpty());
+    }
+
+    @Test
     void missingBinaryDoesNotRelaunch() {
         assertTrue(JvmRelaunch.command(
                 "  ",

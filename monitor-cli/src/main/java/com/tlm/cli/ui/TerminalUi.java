@@ -70,6 +70,7 @@ public final class TerminalUi implements EventSink, AutoCloseable {
     private final WindowDesk desk = new WindowDesk();
     private final MenuBar menu = new MenuBar();
     private final Presenter presenter = new Presenter();
+    private final FrameScheduler scheduler = new FrameScheduler();
     private final Map<Category, Long> counters = new EnumMap<>(Category.class);
     private final Queue<Runnable> pending = new ConcurrentLinkedQueue<>();
 
@@ -155,17 +156,20 @@ public final class TerminalUi implements EventSink, AutoCloseable {
         silenceConsole();
         while (!closed) {
             try {
-                drainPending();
+                boolean pendingRan = drainPending();
                 KeyStroke key = screen.pollInput();
                 if (key != null) {
                     handleKey(key);
                 }
-                screen.doResizeIfNecessary();
-                draw();
-                // DELTA manda só as células que mudaram. COMPLETE a cada frame
-                // apaga e reescreve o terminal inteiro e a tela fica piscando.
-                screen.setCursorPosition(null);
-                screen.refresh(Screen.RefreshType.DELTA);
+                boolean resized = screen.doResizeIfNecessary() != null;
+                long second = Duration.between(startedAt, Instant.now()).getSeconds();
+                if (scheduler.shouldDraw(pendingRan, key != null, resized, second)) {
+                    draw();
+                    // DELTA manda só as células que mudaram. COMPLETE a cada frame
+                    // apaga e reescreve o terminal inteiro e a tela fica piscando.
+                    screen.setCursorPosition(null);
+                    screen.refresh(Screen.RefreshType.DELTA);
+                }
                 Thread.sleep(30);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -251,11 +255,14 @@ public final class TerminalUi implements EventSink, AutoCloseable {
         feed.add(new FeedLine("quadro da tela: " + message, Category.SYSTEM));
     }
 
-    private void drainPending() {
+    private boolean drainPending() {
+        boolean ran = false;
         Runnable task;
         while ((task = pending.poll()) != null) {
             task.run();
+            ran = true;
         }
+        return ran;
     }
 
     private void post(Runnable task) {

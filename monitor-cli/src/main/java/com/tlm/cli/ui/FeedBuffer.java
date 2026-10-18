@@ -2,6 +2,8 @@ package com.tlm.cli.ui;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.function.Predicate;
 
@@ -15,7 +17,7 @@ public final class FeedBuffer {
 
     private final int capacity;
     private final ArrayDeque<FeedLine> all = new ArrayDeque<>();
-    private final List<FeedLine> view = new ArrayList<>();
+    private final ArrayDeque<FeedLine> view = new ArrayDeque<>();
     private volatile Predicate<FeedLine> filter = always();
     private volatile int scrollOffset;
 
@@ -34,17 +36,16 @@ public final class FeedBuffer {
             all.pollFirst();
         }
         if (filter.test(line)) {
-            view.add(line);
+            view.addLast(line);
             if (scrollOffset > 0) {
                 // Rolado para cima: mantém a âncora visual (a visão cresceu
                 // uma linha no fim; compensa o offset para não deslizar).
                 scrollOffset = Math.min(scrollOffset + 1, Math.max(0, view.size() - 1));
             }
-            int overflow = view.size() - capacity;
-            if (overflow > 0) {
+            while (view.size() > capacity) {
                 // Cabeça descartada empurra a âncora junto.
-                view.subList(0, overflow).clear();
-                scrollOffset = Math.max(0, scrollOffset - overflow);
+                view.pollFirst();
+                scrollOffset = Math.max(0, scrollOffset - 1);
             }
         }
     }
@@ -101,13 +102,26 @@ public final class FeedBuffer {
             return List.of();
         }
         int visible = Math.max(1, rows);
-        int last = view.size() - 1 - scrollOffset;
-        int first = Math.max(0, last - visible + 1);
-        return new ArrayList<>(view.subList(first, last + 1));
+        Iterator<FeedLine> it = view.descendingIterator();
+        int skip = scrollOffset;
+        while (skip > 0 && it.hasNext()) {
+            it.next();
+            skip--;
+        }
+        List<FeedLine> reversed = new ArrayList<>(Math.min(visible, view.size()));
+        while (it.hasNext() && reversed.size() < visible) {
+            reversed.add(it.next());
+        }
+        Collections.reverse(reversed);
+        return reversed;
     }
 
     public synchronized boolean isEmpty() {
         return view.isEmpty();
+    }
+
+    public synchronized int size() {
+        return view.size();
     }
 
     /** Cópia cronológica da visão filtrada (a mais antiga primeiro). */
@@ -129,7 +143,7 @@ public final class FeedBuffer {
         view.clear();
         for (FeedLine line : all) {
             if (filter.test(line)) {
-                view.add(line);
+                view.addLast(line);
             }
         }
         scrollOffset = 0;
@@ -137,9 +151,8 @@ public final class FeedBuffer {
     }
 
     private void trim() {
-        int overflow = view.size() - capacity;
-        if (overflow > 0) {
-            view.subList(0, overflow).clear();
+        while (view.size() > capacity) {
+            view.pollFirst();
         }
     }
 }

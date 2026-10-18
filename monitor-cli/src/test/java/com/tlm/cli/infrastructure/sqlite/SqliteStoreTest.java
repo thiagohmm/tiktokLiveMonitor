@@ -123,6 +123,32 @@ class SqliteStoreTest {
         assertTrue(empty.isEmpty());
     }
 
+    @Test
+    void cachesLiveIdAcrossEventsOfTheSameLive() throws Exception {
+        Instant at = Instant.parse("2026-10-17T01:00:00Z");
+        store.recordChat("alice", "u1", "Nick", "oi", at);
+        store.recordChat("alice", "u2", "Nick", "de novo", at.plusSeconds(1));
+        store.recordGift("alice", "u1", "Nick", "Rosa", 1, at.plusSeconds(2));
+
+        assertEquals(1, count("SELECT COUNT(*) FROM lives"));
+        assertEquals(2, count("SELECT COUNT(*) FROM user_messages"));
+        assertEquals(1, count("SELECT COUNT(*) FROM gifts"));
+    }
+
+    @Test
+    void usesNormalSynchronousModeWithWal() throws Exception {
+        assertEquals(1, store.synchronousMode());
+    }
+
+    private long count(String sql) throws Exception {
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + file.toAbsolutePath());
+             Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery(sql)) {
+            assertTrue(rs.next());
+            return rs.getLong(1);
+        }
+    }
+
     private long roomTotal() throws Exception {
         try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + file.toAbsolutePath());
              Statement statement = connection.createStatement();

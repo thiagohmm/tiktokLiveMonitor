@@ -18,6 +18,9 @@ final class JvmRelaunch {
 
     static final String ALLOW = "--sun-misc-unsafe-memory-access=allow";
 
+    /** A flag só existe a partir do JDK 23; em 21/22 relançar quebraria o boot. */
+    static final int MIN_FEATURE_WITH_FLAG = 23;
+
     private JvmRelaunch() {
     }
 
@@ -52,11 +55,18 @@ final class JvmRelaunch {
 
     /**
      * Linha do JVM filho. Vazia quando o acesso já está permitido (a última
-     * ocorrência da flag ganha) ou quando não há binário para relançar.
+     * ocorrência da flag ganha), quando o runtime não conhece a flag (JDK 21/22)
+     * ou quando não há binário para relançar.
      */
     static List<String> command(String javaBin, List<String> vmArgs, String classpath,
                                 String mainClass, String[] appArgs) {
-        if (javaBin == null || javaBin.isBlank() || allowsMemoryApi(vmArgs)) {
+        return command(javaBin, vmArgs, classpath, mainClass, appArgs, Runtime.version().feature());
+    }
+
+    static List<String> command(String javaBin, List<String> vmArgs, String classpath,
+                                String mainClass, String[] appArgs, int feature) {
+        if (javaBin == null || javaBin.isBlank() || allowsMemoryApi(vmArgs)
+                || feature < MIN_FEATURE_WITH_FLAG) {
             return List.of();
         }
         List<String> command = new ArrayList<>();
