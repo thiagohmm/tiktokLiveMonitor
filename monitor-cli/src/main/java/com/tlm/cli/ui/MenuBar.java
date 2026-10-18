@@ -58,17 +58,15 @@ public final class MenuBar {
         String action = connected ? "Desconectar" : "Conectar";
         String field = connected ? "" : fieldText(draft);
         int fieldWidth = field.length();
-        int gap = connected ? 0 : 1;
-        int block = action.length() + gap + fieldWidth;
-        int actionX = Math.max(0, cols - block);
-        int fieldX = connected ? actionX : actionX + action.length() + 1;
-        int stop = Math.max(0, actionX - 1);
+        int actionX = 0;
+        int fieldX = connected ? 0 : action.length() + 1;
+        int windowsAt = action.length() + (connected ? 0 : 1 + fieldWidth) + 1;
 
         List<Item> items = new ArrayList<>();
-        int x = 0;
+        int x = windowsAt;
         for (WindowKind kind : ORDER) {
             String label = kind.title();
-            if (x + label.length() > stop) {
+            if (x + label.length() > cols) {
                 break;
             }
             items.add(new Item(label, kind, x, label.length()));

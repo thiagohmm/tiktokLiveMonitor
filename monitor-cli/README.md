@@ -41,7 +41,7 @@ A primeira build baixa a lib do JitPack (precisa de rede).
 :qty <n>            quantidade mínima na janela de presentes (0 limpa)
 :gift todos         tira o filtro de nome e de quantidade
 :gift all           janela com o histórico de presentes da live (SQLite, até 200)
-:pinned [list]      janela de fixados; sem pins ao vivo, busca os últimos 20
+:pinned [list]      janela de fixados ao vivo; sem evento, busca os últimos 20
 :mensagens [user]   janela com os eventos da live ao vivo
 :curtidas :seguidores
 :user <nome>        filtra a janela em foco por usuário (vazio limpa)
@@ -60,14 +60,17 @@ seguidores e fixados da sessão.
 
 Tabelas em `data/tlm-local.db`: `lives`, `user_messages`, `gifts`, `shares`,
 `likes`, `room_like_totals` (total da sala mantém o maior valor visto) e
-`pinned_comments` (dedupe por `pin_id` dentro da live — pin e unpin do mesmo
-messageId contam como um). Timestamps em ISO-8601 UTC.
+`pinned_comments` (dedupe por `pin_id`/`common.msgId` dentro da live, fallback
+`pinTime:texto` — pin e unpin do mesmo messageId contam como um). Timestamps em ISO-8601 UTC.
 
 ## Limitações
 
 - Pins **fixados antes do connect** não aparecem: o estado inicial da sala não
   é retransmitido (mesma limitação da bridge do backend). A partir da conexão,
-  pins entram ao vivo e ficam no histórico.
+  pins de chat/social/gift/member/like entram ao vivo via payload cru
+  (`WebcastRoomPinMessage`) e ficam no histórico.
+- Se o TikTok não entregar o pin (assinatura/sessão parcial), defina
+  `TLM_TIKTOK_SESSION_ID` para enviar `sessionId` à lib.
 - Salas 18+ podem exigir cookie de sessão (a lib não o usa por padrão).
 - A assinatura do WebSocket depende do Euler Stream (free tier); configure
   `TLM_TIKTOK_API_KEY` se aparecer erro de sign/limite.

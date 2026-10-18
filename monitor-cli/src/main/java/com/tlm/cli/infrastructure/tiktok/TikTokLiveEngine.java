@@ -11,6 +11,7 @@ import com.tlm.cli.domain.model.PinnedCommentEvent;
 import com.tlm.cli.domain.port.EventSink;
 import com.tlm.cli.domain.port.LocalStorePort;
 import com.tlm.cli.domain.port.MonitorEnginePort;
+import com.google.protobuf.InvalidProtocolBufferException;
 import io.github.jwdeveloper.tiktok.TikTokLive;
 import io.github.jwdeveloper.tiktok.data.events.TikTokCommentEvent;
 import io.github.jwdeveloper.tiktok.data.events.TikTokConnectedEvent;
@@ -22,6 +23,8 @@ import io.github.jwdeveloper.tiktok.data.events.TikTokLiveUnpausedEvent;
 import io.github.jwdeveloper.tiktok.data.events.TikTokReconnectingEvent;
 import io.github.jwdeveloper.tiktok.data.events.gift.TikTokGiftEvent;
 import io.github.jwdeveloper.tiktok.data.events.room.TikTokRoomPinEvent;
+import io.github.jwdeveloper.tiktok.data.events.websocket.TikTokWebsocketMessageEvent;
+import io.github.jwdeveloper.tiktok.data.events.websocket.TikTokWebsocketUnhandledMessageEvent;
 import io.github.jwdeveloper.tiktok.data.events.social.TikTokFollowEvent;
 import io.github.jwdeveloper.tiktok.data.events.social.TikTokLikeEvent;
 import io.github.jwdeveloper.tiktok.data.events.social.TikTokShareEvent;
@@ -137,6 +140,8 @@ public final class TikTokLiveEngine implements MonitorEnginePort {
         builder.onEvent(TikTokFollowEvent.class, (c, e) -> onFollow(e));
         builder.onEvent(TikTokShareEvent.class, (c, e) -> onShare(e));
         builder.onEvent(TikTokRoomPinEvent.class, (c, e) -> onRoomPin(e));
+        builder.onEvent(TikTokWebsocketMessageEvent.class, (c, e) -> onWebsocketMessage(e));
+        builder.onEvent(TikTokWebsocketUnhandledMessageEvent.class, (c, e) -> onUnhandled(e));
         builder.onEvent(TikTokConnectedEvent.class, (c, e) -> onConnected());
         builder.onEvent(TikTokDisconnectedEvent.class, (c, e) -> onDisconnected(e.getReason()));
         builder.onEvent(TikTokReconnectingEvent.class, (c, e) -> onReconnecting());
@@ -157,6 +162,10 @@ public final class TikTokLiveEngine implements MonitorEnginePort {
         String apiKey = System.getenv("TLM_TIKTOK_API_KEY");
         if (apiKey != null && !apiKey.isBlank()) {
             settings.setApiKey(apiKey);
+        }
+        String sessionId = System.getenv("TLM_TIKTOK_SESSION_ID");
+        if (sessionId != null && !sessionId.isBlank()) {
+            settings.setSessionId(sessionId);
         }
     }
 
@@ -214,25 +223,90 @@ public final class TikTokLiveEngine implements MonitorEnginePort {
         if (message == null) {
             return;
         }
-        String key = pinKey(event, message);
-        if (key != null && !rememberPin(key)) {
-            return; // pin (ou unpin do mesmo messageId) já processado
+        String text = message.getText() == null ? "" : message.getText().trim();
+        if (text.isEmpty()) {
+            return;
         }
         Instant at = event.getTimestamp() > 0
                 ? Instant.ofEpochMilli(event.getTimestamp())
                 : TikTokEventMapper.instantOf(event);
+        String key = event.getMessageId() > 0 ? "m:" + event.getMessageId() : null;
         PinnedCommentEvent pinned = TikTokEventMapper.pinned(message, at);
         Boolean follower = message.getUser() == null ? null : message.getUser().isFollower();
+        publishPin(key, pinned, follower);
+    }
+
+    private void onWebsocketMessage(TikTokWebsocketMessageEvent event) {
+        var message = event.getMessage();
+        if (message == null || message.getMethod() == null) {
+            return;
+        }
+        if (!message.getMethod().toLowerCase(java.util.Locale.ROOT).contains("roompin")) {
+            return;
+        }
+        if (message.getPayload() == null || message.getPayload().isEmpty()) {
+            return;
+        }
+        handlePin(message.getPayload().toByteArray());
+    }
+
+    private void onUnhandled(TikTokWebsocketUnhandledMessageEvent event) {
+        var message = event.getMessage();
+        if (message == null) {
+            return;
+        }
+        String method = message.getMethod();
+        if (method != null && method.toLowerCase(java.util.Locale.ROOT).contains("pin")) {
+            alert("pin não mapeado: " + method);
+        }
+    }
+
+    private void handlePin(byte[] payload) {
+        io.github.jwdeveloper.tiktok.messages.webcast.WebcastRoomPinMessage msg;
+        try {
+            msg = io.github.jwdeveloper.tiktok.messages.webcast.WebcastRoomPinMessage.parseFrom(payload);
+        } catch (RuntimeException | InvalidProtocolBufferException e) {
+            alert("pin: " + e.getMessage());
+            return;
+        }
+        var extracted = PinExtractor.extract(msg);
+        if (extracted.isEmpty()) {
+            return; // unpin
+        }
+        PinExtractor.Pin pin = extracted.get();
+        publishPin(pin.key(), PinExtractor.toEvent(pin), pin.follower());
+    }
+
+    /**
+     * Grava e publica um fixado. O evento da biblioteca e o quadro cru chegam
+     * os dois; texto e chave precisam bater para não duplicar a linha.
+     */
+    private void publishPin(String key, PinnedCommentEvent pinned, Boolean follower) {
+        if (!claimPin(key, pinned)) {
+            return;
+        }
         boolean fresh = true;
         try {
             fresh = store.recordPinned(currentLive, pinned.uniqueId(), pinned.nickname(),
-                    pinned.comment(), key, follower, at);
+                    pinned.comment(), key, follower, pinned.at());
         } catch (MonitorException | RuntimeException e) {
             alert("banco local: " + e.getMessage());
         }
         if (fresh) {
             publish(pinned);
         }
+    }
+
+    private synchronized boolean claimPin(String key, PinnedCommentEvent pinned) {
+        String who = pinned.uniqueId() == null ? "" : pinned.uniqueId();
+        String text = pinned.comment() == null ? "" : pinned.comment();
+        String content = "c:" + who + ":" + text;
+        boolean known = processedPins.contains(content) || (key != null && processedPins.contains(key));
+        rememberPin(content);
+        if (key != null && !key.isBlank()) {
+            rememberPin(key);
+        }
+        return !known;
     }
 
     private void onConnected() {
@@ -277,17 +351,6 @@ public final class TikTokLiveEngine implements MonitorEnginePort {
     }
 
     // ---------------------------------------------------------------- helpers
-
-    private static String pinKey(TikTokRoomPinEvent event, TikTokCommentEvent message) {
-        if (event.getMessageId() > 0) {
-            return "m:" + event.getMessageId();
-        }
-        if (event.getTimestamp() > 0) {
-            String text = message.getText() == null ? "" : message.getText();
-            return "t:" + event.getTimestamp() + ":" + text.hashCode();
-        }
-        return null;
-    }
 
     private synchronized boolean rememberPin(String key) {
         if (processedPins.contains(key)) {

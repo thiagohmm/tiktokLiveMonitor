@@ -398,13 +398,7 @@ public final class TerminalUi implements EventSink, AutoCloseable {
                 openFromMenu(open.kind());
             }
             case MenuBar.Target.ConnectField ignored -> typing = Typing.CHANNEL;
-            case MenuBar.Target.ConnectSubmit ignored -> {
-                if (channel.isEmpty()) {
-                    typing = Typing.CHANNEL;
-                } else {
-                    submitChannel();
-                }
-            }
+            case MenuBar.Target.ConnectSubmit ignored -> typing = Typing.CHANNEL;
             case MenuBar.Target.Disconnect ignored -> {
                 typing = Typing.COMMAND;
                 dispatch(new CommandParser.Disconnect(""));

@@ -133,6 +133,8 @@ class WindowDeskTest {
     void menuConnectAndDisconnectDoNotOpenAWindow() {
         MenuBar menu = new MenuBar();
         MenuBar.Chrome disconnected = menu.chrome(80, false, "live");
+        assertEquals(0, disconnected.actionX());
+        assertTrue(disconnected.fieldX() < 40);
         MenuBar.Target field = menu.hit(disconnected.fieldX(), 1, 80, false, "live").orElseThrow();
         MenuBar.Target submit = menu.hit(disconnected.actionX(), 1, 80, false, "live").orElseThrow();
         assertTrue(field instanceof MenuBar.Target.ConnectField);

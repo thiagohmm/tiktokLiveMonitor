@@ -22,8 +22,8 @@ rodando com o modelo **`deepseek/deepseek-v4-pro`** (ex.: agente `reviewer` com
   `:connect <user>`/`:disconnect` (uma live por vez). Cada visão abre uma janela DOS
   (mouse no menu e em `[X]`, arrastar a barra, `:close`/Esc): `:comentarios [user]`,
   `:gift` (catálogo + seleção que filtra a janela; `:qty <n>` quantidade mínima;
-  `:gift all` histórico no SQLite, até 200), `:pinned [list]` (sem pins ao vivo, backfill
-  dos últimos 20), `:mensagens`, `:user` na janela em foco e `:filter` no feed de fundo.
+  `:gift all` histórico no SQLite, até 200), `:pinned [list]` (pins ao vivo via
+  payload cru `WebcastRoomPinMessage`; sem evento, backfill dos últimos 20), `:mensagens`, `:user` na janela em foco e `:filter` no feed de fundo.
   `:quit`/Ctrl+C desconecta a engine. Pins fixados ANTES do connect
   não são capturados (estado inicial da sala não é retransmitido). Testes:
   `mvn -f monitor-cli/pom.xml test`; jar: `mvn -f monitor-cli/pom.xml package` →
