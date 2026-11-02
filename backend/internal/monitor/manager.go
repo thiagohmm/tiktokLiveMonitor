@@ -19,6 +19,9 @@ type LiveState struct {
 // ErrOrgLiveLimit is returned when an organization reached its live quota.
 var ErrOrgLiveLimit = fmt.Errorf("limite de lives simultâneas da organização atingido")
 
+// ErrLiveNotMonitored is returned when no Monitor exists for a (org, live).
+var ErrLiveNotMonitored = fmt.Errorf("live não monitorada")
+
 // Manager owns independent Monitor instances, one per (organization, live).
 // Each gets its own bridge, buffers, reconnect supervisor, session and the
 // settings of its organization: two organizations watching the same streamer
@@ -214,13 +217,92 @@ func (m *Manager) SetSettings(orgID string, settings Settings) {
 // FetchAvailableGifts returns the gift catalog from one live of the organization.
 func (m *Manager) FetchAvailableGifts(orgID, username string) ([]string, error) {
 	username = normalizeLiveName(username)
+	monitor, err := m.monitorFor(orgID, username)
+	if err != nil {
+		return nil, err
+	}
+	return monitor.FetchAvailableGifts()
+}
+
+// monitorFor resolves the Monitor of one (organization, live) pair.
+func (m *Manager) monitorFor(orgID, username string) (*Monitor, error) {
+	username = normalizeLiveName(username)
 	m.mu.RLock()
 	monitor := m.monitors[liveKey{org: strings.TrimSpace(orgID), live: username}]
 	m.mu.RUnlock()
 	if monitor == nil {
-		return nil, fmt.Errorf("live %q is not monitored", username)
+		return nil, fmt.Errorf("%w: %q", ErrLiveNotMonitored, username)
 	}
-	return monitor.FetchAvailableGifts()
+	return monitor, nil
+}
+
+// --- Sorteio ao vivo (estado por live) ---
+
+// SorteioState returns the raffle snapshot of one live.
+func (m *Manager) SorteioState(orgID, live string) (SorteioState, error) {
+	monitor, err := m.monitorFor(orgID, live)
+	if err != nil {
+		return SorteioState{}, err
+	}
+	return monitor.SorteioSnapshot(), nil
+}
+
+// StartSorteio turns chat keyword collection on and returns the snapshot.
+func (m *Manager) StartSorteio(orgID, live string) (SorteioState, error) {
+	monitor, err := m.monitorFor(orgID, live)
+	if err != nil {
+		return SorteioState{}, err
+	}
+	monitor.StartSorteio()
+	return monitor.SorteioSnapshot(), nil
+}
+
+// StopSorteio stops chat keyword collection (participants are kept) and
+// returns the snapshot.
+func (m *Manager) StopSorteio(orgID, live string) (SorteioState, error) {
+	monitor, err := m.monitorFor(orgID, live)
+	if err != nil {
+		return SorteioState{}, err
+	}
+	monitor.StopSorteio()
+	return monitor.SorteioSnapshot(), nil
+}
+
+// ResetSorteio clears participants and the last result and returns the snapshot.
+func (m *Manager) ResetSorteio(orgID, live string) (SorteioState, error) {
+	monitor, err := m.monitorFor(orgID, live)
+	if err != nil {
+		return SorteioState{}, err
+	}
+	monitor.ResetSorteio()
+	return monitor.SorteioSnapshot(), nil
+}
+
+// DrawSorteio draws count winners from one live's pool.
+func (m *Manager) DrawSorteio(orgID, live string, count int) ([]SorteioParticipant, error) {
+	monitor, err := m.monitorFor(orgID, live)
+	if err != nil {
+		return nil, err
+	}
+	return monitor.DrawSorteio(count)
+}
+
+// AddSorteioManualParticipant adds an operator-typed participant.
+func (m *Manager) AddSorteioManualParticipant(orgID, live, name string) (SorteioParticipant, bool, error) {
+	monitor, err := m.monitorFor(orgID, live)
+	if err != nil {
+		return SorteioParticipant{}, false, err
+	}
+	return monitor.AddSorteioManualParticipant(name)
+}
+
+// RemoveSorteioParticipant removes one participant by id/name.
+func (m *Manager) RemoveSorteioParticipant(orgID, live, id string) (bool, error) {
+	monitor, err := m.monitorFor(orgID, live)
+	if err != nil {
+		return false, err
+	}
+	return monitor.RemoveSorteioParticipant(id), nil
 }
 
 // OnEvent registers a callback receiving events from every live.
@@ -252,6 +334,38 @@ func (m *Manager) ActiveLives() []ActiveLive {
 
 // Close stops every live monitor and releases all bridge processes.
 func (m *Manager) Close() { m.StopAll() }
+
+// AttachMonitorForTest registers an idle monitor (no bridge/supervisor) for
+// (org, live). Tests only: production monitors are created by StartMonitoring.
+func (m *Manager) AttachMonitorForTest(orgID, live string) (*Monitor, error) {
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
+	orgID = strings.TrimSpace(orgID)
+	live = normalizeLiveName(live)
+	if orgID == "" || live == "" {
+		return nil, fmt.Errorf("org and live are required")
+	}
+	mon, err := New()
+	if err != nil {
+		return nil, err
+	}
+	mon.SetRepo(m.repo)
+	mon.SetOrgID(orgID)
+	mon.SetCurrentLive(live)
+	mon.OnEvent(func(eventType string, data EventData) {
+		payload := cloneEventData(data)
+		payload["liveName"] = live
+		payload["orgId"] = orgID
+		if id := mon.CurrentLiveID(); id != "" {
+			payload["liveId"] = id
+		}
+		m.emit(eventType, payload)
+	})
+	m.mu.Lock()
+	m.monitors[liveKey{org: orgID, live: live}] = mon
+	m.mu.Unlock()
+	return mon, nil
+}
 
 func (m *Manager) emit(eventType string, data EventData) {
 	m.mu.RLock()

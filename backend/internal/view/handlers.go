@@ -64,6 +64,14 @@ func (s *HTTPServer) handleSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// Palavra-chave do sorteio: trim + limite de 40 runes (vazio desliga).
+		if keyword := strings.TrimSpace(settings.SorteioKeyword); keyword != "" {
+			if runes := len([]rune(keyword)); runes > 40 {
+				writeError(w, http.StatusBadRequest, "A palavra-chave do sorteio deve ter no máximo 40 caracteres.")
+				return
+			}
+		}
+		settings.SorteioKeyword = strings.TrimSpace(settings.SorteioKeyword)
 		for target, tag := range settings.TargetGiftTags {
 			trimmed := strings.TrimSpace(tag)
 			if trimmed == "" {

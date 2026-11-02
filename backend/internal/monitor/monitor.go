@@ -82,6 +82,9 @@ type Settings struct {
 	TargetGiftPriorities map[string]bool `json:"targetGiftPriorities,omitempty"`
 	// TargetGiftTags is a free label per target gift type, shown in the "Fila" column.
 	TargetGiftTags map[string]string `json:"targetGiftTags,omitempty"`
+	// SorteioKeyword is the chat keyword whose commenters join the live
+	// raffle (empty disables collection; matching is accent/case-insensitive).
+	SorteioKeyword string `json:"sorteioKeyword,omitempty"`
 }
 
 type State struct {
@@ -153,17 +156,23 @@ type Monitor struct {
 	// ver handleGiftReceived/settleGiftStreak.
 	giftStreaks        map[string]*giftStreak
 	targetGiftProgress map[targetGiftProgressKey]int
+
+	// Sorteio ao vivo: coleta por palavra-chave + entradas manuais (ver sorteio.go).
+	sorteioActive       bool
+	sorteioParticipants map[string]SorteioParticipant
+	sorteioWinners      []SorteioParticipant
 }
 
 func New() (*Monitor, error) {
 	return &Monitor{
-		handlers:      make([]EventHandler, 0),
-		pinnedUsers:   make(map[string]bool),
-		processedPins: make(map[string]bool),
-		repeatAlerted: make(map[string]bool),
-		giftsCh:       make(chan []string, 1),
-		reconnectKick: make(chan struct{}, 1),
-		giftStreaks:   make(map[string]*giftStreak),
+		handlers:            make([]EventHandler, 0),
+		pinnedUsers:         make(map[string]bool),
+		processedPins:       make(map[string]bool),
+		repeatAlerted:       make(map[string]bool),
+		giftsCh:             make(chan []string, 1),
+		reconnectKick:       make(chan struct{}, 1),
+		giftStreaks:         make(map[string]*giftStreak),
+		sorteioParticipants: make(map[string]SorteioParticipant),
 		settings: Settings{
 			ModerationEnabled:    true,
 			LogLevel:             "info",
@@ -269,6 +278,9 @@ func (m *Monitor) StartMonitoring(ctx context.Context, username string) error {
 	m.pinnedUsers = make(map[string]bool)
 	m.processedPins = make(map[string]bool)
 	m.repeatAlerted = make(map[string]bool)
+	m.sorteioActive = false
+	m.sorteioParticipants = make(map[string]SorteioParticipant)
+	m.sorteioWinners = nil
 	for _, st := range m.giftStreaks {
 		if st.timer != nil {
 			st.timer.Stop()

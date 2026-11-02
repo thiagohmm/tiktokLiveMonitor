@@ -1,5 +1,9 @@
 console.log('TikTok Live Monitor Renderer Loaded');
 
+// Live fixada no momento da conexão (usada pelo Sorteio na query ?live=):
+// declarada no topo porque os estados de conexão a manipulam cedo no boot.
+let sorteioLivePin = '';
+
 // Tradução dos nomes de presentes para PT-BR (mesma fonte do backend gifts.js)
 const GIFT_TRANSLATIONS = {
     "rose": "Rosa",
@@ -1875,6 +1879,7 @@ function applyConnectedState(username) {
 
 // Coloca a interface no estado desconectado/erro e limpa as tabelas.
 function applyDisconnectedState(error) {
+    sorteioLivePin = '';
     const isUserDisconnect = error === 'Desconectado pelo usuário' || error === 'Servidor encerrado';
     setStatus(isUserDisconnect ? 'Desconectado' : `Erro: ${error}`, isUserDisconnect ? '' : 'error');
     connectBtn.style.display = 'inline-block';
@@ -1918,8 +1923,10 @@ function handleConnectionStatus(data) {
     console.log('[Frontend] handleConnectionStatus chamado:', data);
     if (data.success) {
         applyConnectedState(data.username);
+        sorteioLivePin = String(data.username || '').trim();
         loadAvailableGifts();
         loadForecast();
+        loadSorteio();
         console.log('[Frontend] handleConnectionStatus: restaurando históricos...');
         loadAllGifts();
         loadPendingTargetGifts();
@@ -2736,6 +2743,7 @@ async function loadInitialState() {
         loadRanking();
         loadGoals();
         loadForecast();
+        loadSorteio();
     } catch (error) {
         setStatus('Servidor indisponível', 'error');
     }
@@ -2961,6 +2969,18 @@ function setupEventStream() {
         } catch (error) {
             console.error('[Frontend] Falha ao processar goal-completed:', error);
         }
+    });
+
+    eventSource.addEventListener('sorteio-state', event => {
+        handleSorteioStateEvent(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('sorteio-participant', event => {
+        handleSorteioParticipantEvent(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('sorteio-result', event => {
+        handleSorteioResultEvent(JSON.parse(event.data));
     });
 
     eventSource.onerror = () => {
@@ -4764,3 +4784,394 @@ async function loadAllowedLiveChoices() {
  (data.lives||[]).filter(l=>l.active).forEach(l=>{const option=document.createElement('option');option.value=l.username;choices.appendChild(option)});
  document.body.appendChild(choices);usernameInput.setAttribute('list','authorizedLives');
 }
+
+// ===== Sorteio ao Vivo =====
+// Estado espelha o backend (Monitor da live): coleta por palavra-chave no
+// chat + entradas manuais; vencedores saem da caixa a cada sorteio.
+const sorteioKeywordInput = document.getElementById('sorteioKeywordInput');
+const sorteioSaveKeywordBtn = document.getElementById('sorteioSaveKeywordBtn');
+const sorteioToggleBtn = document.getElementById('sorteioToggleBtn');
+const sorteioAddInput = document.getElementById('sorteioAddInput');
+const sorteioAddBtn = document.getElementById('sorteioAddBtn');
+const sorteioWinnersInput = document.getElementById('sorteioWinnersInput');
+const sorteioDrawBtn = document.getElementById('sorteioDrawBtn');
+const sorteioResetBtn = document.getElementById('sorteioResetBtn');
+const sorteioStatus = document.getElementById('sorteioStatus');
+const sorteioParticipantsCount = document.getElementById('sorteioParticipantsCount');
+const sorteioParticipantsList = document.getElementById('sorteioParticipantsList');
+const sorteioWinnersList = document.getElementById('sorteioWinnersList');
+const sorteioCopyBtn = document.getElementById('sorteioCopyBtn');
+const sorteioLiveLabel = document.getElementById('sorteioLiveLabel');
+
+let sorteioState = { active: false, keyword: '', live: '', participants: [], winners: [] };
+let sorteioStatusTimer = null;
+
+// ?live= da live fixada (string vazia deixa o servidor resolver).
+function sorteioQuery() {
+    return sorteioLivePin ? '?live=' + encodeURIComponent(sorteioLivePin) : '';
+}
+
+const SORTEIO_MEDALS = ['🥇', '🥈', '🥉'];
+
+function showSorteioStatus(message, isError) {
+    if (!sorteioStatus) return;
+    sorteioStatus.textContent = message;
+    sorteioStatus.classList.toggle('error', Boolean(isError));
+    sorteioStatus.hidden = !message;
+    if (sorteioStatusTimer) clearTimeout(sorteioStatusTimer);
+    if (message && !isError) {
+        sorteioStatusTimer = setTimeout(() => { sorteioStatus.hidden = true; }, 4000);
+    }
+}
+
+// Pinta o painel com o estado atual (REST ou eventos SSE).
+function renderSorteio() {
+    if (!sorteioParticipantsList) return;
+    if (sorteioToggleBtn) {
+        sorteioToggleBtn.textContent = sorteioState.active ? 'Encerrar coleta' : 'Iniciar coleta';
+        sorteioToggleBtn.classList.toggle('active', sorteioState.active);
+    }
+    if (sorteioKeywordInput && document.activeElement !== sorteioKeywordInput) {
+        sorteioKeywordInput.value = sorteioState.keyword || '';
+    }
+    if (sorteioLiveLabel) {
+        sorteioLiveLabel.textContent = sorteioState.live ? `· @${sorteioState.live}` : '';
+    }
+    if (sorteioParticipantsCount) {
+        sorteioParticipantsCount.textContent = String(sorteioState.participants.length);
+    }
+    if (sorteioDrawBtn) {
+        sorteioDrawBtn.disabled = sorteioState.participants.length === 0;
+    }
+
+    sorteioParticipantsList.innerHTML = '';
+    if (!sorteioState.participants.length) {
+        const empty = document.createElement('div');
+        empty.className = 'sorteio-empty';
+        empty.textContent = 'Ninguém na caixa ainda — ligue a coleta e peça a palavra-chave no chat.';
+        sorteioParticipantsList.appendChild(empty);
+    }
+    for (const participant of sorteioState.participants) {
+        const row = document.createElement('div');
+        row.className = 'sorteio-participant';
+
+        const name = document.createElement('span');
+        name.className = 'sorteio-participant-name';
+        name.textContent = participant.nickname || participant.uniqueId;
+        name.title = participant.uniqueId || participant.nickname;
+        row.appendChild(name);
+
+        if (participant.manual) {
+            const tag = document.createElement('span');
+            tag.className = 'sorteio-participant-tag';
+            tag.textContent = 'manual';
+            row.appendChild(tag);
+        }
+
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'sorteio-remove-btn';
+        remove.textContent = '×';
+        remove.title = 'Remover da caixa';
+        remove.setAttribute('aria-label', `Remover ${participant.nickname || participant.uniqueId}`);
+        remove.addEventListener('click', () => removeSorteioParticipant(participant.uniqueId));
+        row.appendChild(remove);
+
+        sorteioParticipantsList.appendChild(row);
+    }
+
+    sorteioWinnersList.innerHTML = '';
+    if (sorteioCopyBtn) sorteioCopyBtn.hidden = sorteioState.winners.length === 0;
+    if (!sorteioState.winners.length) {
+        const empty = document.createElement('div');
+        empty.className = 'sorteio-empty';
+        empty.textContent = 'Sem sorteio ainda.';
+        sorteioWinnersList.appendChild(empty);
+    }
+    for (const [index, winner] of sorteioState.winners.entries()) {
+        const row = document.createElement('div');
+        row.className = 'sorteio-winner';
+
+        const medal = document.createElement('span');
+        medal.className = 'sorteio-winner-medal';
+        medal.textContent = SORTEIO_MEDALS[index] || `${index + 1}.`;
+        row.appendChild(medal);
+
+        const name = document.createElement('span');
+        name.className = 'sorteio-participant-name';
+        name.textContent = winner.nickname || winner.uniqueId;
+        row.appendChild(name);
+
+        sorteioWinnersList.appendChild(row);
+    }
+}
+
+// GET /api/sorteio: estado completo (participantes, vencedores, keyword).
+async function loadSorteio() {
+    if (!sorteioParticipantsList) return;
+    try {
+        const response = await fetch('/api/sorteio' + sorteioQuery());
+        if (!response.ok) {
+            if (response.status === 409) {
+                sorteioState = { active: false, keyword: '', participants: [], winners: [] };
+                renderSorteio();
+                showSorteioStatus('Conecte-se a uma live para usar o sorteio.');
+            }
+            return;
+        }
+        sorteioState = {
+            active: false,
+            keyword: '',
+            participants: [],
+            winners: [],
+            ...await response.json()
+        };
+        renderSorteio();
+    } catch (error) {
+        console.error('[Frontend] Falha ao carregar sorteio:', error);
+    }
+}
+
+// Salva a palavra-chave nas settings da org (mesmo fluxo de merge dos
+// presentes alvos: GET settings → merge → POST).
+async function saveSorteioKeyword() {
+    if (!sorteioKeywordInput) return;
+    const keyword = sorteioKeywordInput.value.trim();
+    if (keyword.length > 40) {
+        showSorteioStatus('A palavra-chave deve ter no máximo 40 caracteres.', true);
+        return;
+    }
+    try {
+        const response = await fetch('/api/settings');
+        if (!response.ok) {
+            showSorteioStatus('Não foi possível ler as configurações.', true);
+            return;
+        }
+        const settings = await response.json();
+        if (!settings || typeof settings !== 'object' || !('moderationEnabled' in settings)) {
+            showSorteioStatus('Configurações indisponíveis — palavra-chave não salva.', true);
+            return;
+        }
+        const res = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...settings, sorteioKeyword: keyword })
+        });
+        if (!res.ok) {
+            showSorteioStatus('Não foi possível salvar a palavra-chave.', true);
+            return;
+        }
+        sorteioState.keyword = keyword;
+        showSorteioStatus(keyword ? `Palavra-chave salva: "${keyword}"` : 'Palavra-chave removida.');
+    } catch (error) {
+        console.error('[Frontend] Erro ao salvar palavra-chave do sorteio:', error);
+        showSorteioStatus('Erro ao salvar a palavra-chave.', true);
+    }
+}
+
+// Liga/desliga a coleta automática pelo chat.
+async function toggleSorteioCollection() {
+    const path = (sorteioState.active ? '/api/sorteio/stop' : '/api/sorteio/start') + sorteioQuery();
+    try {
+        const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            showSorteioStatus(payload.error || 'Não foi possível mudar a coleta.', true);
+            return;
+        }
+        applySorteioStateView(payload);
+    } catch (error) {
+        console.error('[Frontend] Erro no toggle da coleta:', error);
+        showSorteioStatus('Erro ao mudar a coleta.', true);
+    }
+}
+
+// Adiciona um participante digitado manualmente.
+async function addSorteioParticipant() {
+    if (!sorteioAddInput) return;
+    const nickname = sorteioAddInput.value.trim();
+    if (!nickname) return;
+    try {
+        const response = await fetch('/api/sorteio/participants' + sorteioQuery(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nickname })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            showSorteioStatus(payload.error || 'Não foi possível adicionar o participante.', true);
+            return;
+        }
+        sorteioAddInput.value = '';
+        applySorteioStateView(payload.state);
+        if (!payload.added) showSorteioStatus(`${nickname} já está na caixa.`);
+    } catch (error) {
+        console.error('[Frontend] Erro ao adicionar participante:', error);
+        showSorteioStatus('Erro ao adicionar participante.', true);
+    }
+}
+
+// Remove um participante da caixa.
+async function removeSorteioParticipant(uniqueId) {
+    try {
+        const response = await fetch('/api/sorteio/participants/remove' + sorteioQuery(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uniqueId })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            showSorteioStatus(payload.error || 'Não foi possível remover o participante.', true);
+            return;
+        }
+        applySorteioStateView(payload.state);
+    } catch (error) {
+        console.error('[Frontend] Erro ao remover participante:', error);
+        showSorteioStatus('Erro ao remover participante.', true);
+    }
+}
+
+// Sorteia N vencedores distintos; vencedores saem da caixa.
+async function drawSorteio() {
+    if (!sorteioDrawBtn || sorteioDrawBtn.disabled) return;
+    const count = Math.min(Math.max(parseInt(sorteioWinnersInput.value, 10) || 1, 1), 50);
+    sorteioWinnersInput.value = String(count);
+    sorteioDrawBtn.disabled = true;
+    sorteioDrawBtn.classList.add('sorteio-drawing');
+    try {
+        const response = await fetch('/api/sorteio/draw' + sorteioQuery(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ count })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            showSorteioStatus(payload.error || 'Não foi possível sortear.', true);
+            return;
+        }
+        applySorteioStateView(payload.state);
+        const flash = sorteioWinnersList && payload.winners && payload.winners.length;
+        if (flash) {
+            sorteioWinnersList.classList.add('sorteio-winners-flash');
+            setTimeout(() => sorteioWinnersList && sorteioWinnersList.classList.remove('sorteio-winners-flash'), 600);
+        }
+        showSorteioStatus(`🎲 ${payload.winners.length} vencedor(es) sorteado(s)!`);
+    } catch (error) {
+        console.error('[Frontend] Erro ao sortear:', error);
+        showSorteioStatus('Erro ao sortear.', true);
+    } finally {
+        sorteioDrawBtn.classList.remove('sorteio-drawing');
+        renderSorteio();
+    }
+}
+
+// Limpa participantes e o último resultado.
+async function resetSorteio() {
+    try {
+        const response = await fetch('/api/sorteio/reset' + sorteioQuery(), { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            showSorteioStatus(payload.error || 'Não foi possível limpar.', true);
+            return;
+        }
+        applySorteioStateView(payload);
+        showSorteioStatus('Caixa e resultado limpos.');
+    } catch (error) {
+        console.error('[Frontend] Erro ao limpar sorteio:', error);
+        showSorteioStatus('Erro ao limpar.', true);
+    }
+}
+
+// Copia os vencedores (um por linha) para a área de transferência.
+async function copySorteioWinners() {
+    const lines = sorteioState.winners.map((w, i) => `${SORTEIO_MEDALS[i] || `${i + 1}.`} ${w.nickname || w.uniqueId}`);
+    const text = lines.join('\n');
+    if (!text) return;
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+        } else {
+            const area = document.createElement('textarea');
+            area.value = text;
+            area.style.position = 'fixed';
+            area.style.opacity = '0';
+            document.body.appendChild(area);
+            area.select();
+            document.execCommand('copy');
+            area.remove();
+        }
+        showSorteioStatus('Vencedores copiados.');
+    } catch (error) {
+        console.error('[Frontend] Erro ao copiar vencedores:', error);
+        showSorteioStatus('Erro ao copiar.', true);
+    }
+}
+
+// Normaliza o payload da REST ({active, keyword?, live?, participants, winners}).
+function applySorteioStateView(payload) {
+    if (!payload) return;
+    sorteioState = {
+        active: Boolean(payload.active),
+        keyword: payload.keyword !== undefined ? (payload.keyword || '') : sorteioState.keyword,
+        live: payload.live !== undefined ? (payload.live || '') : sorteioState.live,
+        participants: payload.participants || [],
+        winners: payload.winners || []
+    };
+    renderSorteio();
+}
+
+// --- Eventos SSE do sorteio ---
+
+function handleSorteioStateEvent(data) {
+    // start/stop/reset: snapshot com active + lista completa de participantes.
+    sorteioState.active = Boolean(data.active);
+    if (Array.isArray(data.participants)) {
+        sorteioState.participants = data.participants;
+    }
+    renderSorteio();
+}
+
+function handleSorteioParticipantEvent(data) {
+    if (!data || !data.uniqueId) return;
+    if (sorteioState.participants.some(p => (p.uniqueId || '').toLowerCase() === data.uniqueId.toLowerCase())) {
+        return;
+    }
+    sorteioState.participants.push({
+        uniqueId: data.uniqueId,
+        nickname: data.nickname || data.uniqueId,
+        manual: Boolean(data.manual)
+    });
+    renderSorteio();
+}
+
+function handleSorteioResultEvent(data) {
+    if (!Array.isArray(data.winners)) return;
+    sorteioState.winners = data.winners;
+    // O backend remove os vencedores da caixa; revalida com o estado completo
+    // em segundo plano (o evento não traz a lista restante).
+    loadSorteio();
+    if (sorteioWinnersList && data.winners.length) {
+        sorteioWinnersList.classList.add('sorteio-winners-flash');
+        setTimeout(() => sorteioWinnersList && sorteioWinnersList.classList.remove('sorteio-winners-flash'), 600);
+    }
+    renderSorteio();
+}
+
+if (sorteioSaveKeywordBtn) sorteioSaveKeywordBtn.addEventListener('click', saveSorteioKeyword);
+if (sorteioKeywordInput) sorteioKeywordInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        saveSorteioKeyword();
+    }
+});
+if (sorteioToggleBtn) sorteioToggleBtn.addEventListener('click', toggleSorteioCollection);
+if (sorteioAddBtn) sorteioAddBtn.addEventListener('click', addSorteioParticipant);
+if (sorteioAddInput) sorteioAddInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        addSorteioParticipant();
+    }
+});
+if (sorteioDrawBtn) sorteioDrawBtn.addEventListener('click', drawSorteio);
+if (sorteioResetBtn) sorteioResetBtn.addEventListener('click', resetSorteio);
+if (sorteioCopyBtn) sorteioCopyBtn.addEventListener('click', copySorteioWinners);

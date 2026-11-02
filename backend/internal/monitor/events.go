@@ -160,6 +160,11 @@ func (m *Monitor) handleChatMessage(data EventData) []pendingEmit {
 		pending = append(pending, pendingEmit{EventMarkUserRed, EventData{"uniqueId": senderKey}})
 	}
 
+	// Sorteio ao vivo: coleta do bilhete por palavra-chave (dedupe no state).
+	if sp, added := m.collectSorteioParticipant(comment, user); added {
+		pending = append(pending, sp)
+	}
+
 	return pending
 }
 

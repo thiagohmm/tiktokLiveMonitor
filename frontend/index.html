@@ -1443,6 +1443,122 @@
         }
         .goal-status-tag.completed { color: var(--green); }
         .goal-status-tag.cancelled { color: var(--red); }
+        .sorteio-actions .expiration-control input {
+            width: 150px;
+        }
+        .sorteio-live-label {
+            font-size: 0.72em;
+            font-weight: 700;
+            color: var(--text-muted);
+            vertical-align: middle;
+        }
+        .sorteio-card {
+            margin-top: 8px;
+        }
+        .sorteio-form-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .sorteio-form-row input[type="text"] {
+            flex: 1;
+            min-width: 200px;
+        }
+        .sorteio-draw-btn:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+        .sorteio-draw-btn.sorteio-drawing {
+            animation: sorteio-shake 0.4s ease-in-out infinite;
+        }
+        @keyframes sorteio-shake {
+            0%, 100% { transform: rotate(0deg); }
+            25% { transform: rotate(-12deg); }
+            75% { transform: rotate(12deg); }
+        }
+        .sorteio-status {
+            margin: 0 0 8px;
+            padding: 6px 10px;
+            border-radius: 8px;
+            font-size: 0.78em;
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text-muted);
+        }
+        .sorteio-status.error {
+            background: rgba(255, 0, 60, 0.12);
+            color: var(--red, #ff5a7a);
+        }
+        .sorteio-columns {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        @media (max-width: 720px) {
+            .sorteio-columns { grid-template-columns: 1fr; }
+        }
+        .sorteio-participants-list,
+        .sorteio-winners-list {
+            margin-top: 6px;
+            max-height: 220px;
+            overflow: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .sorteio-participant,
+        .sorteio-winner {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 5px 10px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.03);
+            font-size: 0.82em;
+        }
+        .sorteio-participant-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .sorteio-participant-tag {
+            font-size: 0.72em;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .sorteio-remove-btn {
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 1em;
+            line-height: 1;
+            padding: 2px 4px;
+        }
+        .sorteio-remove-btn:hover { color: var(--red, #ff5a7a); }
+        .sorteio-winner {
+            background: rgba(255, 215, 0, 0.08);
+            font-weight: 700;
+        }
+        .sorteio-winner .sorteio-winner-medal {
+            flex-shrink: 0;
+        }
+        .sorteio-winners-list.sorteio-winners-flash > .sorteio-winner {
+            animation: sorteio-pop 0.45s ease-out both;
+        }
+        @keyframes sorteio-pop {
+            0% { transform: scale(0.7); opacity: 0; }
+            70% { transform: scale(1.06); opacity: 1; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .sorteio-empty {
+            color: var(--text-muted);
+            font-size: 0.78em;
+            padding: 4px 2px;
+        }
         .goal-toast {
             position: fixed;
             top: 20px;
@@ -2130,6 +2246,53 @@
             </div>
         </div>
 
+        <!-- Sorteio ao Vivo (coleta por palavra-chave + entradas manuais) -->
+        <div class="section-title">
+            <div class="section-title-label">
+                <h3>🎁 Sorteio <span id="sorteioLiveLabel" class="sorteio-live-label"></span></h3>
+            </div>
+            <div class="section-title-actions sorteio-actions">
+                <label class="expiration-control" for="sorteioKeywordInput">
+                    Palavra-chave
+                    <input type="text" id="sorteioKeywordInput" maxlength="40" placeholder="Ex.: participar"
+                        title="Quem comentar esta palavra durante a coleta entra no sorteio (ignora acentos e caixa)">
+                </label>
+                <button id="sorteioSaveKeywordBtn" class="small-btn" type="button"
+                    title="Salva a palavra-chave nas configurações da organização">Salvar</button>
+                <button id="sorteioToggleBtn" class="small-btn mode-btn" type="button"
+                    title="Liga/desliga a coleta automática de participantes pelo chat">Iniciar coleta</button>
+            </div>
+        </div>
+        <div class="goal-card sorteio-card">
+            <div class="sorteio-form-row">
+                <input type="text" id="sorteioAddInput" maxlength="40" placeholder="Adicionar participante (@nome)" autocomplete="off">
+                <button id="sorteioAddBtn" class="small-btn" type="button" title="Adicionar participante manualmente">+</button>
+                <label class="expiration-control" for="sorteioWinnersInput">
+                    Vencedores
+                    <input type="number" id="sorteioWinnersInput" min="1" max="50" step="1" value="1">
+                </label>
+                <button id="sorteioDrawBtn" class="small-btn sorteio-draw-btn" type="button" disabled
+                    title="Sorteia entre os participantes da caixa; vencedores saem dela">🎲 Sortear</button>
+                <button id="sorteioResetBtn" class="small-btn" type="button"
+                    title="Limpa participantes e o último resultado">Limpar</button>
+            </div>
+            <div id="sorteioStatus" class="sorteio-status" role="status" aria-live="polite" hidden></div>
+            <div class="sorteio-columns">
+                <div class="sorteio-participants-wrap">
+                    <div class="goal-section-label">Participantes (<span id="sorteioParticipantsCount">0</span>)</div>
+                    <div id="sorteioParticipantsList" class="sorteio-participants-list"></div>
+                </div>
+                <div class="sorteio-winners-wrap">
+                    <div class="goal-section-label">
+                        Vencedores
+                        <button id="sorteioCopyBtn" class="small-btn" type="button" hidden
+                            title="Copia os vencedores (um por linha, na ordem do sorteio)">Copiar</button>
+                    </div>
+                    <div id="sorteioWinnersList" class="sorteio-winners-list"></div>
+                </div>
+            </div>
+        </div>
+
         <!-- Ranking Inteligente da Live -->
         <div class="section-title">
             <div class="section-title-label">
@@ -2216,7 +2379,7 @@
     <script src="/config.js?v=20260927-1"></script>
     <script src="/auth.js?v=20260927-1"></script>
     <script src="/vendor/jspdf.umd.min.js"></script>
-    <script src="/renderer.js?v=20260927-1"></script>
+    <script src="/renderer.js?v=20261102-1"></script>
     <script src="/pix.js?v=20260927-2"></script>
 </body>
 </html>

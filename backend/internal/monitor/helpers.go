@@ -85,7 +85,22 @@ func normalizeID(value string) string {
 func foldText(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	s = strings.Map(func(r rune) rune {
-		if r == 'ç' {
+		// Acentos pré-compostos (NFC) comuns em português viram a letra base;
+		// marcas combinantes (NFD) são descartadas.
+		switch r {
+		case 'á', 'à', 'â', 'ã', 'ä':
+			return 'a'
+		case 'é', 'è', 'ê', 'ë':
+			return 'e'
+		case 'í', 'ì', 'î', 'ï':
+			return 'i'
+		case 'ó', 'ò', 'ô', 'õ', 'ö':
+			return 'o'
+		case 'ú', 'ù', 'û', 'ü':
+			return 'u'
+		case 'ñ':
+			return 'n'
+		case 'ç':
 			return 'c'
 		}
 		if r >= 0x0300 && r <= 0x036F {

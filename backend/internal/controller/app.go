@@ -233,6 +233,96 @@ func (c *AppController) FetchAvailableGifts(orgID, live string) ([]string, error
 	return gifts, nil
 }
 
+// --- Sorteio ao vivo ---
+
+// ErrSorteioNoLive is returned when the organization monitors no live yet,
+// so there is no monitor to hold the raffle state.
+var ErrSorteioNoLive = errors.New("conecte-se a uma live para usar o sorteio")
+
+// sorteioResolved validates the org and resolves the live used by the raffle
+// (explicit live or the organization's current one).
+func (c *AppController) sorteioResolved(orgID, live string) (string, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return "", model.ErrOrgRequired
+	}
+	live = c.ResolveLive(orgID, live)
+	if live == "" {
+		return "", ErrSorteioNoLive
+	}
+	return live, nil
+}
+
+// SorteioState returns the raffle snapshot and the resolved live.
+func (c *AppController) SorteioState(orgID, live string) (monitor.SorteioState, string, error) {
+	resolved, err := c.sorteioResolved(orgID, live)
+	if err != nil {
+		return monitor.SorteioState{}, "", err
+	}
+	state, err := c.monitorManager.SorteioState(orgID, resolved)
+	return state, resolved, err
+}
+
+// StartSorteio starts chat keyword collection on the resolved live.
+func (c *AppController) StartSorteio(orgID, live string) (monitor.SorteioState, string, error) {
+	resolved, err := c.sorteioResolved(orgID, live)
+	if err != nil {
+		return monitor.SorteioState{}, "", err
+	}
+	state, err := c.monitorManager.StartSorteio(orgID, resolved)
+	return state, resolved, err
+}
+
+// StopSorteio stops chat keyword collection (participants kept).
+func (c *AppController) StopSorteio(orgID, live string) (monitor.SorteioState, string, error) {
+	resolved, err := c.sorteioResolved(orgID, live)
+	if err != nil {
+		return monitor.SorteioState{}, "", err
+	}
+	state, err := c.monitorManager.StopSorteio(orgID, resolved)
+	return state, resolved, err
+}
+
+// ResetSorteio clears participants and the last result.
+func (c *AppController) ResetSorteio(orgID, live string) (monitor.SorteioState, string, error) {
+	resolved, err := c.sorteioResolved(orgID, live)
+	if err != nil {
+		return monitor.SorteioState{}, "", err
+	}
+	state, err := c.monitorManager.ResetSorteio(orgID, resolved)
+	return state, resolved, err
+}
+
+// DrawSorteio draws count winners on the resolved live.
+func (c *AppController) DrawSorteio(orgID, live string, count int) ([]monitor.SorteioParticipant, string, error) {
+	resolved, err := c.sorteioResolved(orgID, live)
+	if err != nil {
+		return nil, "", err
+	}
+	winners, err := c.monitorManager.DrawSorteio(orgID, resolved, count)
+	return winners, resolved, err
+}
+
+// AddSorteioManualParticipant adds an operator-typed participant.
+func (c *AppController) AddSorteioManualParticipant(orgID, live, name string) (monitor.SorteioParticipant, string, bool, error) {
+	resolved, err := c.sorteioResolved(orgID, live)
+	if err != nil {
+		return monitor.SorteioParticipant{}, "", false, err
+	}
+	p, added, err := c.monitorManager.AddSorteioManualParticipant(orgID, resolved, name)
+	return p, resolved, added, err
+}
+
+// RemoveSorteioParticipant removes one participant of the resolved live.
+func (c *AppController) RemoveSorteioParticipant(orgID, live, id string) (bool, string, error) {
+	resolved, err := c.sorteioResolved(orgID, live)
+	if err != nil {
+		return false, "", err
+	}
+	removed, err := c.monitorManager.RemoveSorteioParticipant(orgID, resolved, id)
+	return removed, resolved, err
+}
+
 // --- Moderation Actions ---
 
 // ReportExternalFlag ingests a moderation flag and surfaces it through the
