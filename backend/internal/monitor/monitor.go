@@ -161,6 +161,15 @@ type Monitor struct {
 	sorteioActive       bool
 	sorteioParticipants map[string]SorteioParticipant
 	sorteioWinners      []SorteioParticipant
+
+	// Enquete ao vivo: palavras-alvo + voto travado por usuário (ver enquete.go).
+	enqueteActive    bool
+	enqueteQuestion  string
+	enqueteOptions   []enqueteOption
+	enqueteIndex     map[string]int
+	enqueteVoters    map[string]struct{}
+	enqueteStartedAt int64
+	enqueteEndedAt   int64
 }
 
 func New() (*Monitor, error) {
@@ -173,6 +182,8 @@ func New() (*Monitor, error) {
 		reconnectKick:       make(chan struct{}, 1),
 		giftStreaks:         make(map[string]*giftStreak),
 		sorteioParticipants: make(map[string]SorteioParticipant),
+		enqueteIndex:        make(map[string]int),
+		enqueteVoters:       make(map[string]struct{}),
 		settings: Settings{
 			ModerationEnabled:    true,
 			LogLevel:             "info",
@@ -281,6 +292,7 @@ func (m *Monitor) StartMonitoring(ctx context.Context, username string) error {
 	m.sorteioActive = false
 	m.sorteioParticipants = make(map[string]SorteioParticipant)
 	m.sorteioWinners = nil
+	m.resetEnqueteLocked()
 	for _, st := range m.giftStreaks {
 		if st.timer != nil {
 			st.timer.Stop()

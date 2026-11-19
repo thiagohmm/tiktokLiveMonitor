@@ -1559,6 +1559,130 @@
             font-size: 0.78em;
             padding: 4px 2px;
         }
+
+        /* ── Enquete ao vivo ──────────────────────────────── */
+        .enquete-card {
+            margin-top: 8px;
+        }
+        .enquete-question-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .enquete-question-row input[type="text"] {
+            flex: 1;
+            min-width: 220px;
+        }
+        .enquete-words {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+        .enquete-word-chip {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 4px 3px 10px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            font-size: 0.8em;
+        }
+        .enquete-word-chip.locked {
+            opacity: 0.85;
+        }
+        .enquete-words-empty {
+            color: var(--text-muted);
+            font-size: 0.78em;
+            padding: 4px 2px;
+        }
+        .enquete-results {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 6px;
+        }
+        .enquete-result-row {
+            padding: 8px 10px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid transparent;
+        }
+        .enquete-result-row.leading {
+            border-color: rgba(255, 215, 0, 0.35);
+            background: rgba(255, 215, 0, 0.07);
+        }
+        .enquete-result-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.86em;
+        }
+        .enquete-result-word {
+            flex: 1;
+            font-weight: 700;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .enquete-result-count {
+            font-variant-numeric: tabular-nums;
+            color: var(--text-muted);
+        }
+        .enquete-result-bar {
+            margin-top: 6px;
+            height: 8px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.07);
+            overflow: hidden;
+        }
+        .enquete-result-fill {
+            height: 100%;
+            width: 0;
+            border-radius: 999px;
+            background: linear-gradient(90deg, var(--cyan), #7c5cff);
+            transition: width 0.25s ease;
+        }
+        .enquete-result-row.leading .enquete-result-fill {
+            background: linear-gradient(90deg, #ffd700, #ff9f1a);
+        }
+        .enquete-voters-toggle {
+            margin-top: 6px;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 0.76em;
+            padding: 0;
+            text-decoration: underline dotted;
+        }
+        .enquete-voters-toggle:hover { color: var(--cyan); }
+        .enquete-voters {
+            margin: 6px 0 0;
+            padding: 0;
+            list-style: none;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px 8px;
+            max-height: 140px;
+            overflow: auto;
+            font-size: 0.76em;
+            color: var(--text-muted);
+        }
+        .enquete-winner-badge {
+            font-size: 0.7em;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: rgba(255, 215, 0, 0.16);
+            color: #ffd700;
+            white-space: nowrap;
+        }
         .goal-toast {
             position: fixed;
             top: 20px;
@@ -2291,6 +2415,35 @@
                     <div id="sorteioWinnersList" class="sorteio-winners-list"></div>
                 </div>
             </div>
+        </div>
+
+        <!-- Enquete ao Vivo (palavras-alvo, voto travado no primeiro comentário) -->
+        <div class="section-title">
+            <div class="section-title-label">
+                <h3>🗳️ Enquete <span id="enqueteLiveLabel" class="sorteio-live-label"></span></h3>
+            </div>
+            <div class="section-title-actions sorteio-actions">
+                <button id="enqueteToggleBtn" class="small-btn mode-btn" type="button"
+                    title="Liga/desliga a coleta de votos nos comentários do chat">Iniciar enquete</button>
+                <button id="enqueteResetBtn" class="small-btn" type="button"
+                    title="Limpa as palavras e os votos da enquete">Limpar</button>
+            </div>
+        </div>
+        <div class="goal-card enquete-card">
+            <div class="enquete-question-row">
+                <input type="text" id="enqueteQuestionInput" maxlength="80" placeholder="Pergunta (opcional)" autocomplete="off">
+                <input type="text" id="enqueteWordInput" maxlength="40" placeholder="Palavra-alvo (ex.: sim)" autocomplete="off"
+                    title="O comentário precisa ser exatamente esta palavra para votar (ignora acentos, caixa, pontuação e emoji)">
+                <button id="enqueteAddWordBtn" class="small-btn" type="button" title="Adicionar palavra">+</button>
+            </div>
+            <div id="enqueteWords" class="enquete-words"></div>
+            <div id="enqueteStatus" class="sorteio-status" role="status" aria-live="polite" hidden></div>
+            <div class="goal-section-label">
+                Resultado (<span id="enqueteTotal">0</span> voto(s))
+                <button id="enqueteCopyBtn" class="small-btn" type="button" hidden
+                    title="Copia o resultado (palavra: votos)">Copiar</button>
+            </div>
+            <div id="enqueteResults" class="enquete-results"></div>
         </div>
 
         <!-- Ranking Inteligente da Live -->

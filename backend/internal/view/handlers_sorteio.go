@@ -1,9 +1,7 @@
 package view
 
 import (
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 
@@ -66,18 +64,6 @@ func writeSorteioError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 }
 
-// sorteioBody decodes an optional JSON body: empty or chunked-empty bodies
-// leave dst untouched (validation happens on the typed fields).
-func sorteioBody(w http.ResponseWriter, r *http.Request, dst any) bool {
-	dec := json.NewDecoder(r.Body)
-	err := dec.Decode(dst)
-	if err != nil && !errors.Is(err, io.EOF) {
-		writeError(w, http.StatusBadRequest, "invalid body")
-		return false
-	}
-	return true
-}
-
 // handleSorteioState returns the live raffle state (GET /api/sorteio).
 func (s *HTTPServer) handleSorteioState(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -116,7 +102,7 @@ func (s *HTTPServer) handleSorteioStart(w http.ResponseWriter, r *http.Request) 
 	var body struct {
 		Keyword string `json:"keyword"`
 	}
-	if !sorteioBody(w, r, &body) {
+	if !optionalJSONBody(w, r, &body) {
 		return
 	}
 	if keyword := strings.TrimSpace(body.Keyword); keyword != "" {
@@ -189,7 +175,7 @@ func (s *HTTPServer) handleSorteioDraw(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Count int `json:"count"`
 	}
-	if !sorteioBody(w, r, &body) {
+	if !optionalJSONBody(w, r, &body) {
 		return
 	}
 	if body.Count < 1 || body.Count > sorteioMaxWinners {
@@ -230,7 +216,7 @@ func (s *HTTPServer) handleSorteioAddParticipant(w http.ResponseWriter, r *http.
 	var body struct {
 		Nickname string `json:"nickname"`
 	}
-	if !sorteioBody(w, r, &body) {
+	if !optionalJSONBody(w, r, &body) {
 		return
 	}
 	p, resolved, added, err := s.controller.AddSorteioManualParticipant(t.OrgID, r.URL.Query().Get("live"), body.Nickname)
@@ -264,7 +250,7 @@ func (s *HTTPServer) handleSorteioRemoveParticipant(w http.ResponseWriter, r *ht
 	var body struct {
 		UniqueID string `json:"uniqueId"`
 	}
-	if !sorteioBody(w, r, &body) {
+	if !optionalJSONBody(w, r, &body) {
 		return
 	}
 	removed, resolved, err := s.controller.RemoveSorteioParticipant(t.OrgID, r.URL.Query().Get("live"), body.UniqueID)

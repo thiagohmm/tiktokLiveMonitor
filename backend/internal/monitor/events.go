@@ -165,6 +165,12 @@ func (m *Monitor) handleChatMessage(data EventData) []pendingEmit {
 		pending = append(pending, sp)
 	}
 
+	// Enquete ao vivo: comentário igual à palavra-alvo vota uma única vez por
+	// usuário (o primeiro voto vale; não há troca de ideia).
+	if ev, voted := m.collectEnqueteVote(comment, user); voted {
+		pending = append(pending, ev)
+	}
+
 	return pending
 }
 

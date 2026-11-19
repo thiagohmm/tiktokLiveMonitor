@@ -323,6 +323,66 @@ func (c *AppController) RemoveSorteioParticipant(orgID, live, id string) (bool, 
 	return removed, resolved, err
 }
 
+// --- Enquete ao vivo ---
+
+// ErrEnqueteNoLive is returned when the organization monitors no live yet,
+// so there is no monitor to hold the poll state.
+var ErrEnqueteNoLive = errors.New("conecte-se a uma live para usar a enquete")
+
+// enqueteResolved validates the org and resolves the live used by the poll
+// (explicit live or the organization's current one).
+func (c *AppController) enqueteResolved(orgID, live string) (string, error) {
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return "", model.ErrOrgRequired
+	}
+	live = c.ResolveLive(orgID, live)
+	if live == "" {
+		return "", ErrEnqueteNoLive
+	}
+	return live, nil
+}
+
+// EnqueteState returns the poll snapshot and the resolved live.
+func (c *AppController) EnqueteState(orgID, live string) (monitor.EnqueteState, string, error) {
+	resolved, err := c.enqueteResolved(orgID, live)
+	if err != nil {
+		return monitor.EnqueteState{}, "", err
+	}
+	state, err := c.monitorManager.EnqueteState(orgID, resolved)
+	return state, resolved, err
+}
+
+// StartEnquete opens a poll with the operator's target words.
+func (c *AppController) StartEnquete(orgID, live, question string, words []string) (monitor.EnqueteState, string, error) {
+	resolved, err := c.enqueteResolved(orgID, live)
+	if err != nil {
+		return monitor.EnqueteState{}, "", err
+	}
+	state, err := c.monitorManager.StartEnquete(orgID, resolved, question, words)
+	return state, resolved, err
+}
+
+// StopEnquete closes voting (votes kept).
+func (c *AppController) StopEnquete(orgID, live string) (monitor.EnqueteState, string, error) {
+	resolved, err := c.enqueteResolved(orgID, live)
+	if err != nil {
+		return monitor.EnqueteState{}, "", err
+	}
+	state, err := c.monitorManager.StopEnquete(orgID, resolved)
+	return state, resolved, err
+}
+
+// ResetEnquete clears the poll state.
+func (c *AppController) ResetEnquete(orgID, live string) (monitor.EnqueteState, string, error) {
+	resolved, err := c.enqueteResolved(orgID, live)
+	if err != nil {
+		return monitor.EnqueteState{}, "", err
+	}
+	state, err := c.monitorManager.ResetEnquete(orgID, resolved)
+	return state, resolved, err
+}
+
 // --- Moderation Actions ---
 
 // ReportExternalFlag ingests a moderation flag and surfaces it through the

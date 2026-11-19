@@ -1927,6 +1927,7 @@ function handleConnectionStatus(data) {
         loadAvailableGifts();
         loadForecast();
         loadSorteio();
+        loadEnquete();
         console.log('[Frontend] handleConnectionStatus: restaurando históricos...');
         loadAllGifts();
         loadPendingTargetGifts();
@@ -2744,6 +2745,7 @@ async function loadInitialState() {
         loadGoals();
         loadForecast();
         loadSorteio();
+        loadEnquete();
     } catch (error) {
         setStatus('Servidor indisponível', 'error');
     }
@@ -2981,6 +2983,18 @@ function setupEventStream() {
 
     eventSource.addEventListener('sorteio-result', event => {
         handleSorteioResultEvent(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('enquete-state', event => {
+        handleEnqueteStateEvent(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('enquete-vote', event => {
+        handleEnqueteVoteEvent(JSON.parse(event.data));
+    });
+
+    eventSource.addEventListener('enquete-result', event => {
+        handleEnqueteResultEvent(JSON.parse(event.data));
     });
 
     eventSource.onerror = () => {
@@ -5175,3 +5189,462 @@ if (sorteioAddInput) sorteioAddInput.addEventListener('keydown', event => {
 if (sorteioDrawBtn) sorteioDrawBtn.addEventListener('click', drawSorteio);
 if (sorteioResetBtn) sorteioResetBtn.addEventListener('click', resetSorteio);
 if (sorteioCopyBtn) sorteioCopyBtn.addEventListener('click', copySorteioWinners);
+
+// ===== Enquete ao Vivo =====
+// O operador define palavras-alvo (mínimo 2); quem comentar exatamente uma
+// palavra vota nela — o primeiro comentário vale e o voto não muda depois.
+// O estado espelha o Monitor da live (backend), como o Sorteio.
+const enqueteToggleBtn = document.getElementById('enqueteToggleBtn');
+const enqueteResetBtn = document.getElementById('enqueteResetBtn');
+const enqueteQuestionInput = document.getElementById('enqueteQuestionInput');
+const enqueteWordInput = document.getElementById('enqueteWordInput');
+const enqueteAddWordBtn = document.getElementById('enqueteAddWordBtn');
+const enqueteWords = document.getElementById('enqueteWords');
+const enqueteStatus = document.getElementById('enqueteStatus');
+const enqueteResults = document.getElementById('enqueteResults');
+const enqueteTotal = document.getElementById('enqueteTotal');
+const enqueteCopyBtn = document.getElementById('enqueteCopyBtn');
+const enqueteLiveLabel = document.getElementById('enqueteLiveLabel');
+
+const ENQUETE_MIN_WORDS = 2;
+const ENQUETE_MAX_WORDS = 10;
+
+let enqueteState = { active: false, question: '', live: '', options: [], total: 0, winner: '', tied: false };
+// Palavras em edição (antes de iniciar); espelham as opções quando ativas.
+let enqueteDraftWords = [];
+// Índices com a lista de votantes aberta.
+const enqueteExpanded = new Set();
+let enqueteStatusTimer = null;
+
+// ?live= da live fixada (mesma pinagem usada pelo Sorteio).
+function enqueteQuery() {
+    return sorteioLivePin ? '?live=' + encodeURIComponent(sorteioLivePin) : '';
+}
+
+// Fold local só para deduplicar a prévia (o backend valida de verdade).
+function foldEnqueteWord(word) {
+    return String(word || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]/gu, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function showEnqueteStatus(message, isError) {
+    if (!enqueteStatus) return;
+    enqueteStatus.textContent = message;
+    enqueteStatus.classList.toggle('error', Boolean(isError));
+    enqueteStatus.hidden = !message;
+    if (enqueteStatusTimer) clearTimeout(enqueteStatusTimer);
+    if (message && !isError) {
+        enqueteStatusTimer = setTimeout(() => { enqueteStatus.hidden = true; }, 4000);
+    }
+}
+
+// Opções em exibição: as do servidor quando a enquete existe, senão as do rascunho.
+function enqueteDisplayOptions() {
+    if (enqueteState.options.length) {
+        return enqueteState.options.map(option => ({
+            word: option.word,
+            votes: option.votes || 0,
+            voters: option.voters || []
+        }));
+    }
+    return enqueteDraftWords.map(word => ({ word, votes: 0, voters: [] }));
+}
+
+function renderEnqueteWords() {
+    if (!enqueteWords) return;
+    enqueteWords.innerHTML = '';
+    const options = enqueteDisplayOptions();
+    if (!options.length) {
+        const empty = document.createElement('div');
+        empty.className = 'enquete-words-empty';
+        empty.textContent = 'Adicione pelo menos 2 palavras-alvo (ex.: sim e não).';
+        enqueteWords.appendChild(empty);
+        return;
+    }
+    for (const option of options) {
+        const chip = document.createElement('span');
+        chip.className = 'enquete-word-chip' + (enqueteState.active ? ' locked' : '');
+        const label = document.createElement('span');
+        label.textContent = option.word;
+        chip.appendChild(label);
+        // O "×" só edita o rascunho: com enquete iniciada ou resultado na tela as
+        // palavras vêm do servidor e só mudam via "Limpar".
+        if (!enqueteState.active && !enqueteState.options.length) {
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'sorteio-remove-btn';
+            remove.textContent = '×';
+            remove.title = `Remover "${option.word}"`;
+            remove.addEventListener('click', () => {
+                enqueteDraftWords = enqueteDraftWords.filter(word => word !== option.word);
+                renderEnquete();
+            });
+            chip.appendChild(remove);
+        }
+        enqueteWords.appendChild(chip);
+    }
+}
+
+function enqueteWinnerLabel() {
+    if (!enqueteState.winner) return '';
+    if (enqueteState.tied) return 'Empate';
+    return 'Vencedora';
+}
+
+function renderEnqueteResults() {
+    if (!enqueteResults) return;
+    enqueteResults.innerHTML = '';
+    const options = enqueteDisplayOptions();
+    const total = options.reduce((sum, option) => sum + option.votes, 0);
+    if (enqueteTotal) enqueteTotal.textContent = String(total);
+    if (enqueteCopyBtn) enqueteCopyBtn.hidden = total === 0;
+
+    if (!options.length) {
+        const empty = document.createElement('div');
+        empty.className = 'sorteio-empty';
+        empty.textContent = 'Sem enquete. Defina as palavras e clique em "Iniciar enquete".';
+        enqueteResults.appendChild(empty);
+        return;
+    }
+
+    const maxVotes = Math.max(...options.map(option => option.votes));
+    for (const [index, option] of options.entries()) {
+        const row = document.createElement('div');
+        row.className = 'enquete-result-row';
+        const leading = option.votes > 0 && option.votes === maxVotes;
+        if (leading) row.classList.add('leading');
+
+        const head = document.createElement('div');
+        head.className = 'enquete-result-head';
+        const word = document.createElement('span');
+        word.className = 'enquete-result-word';
+        word.textContent = option.word;
+        head.appendChild(word);
+        if (leading && !enqueteState.active && enqueteState.winner) {
+            const badge = document.createElement('span');
+            badge.className = 'enquete-winner-badge';
+            badge.textContent = enqueteWinnerLabel();
+            head.appendChild(badge);
+        }
+        const count = document.createElement('span');
+        count.className = 'enquete-result-count';
+        const pct = total ? Math.round((option.votes / total) * 100) : 0;
+        count.textContent = `${option.votes} voto(s) · ${pct}%`;
+        head.appendChild(count);
+        row.appendChild(head);
+
+        const bar = document.createElement('div');
+        bar.className = 'enquete-result-bar';
+        const fill = document.createElement('div');
+        fill.className = 'enquete-result-fill';
+        fill.style.width = `${pct}%`;
+        bar.appendChild(fill);
+        row.appendChild(bar);
+
+        if (option.voters.length) {
+            const toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = 'enquete-voters-toggle';
+            const open = enqueteExpanded.has(index);
+            toggle.textContent = open
+                ? 'ocultar quem votou'
+                : `ver quem votou (${option.voters.length})`;
+            toggle.addEventListener('click', () => {
+                if (enqueteExpanded.has(index)) enqueteExpanded.delete(index);
+                else enqueteExpanded.add(index);
+                renderEnqueteResults();
+            });
+            row.appendChild(toggle);
+            if (open) {
+                const list = document.createElement('ul');
+                list.className = 'enquete-voters';
+                for (const voter of option.voters) {
+                    const item = document.createElement('li');
+                    item.textContent = voter.nickname || voter.uniqueId || '—';
+                    list.appendChild(item);
+                }
+                row.appendChild(list);
+            }
+        }
+        enqueteResults.appendChild(row);
+    }
+}
+
+// Pinta o painel com o estado atual (REST ou eventos SSE).
+function renderEnquete() {
+    if (!enqueteResults) return;
+    if (enqueteToggleBtn) {
+        enqueteToggleBtn.textContent = enqueteState.active ? 'Encerrar enquete' : 'Iniciar enquete';
+        enqueteToggleBtn.classList.toggle('active', enqueteState.active);
+        enqueteToggleBtn.disabled = !enqueteState.active && enqueteDraftWords.length < ENQUETE_MIN_WORDS;
+        enqueteToggleBtn.title = enqueteState.active
+            ? 'Encerra a votação e mantém o resultado'
+            : 'Abre a votação nos comentários do chat (mínimo de 2 palavras)';
+    }
+    if (enqueteQuestionInput && document.activeElement !== enqueteQuestionInput) {
+        enqueteQuestionInput.value = enqueteState.question || '';
+    }
+    if (enqueteLiveLabel) {
+        enqueteLiveLabel.textContent = enqueteState.live ? `· @${enqueteState.live}` : '';
+    }
+    // Com enquete aberta ou resultado na tela as palavras vêm do servidor:
+    // editar só depois de "Limpar" (evita rascunho invisível).
+    const wordsLocked = enqueteState.active || enqueteState.options.length > 0;
+    if (enqueteWordInput) {
+        enqueteWordInput.disabled = wordsLocked;
+        enqueteWordInput.placeholder = wordsLocked
+            ? 'Clique em "Limpar" para trocar as palavras'
+            : 'Palavra-alvo (ex.: sim)';
+    }
+    if (enqueteAddWordBtn) enqueteAddWordBtn.disabled = wordsLocked;
+    renderEnqueteWords();
+    renderEnqueteResults();
+}
+
+// GET /api/enquete: estado completo (opções, votos, votantes, vencedora).
+async function loadEnquete() {
+    if (!enqueteResults) return;
+    try {
+        const response = await fetch('/api/enquete' + enqueteQuery());
+        if (response.status === 409) {
+            enqueteState = { active: false, question: '', live: '', options: [], total: 0, winner: '', tied: false };
+            renderEnquete();
+            showEnqueteStatus('Conecte-se a uma live para usar a enquete.');
+            return;
+        }
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const payload = await response.json();
+        applyEnqueteStateView(payload);
+        if (!payload.active && !enqueteDraftWords.length) {
+            enqueteDraftWords = enqueteState.options.map(option => option.word);
+            renderEnquete();
+        }
+    } catch (error) {
+        console.error('[Frontend] Falha ao carregar enquete:', error);
+    }
+}
+
+function applyEnqueteStateView(payload) {
+    if (!payload) return;
+    enqueteState = {
+        active: Boolean(payload.active),
+        question: payload.question || '',
+        live: payload.live || '',
+        options: payload.options || [],
+        total: payload.total || 0,
+        winner: payload.winner || '',
+        tied: Boolean(payload.tied)
+    };
+    if (!enqueteState.active && !enqueteDraftWords.length) {
+        enqueteDraftWords = enqueteState.options.map(option => option.word);
+    }
+    renderEnquete();
+}
+
+// Adiciona uma palavra ao rascunho (o backend valida de novo ao iniciar).
+function addEnqueteWord() {
+    if (!enqueteWordInput || enqueteState.active || enqueteState.options.length) return;
+    const word = enqueteWordInput.value.trim();
+    if (!word) return;
+    if (word.split(/\s+/).length > 1) {
+        showEnqueteStatus('Cada opção deve ser uma única palavra.', true);
+        return;
+    }
+    if (word.length > 40) {
+        showEnqueteStatus('A palavra deve ter no máximo 40 caracteres.', true);
+        return;
+    }
+    if (enqueteDraftWords.length >= ENQUETE_MAX_WORDS) {
+        showEnqueteStatus(`A enquete aceita no máximo ${ENQUETE_MAX_WORDS} palavras.`, true);
+        return;
+    }
+    const folded = foldEnqueteWord(word);
+    if (enqueteDraftWords.some(existing => foldEnqueteWord(existing) === folded)) {
+        showEnqueteStatus(`"${word}" já está na enquete.`, true);
+        return;
+    }
+    enqueteDraftWords.push(word);
+    enqueteWordInput.value = '';
+    enqueteWordInput.focus();
+    showEnqueteStatus('');
+    renderEnquete();
+}
+
+async function startEnquete() {
+    if (enqueteState.active) return;
+    if (enqueteDraftWords.length < ENQUETE_MIN_WORDS) {
+        showEnqueteStatus('A enquete precisa de no mínimo 2 palavras.', true);
+        return;
+    }
+    // Reabrir com o resultado de uma enquete encerrada apaga a apuração: avisa.
+    if (enqueteState.options.length && enqueteState.total > 0
+        && !window.confirm('Iniciar uma nova enquete zera o resultado atual. Continuar?')) {
+        return;
+    }
+    try {
+        const response = await fetch('/api/enquete/start' + enqueteQuery(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                question: enqueteQuestionInput ? enqueteQuestionInput.value.trim() : '',
+                words: enqueteDraftWords
+            })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            showEnqueteStatus(payload.error || 'Não foi possível iniciar a enquete.', true);
+            return;
+        }
+        enqueteExpanded.clear();
+        applyEnqueteStateView(payload);
+        showEnqueteStatus('Enquete aberta! Os comentários com as palavras já valem voto.');
+    } catch (error) {
+        console.error('[Frontend] Erro ao iniciar enquete:', error);
+        showEnqueteStatus('Erro ao iniciar a enquete.', true);
+    }
+}
+
+async function stopEnquete() {
+    try {
+        const response = await fetch('/api/enquete/stop' + enqueteQuery(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            showEnqueteStatus(payload.error || 'Não foi possível encerrar a enquete.', true);
+            return;
+        }
+        applyEnqueteStateView(payload);
+        showEnqueteStatus(payload.winner
+            ? `Enquete encerrada. Vencedora: "${payload.winner}".`
+            : 'Enquete encerrada sem votos.');
+    } catch (error) {
+        console.error('[Frontend] Erro ao encerrar enquete:', error);
+        showEnqueteStatus('Erro ao encerrar a enquete.', true);
+    }
+}
+
+async function resetEnquete() {
+    try {
+        const response = await fetch('/api/enquete/reset' + enqueteQuery(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            showEnqueteStatus(payload.error || 'Não foi possível limpar a enquete.', true);
+            return;
+        }
+        enqueteDraftWords = [];
+        enqueteExpanded.clear();
+        if (enqueteQuestionInput) enqueteQuestionInput.value = '';
+        applyEnqueteStateView(payload);
+        showEnqueteStatus('Enquete limpa.');
+    } catch (error) {
+        console.error('[Frontend] Erro ao limpar enquete:', error);
+        showEnqueteStatus('Erro ao limpar a enquete.', true);
+    }
+}
+
+async function copyEnqueteResult() {
+    const options = enqueteDisplayOptions();
+    const total = options.reduce((sum, option) => sum + option.votes, 0);
+    if (!total) return;
+    const lines = options
+        .slice()
+        .sort((a, b) => b.votes - a.votes)
+        .map(option => `${option.word}: ${option.votes} voto(s) (${Math.round((option.votes / total) * 100)}%)`);
+    if (enqueteState.question) lines.unshift(enqueteState.question);
+    const text = lines.join('\n');
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+        } else {
+            const area = document.createElement('textarea');
+            area.value = text;
+            area.style.position = 'fixed';
+            area.style.opacity = '0';
+            document.body.appendChild(area);
+            area.select();
+            document.execCommand('copy');
+            area.remove();
+        }
+        showEnqueteStatus('Resultado copiado.');
+    } catch (error) {
+        console.error('[Frontend] Erro ao copiar resultado:', error);
+        showEnqueteStatus('Erro ao copiar.', true);
+    }
+}
+
+// --- Eventos SSE da enquete ---
+
+function handleEnqueteStateEvent(data) {
+    // start/stop/reset: snapshot completo (opções, votos e votantes).
+    enqueteState = {
+        active: Boolean(data.active),
+        question: data.question || '',
+        live: enqueteState.live,
+        options: data.options || [],
+        total: data.total || 0,
+        winner: data.winner || '',
+        tied: Boolean(data.tied)
+    };
+    if (enqueteState.options.length) {
+        enqueteDraftWords = enqueteState.options.map(option => option.word);
+    }
+    // Snapshot remoto pode trocar as opções: índices abertos deixam de valer.
+    enqueteExpanded.clear();
+    renderEnquete();
+}
+
+function handleEnqueteVoteEvent(data) {
+    if (!data || !data.uniqueId) return;
+    // O payload traz as contagens autoritativas; a lista de votantes é
+    // completada pelo evento (o backend já travou o voto no primeiro comentário).
+    const counts = Array.isArray(data.counts) ? data.counts : [];
+    enqueteState.options = enqueteState.options.map((option, index) => {
+        const votes = counts[index] !== undefined ? counts[index] : option.votes;
+        const voters = option.voters || [];
+        const alreadyListed = voters.some(voter => (voter.uniqueId || '').toLowerCase() === String(data.uniqueId).toLowerCase());
+        const nextVoters = (data.index === index && !alreadyListed)
+            ? voters.concat([{ uniqueId: data.uniqueId, nickname: data.nickname || data.uniqueId }])
+            : voters;
+        return { ...option, votes, voters: nextVoters };
+    });
+    enqueteState.total = typeof data.total === 'number' ? data.total : enqueteState.total + 1;
+    renderEnqueteResults();
+}
+
+function handleEnqueteResultEvent(data) {
+    if (!data) return;
+    enqueteState.active = Boolean(data.active);
+    enqueteState.winner = data.winner || '';
+    enqueteState.tied = Boolean(data.tied);
+    if (Array.isArray(data.options)) enqueteState.options = data.options;
+    renderEnquete();
+    if (enqueteState.winner) {
+        showEnqueteStatus(`Enquete encerrada. Vencedora: "${enqueteState.winner}".`);
+    }
+}
+
+if (enqueteAddWordBtn) enqueteAddWordBtn.addEventListener('click', addEnqueteWord);
+if (enqueteWordInput) enqueteWordInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        addEnqueteWord();
+    }
+});
+if (enqueteToggleBtn) enqueteToggleBtn.addEventListener('click', () => {
+    if (enqueteState.active) stopEnquete();
+    else startEnquete();
+});
+if (enqueteResetBtn) enqueteResetBtn.addEventListener('click', resetEnquete);
+if (enqueteCopyBtn) enqueteCopyBtn.addEventListener('click', copyEnqueteResult);
+
+renderEnquete();

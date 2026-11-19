@@ -305,6 +305,44 @@ func (m *Manager) RemoveSorteioParticipant(orgID, live, id string) (bool, error)
 	return monitor.RemoveSorteioParticipant(id), nil
 }
 
+// EnqueteState returns the poll snapshot of one live.
+func (m *Manager) EnqueteState(orgID, live string) (EnqueteState, error) {
+	monitor, err := m.monitorFor(orgID, live)
+	if err != nil {
+		return EnqueteState{}, err
+	}
+	return monitor.EnqueteSnapshot(), nil
+}
+
+// StartEnquete opens a poll with the given target words and returns the snapshot.
+func (m *Manager) StartEnquete(orgID, live, question string, words []string) (EnqueteState, error) {
+	monitor, err := m.monitorFor(orgID, live)
+	if err != nil {
+		return EnqueteState{}, err
+	}
+	return monitor.StartEnquete(question, words)
+}
+
+// StopEnquete closes voting (votes are kept) and returns the snapshot.
+func (m *Manager) StopEnquete(orgID, live string) (EnqueteState, error) {
+	monitor, err := m.monitorFor(orgID, live)
+	if err != nil {
+		return EnqueteState{}, err
+	}
+	monitor.StopEnquete()
+	return monitor.EnqueteSnapshot(), nil
+}
+
+// ResetEnquete clears the poll state and returns the snapshot.
+func (m *Manager) ResetEnquete(orgID, live string) (EnqueteState, error) {
+	monitor, err := m.monitorFor(orgID, live)
+	if err != nil {
+		return EnqueteState{}, err
+	}
+	monitor.ResetEnquete()
+	return monitor.EnqueteSnapshot(), nil
+}
+
 // OnEvent registers a callback receiving events from every live.
 func (m *Manager) OnEvent(handler EventHandler) {
 	m.mu.Lock()
