@@ -16,41 +16,22 @@ func TestBuildWelcomeBody(t *testing.T) {
 		wantNotContains []string
 	}{
 		{
-			name:            "link tem prioridade sobre pix",
-			cfg:             Config{PaymentLink: "https://pay.exemplo/abc", PixKey: "chave@pix.com", Price: "20,00"},
-			wantContains:    []string{"Pagamento: https://pay.exemplo/abc"},
-			wantNotContains: []string{"Pix chave@pix.com", placeholderLine},
-		},
-		{
-			name:         "pix quando não há link",
-			cfg:          Config{PixKey: "chave@pix.com", Price: "20,00"},
-			wantContains: []string{"Pagamento: Pix chave@pix.com"},
-		},
-		{
-			name:         "placeholder quando não há link nem pix",
-			cfg:          Config{Price: "20,00"},
-			wantContains: []string{placeholderLine},
-		},
-		{
-			name:         "preço interpolado",
-			cfg:          Config{PaymentLink: "https://pay.exemplo/abc", Price: "25,00"},
-			wantContains: []string{"pagamento de R$ 25,00"},
+			name:         "confirma o cadastro e explica a liberação",
+			wantContains: []string{"cadastro no TikTok Live Monitor foi concluído com sucesso", "O administrador da plataforma vai conferir"},
+			wantNotContains: []string{"pagamento", "R$", "Pix", "comprovante", "Pagamento:"},
 		},
 		{
 			name:         "displayName na saudação",
-			cfg:          Config{PaymentLink: "https://pay.exemplo/abc", Price: "20,00"},
 			displayName:  "  João  ",
 			wantContains: []string{"Olá, João! Tudo bem?"},
 		},
 		{
 			name:            "sem displayName usa saudação genérica",
-			cfg:             Config{PaymentLink: "https://pay.exemplo/abc", Price: "20,00"},
 			wantContains:    []string{"Olá! Tudo bem?"},
 			wantNotContains: []string{"Olá, "},
 		},
 		{
 			name:         "assinatura fixa",
-			cfg:          Config{PaymentLink: "https://pay.exemplo/abc", Price: "20,00"},
 			wantContains: []string{"Atenciosamente,\nEquipe TikTok Live Monitor"},
 		},
 	}
@@ -90,11 +71,7 @@ func TestBuildResetBodyContainsLink(t *testing.T) {
 }
 
 func TestBuildMessage(t *testing.T) {
-	cfg := Config{
-		PaymentLink: "https://pay.exemplo/abc",
-		Price:       "20,00",
-	}
-	body := buildWelcomeBody(cfg, "João")
+	body := buildWelcomeBody(Config{}, "João")
 	msg := string(buildMessage("Equipe <no-reply@tlm.com>", "joao@exemplo.com", "Liberação do acesso ao TikTok Live Monitor", body))
 
 	for _, want := range []string{
@@ -124,7 +101,7 @@ func TestBuildMessage(t *testing.T) {
 		t.Errorf("assunto decodificado = %q", decoded)
 	}
 
-	// Corpo: decodificar quoted-printable deve devolver o original (acentos e R$).
+	// Corpo: decodificar quoted-printable deve devolver o original (acentos).
 	_, bodyPart, ok := strings.Cut(msg, "\r\n\r\n")
 	if !ok {
 		t.Fatal("mensagem sem separação header/corpo (\\r\\n\\r\\n)")
@@ -133,7 +110,7 @@ func TestBuildMessage(t *testing.T) {
 	if decodedBody != body {
 		t.Errorf("corpo decodificado difere do original:\n--- decodificado ---\n%s\n--- original ---\n%s", decodedBody, body)
 	}
-	for _, want := range []string{"Olá, João! Tudo bem?", "R$ 20,00"} {
+	for _, want := range []string{"Olá, João! Tudo bem?"} {
 		if !strings.Contains(decodedBody, want) {
 			t.Errorf("corpo decodificado não contém %q", want)
 		}
@@ -172,26 +149,6 @@ func TestQPEncodeLine(t *testing.T) {
 		if got := qpEncodeLine(tt.in); got != tt.want {
 			t.Errorf("qpEncodeLine(%q) = %q, want %q", tt.in, got, tt.want)
 		}
-	}
-}
-
-func TestPaymentLinePriority(t *testing.T) {
-	tests := []struct {
-		name string
-		cfg  Config
-		want string
-	}{
-		{"link", Config{PaymentLink: "https://x", PixKey: "k"}, "Pagamento: https://x"},
-		{"pix", Config{PixKey: "k"}, "Pagamento: Pix k"},
-		{"placeholder", Config{}, placeholderLine},
-		{"whitespace ignora", Config{PaymentLink: "  ", PixKey: "k"}, "Pagamento: Pix k"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := paymentLine(tt.cfg); got != tt.want {
-				t.Errorf("paymentLine = %q, want %q", got, tt.want)
-			}
-		})
 	}
 }
 

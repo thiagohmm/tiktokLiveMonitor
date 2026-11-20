@@ -53,7 +53,9 @@ func (s *Store) ImportUsers(ctx context.Context, accounts []ImportAccount, apply
 		if !errors.Is(err, sql.ErrNoRows) {
 			return report, err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO users(id,email,display_name,role,active,notes,subscription_expires_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,COALESCE($8,now()),COALESCE($9,now()))`, account.ID, email, account.DisplayName, account.Role, account.Active, account.Notes, account.SubscriptionExpiresAt, nullableTime(account.CreatedAt), nullableTime(account.UpdatedAt))
+		// Imports continue to accept and ignore subscription_expires_at:
+		// billing was removed from the product and the column is preserved only.
+		_, err = tx.ExecContext(ctx, `INSERT INTO users(id,email,display_name,role,active,notes,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,COALESCE($7,now()),COALESCE($8,now()))`, account.ID, email, account.DisplayName, account.Role, account.Active, account.Notes, nullableTime(account.CreatedAt), nullableTime(account.UpdatedAt))
 		if err != nil {
 			return report, err
 		}

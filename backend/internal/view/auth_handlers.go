@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/auth"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/model"
@@ -126,7 +125,7 @@ func (s *HTTPServer) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		if !user.Active {
 			s.lockout.RecordSuccess(email, ip)
-			writeError(w, http.StatusForbidden, "cadastro aguardando aprovação do administrador após o pagamento")
+			writeError(w, http.StatusForbidden, "cadastro aguardando aprovação do administrador")
 			return
 		}
 
@@ -195,7 +194,7 @@ func (s *HTTPServer) handleAuthSignup(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusCreated)
 			writeJSON(w, map[string]any{
 				"pending": true,
-				"message": "Cadastro recebido. Após a confirmação do pagamento, o administrador libera o acesso.",
+				"message": "Cadastro recebido. Após a aprovação do administrador, o acesso é liberado.",
 			})
 			return
 		}
@@ -214,7 +213,7 @@ func (s *HTTPServer) handleAuthSignup(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, map[string]any{
 		"pending": true,
-		"message": "Cadastro recebido. Após a confirmação do pagamento, o administrador libera o acesso.",
+		"message": "Cadastro recebido. Após a aprovação do administrador, o acesso é liberado.",
 	})
 }
 
@@ -455,15 +454,6 @@ func (s *HTTPServer) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 			resp["orgRole"] = t.Role
 			resp["canManageOrg"] = t.OrgID != "" && t.CanManageOrg()
 			resp["platformAdmin"] = t.PlatformAdmin
-			if !t.PlatformAdmin && t.OrgID != "" && s.teams != nil {
-				if err := s.teams.Access(r.Context(), t.OrgID, t.UserID); err != nil {
-					resp["orgError"] = "seat_suspended"
-					resp["canManageOrg"] = false
-					resp["seatStatus"] = "suspended"
-				} else {
-					resp["seatStatus"] = "active"
-				}
-			}
 			if code != "" {
 				resp["orgError"] = code
 			}
@@ -480,9 +470,6 @@ func (s *HTTPServer) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		if profile, err := s.admin.GetProfileByID(user.ID); err == nil {
 			resp["displayName"] = profile.DisplayName
 			resp["notes"] = profile.Notes
-			if profile.SubscriptionExpiresAt != nil {
-				resp["subscriptionExpiresAt"] = profile.SubscriptionExpiresAt.UTC().Format(time.RFC3339)
-			}
 		}
 	}
 

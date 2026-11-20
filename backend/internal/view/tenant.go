@@ -140,12 +140,6 @@ func (s *HTTPServer) tenantMiddleware(next http.Handler) http.Handler {
 			r = r.WithContext(tenant.With(r.Context(), t))
 		}
 
-		if !tenantExempt(r.URL.Path) && !t.PlatformAdmin && s.teams != nil {
-			if err := s.teams.Access(r.Context(), t.OrgID, t.UserID); err != nil {
-				writeJSONErrorCode(w, 403, "seat_suspended", err.Error())
-				return
-			}
-		}
 		if !t.CanManageOrg() && !operatorReadPath(r.Method, r.URL.Path) {
 			writeError(w, 403, "membros ajudantes possuem acesso somente de leitura")
 			return
@@ -198,9 +192,4 @@ func operatorReadPath(method, path string) bool {
 		return true
 	}
 	return false
-}
-func writeJSONErrorCode(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"code": code, "error": message})
 }

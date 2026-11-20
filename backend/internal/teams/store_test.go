@@ -6,7 +6,6 @@ import (
 	"os"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/auth"
 	"github.com/thiagohmm/tiktok-live-monitor/internal/database"
@@ -73,33 +72,36 @@ func TestInvitationRejectsInvalidEmail(t *testing.T) {
 	}
 }
 
-func TestConcurrentInvitationsReserveExactlyTwoSeats(t *testing.T) {
+func TestConcurrentInvitationsReserveDistinctSeats(t *testing.T) {
 	_, s, org := fixture(t)
 	ctx := context.Background()
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	success := 0
+	seats := map[int]bool{}
 	for n := 0; n < 10; n++ {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			_, _, err := s.CreateInvitation(ctx, org, "owner", string(rune('a'+n))+"@example.com")
+			i, _, err := s.CreateInvitation(ctx, org, "owner", string(rune('a'+n))+"@example.com")
 			mu.Lock()
 			defer mu.Unlock()
-			if err == nil {
-				success++
-			} else if !errors.Is(err, teams.ErrCapacity) {
+			if err != nil {
 				t.Errorf("unexpected: %v", err)
+				return
 			}
+			if i.Seat < 1 || seats[i.Seat] {
+				t.Errorf("seat %d reused", i.Seat)
+			}
+			seats[i.Seat] = true
 		}(n)
 	}
 	wg.Wait()
-	if success != 2 {
-		t.Fatalf("reserved %d seats", success)
+	if len(seats) != 10 {
+		t.Fatalf("reserved %d distinct seats, want 10", len(seats))
 	}
 	summary, err := s.Summary(ctx, org)
-	if err != nil || summary.Pending != 2 {
-		t.Fatalf("pending: %+v %v", summary, err)
+	if err != nil || summary.Pending != 10 || len(summary.Seats) != 10 {
+		t.Fatalf("summary: %+v %v", summary, err)
 	}
 }
 func TestInvitationResendCancellationAndOneUse(t *testing.T) {
@@ -146,58 +148,48 @@ func TestInvitationResendCancellationAndOneUse(t *testing.T) {
 		t.Fatal("cancelled invitation accepted")
 	}
 }
-func TestPaidSeatExpiryRenewalAndRevocation(t *testing.T) {
+func TestSeatAllocationExpiryAndRevocation(t *testing.T) {
 	db, s, org := fixture(t)
 	ctx := context.Background()
-	_, _, base1 := accept(t, s, org, "first@example.com")
+	accept(t, s, org, "first@example.com")
 	accept(t, s, org, "second@example.com")
-	if _, _, err := s.CreateInvitation(ctx, org, "owner", "extra@example.com"); !errors.Is(err, teams.ErrCapacity) {
-		t.Fatalf("third free seat: %v", err)
-	}
-	if err := s.SetPrice(ctx, "admin", 1500); err != nil {
-		t.Fatal(err)
-	}
-	payment := teams.Payment{Reference: "pix-001", Quantity: 1, AmountCents: 1500}
-	if err := s.RecordPayment(ctx, org, "admin", payment); err != nil {
-		t.Fatal(err)
-	}
+	// Without any paid period, the third member takes the next available seat.
 	_, token, extra := accept(t, s, org, "extra@example.com")
-	if err := s.Access(ctx, org, extra); err != nil {
-		t.Fatal(err)
-	}
 	if err := s.SetRole(ctx, org, "owner", extra, "owner"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordPayment(ctx, org, "admin", payment); err == nil {
-		t.Fatal("duplicate reference accepted")
+	summary, err := s.Summary(ctx, org)
+	if err != nil || len(summary.Seats) != 3 {
+		t.Fatalf("summary: %+v %v", summary, err)
 	}
-	if _, err := db.SQLDB().Exec(`UPDATE organization_seat_subscriptions SET starts_at=now()-interval '2 days',expires_at=now()-interval '1 day' WHERE org_id=$1`, org); err != nil {
-		t.Fatal(err)
+	freed := -1
+	for _, seat := range summary.Seats {
+		if seat.UserID == extra {
+			freed = seat.Number
+		}
 	}
-	if !errors.Is(s.Access(ctx, org, extra), teams.ErrSuspended) {
-		t.Fatal("expired extra owner retained access")
-	}
-	if err := s.Access(ctx, org, base1); err != nil {
-		t.Fatal("included member suspended")
-	}
-	payment.Reference = "pix-002"
-	if err := s.RecordPayment(ctx, org, "admin", payment); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Access(ctx, org, extra); err != nil {
-		t.Fatal("renewal did not restore member")
+	if freed != 3 {
+		t.Fatalf("extra seat number = %d, want 3", freed)
 	}
 	if err := s.Revoke(ctx, org, "owner", extra); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Access(ctx, org, extra); err == nil {
-		t.Fatal("revoked member retained access")
+	// The freed seat is offered again to the next invitation.
+	again, againToken, err := s.CreateInvitation(ctx, org, "owner", "again@example.com")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := auth.NewStore(db.SQLDB()).GetProfileByID(extra); err != nil {
-		t.Fatal("identity deleted")
+	if again.Seat != freed {
+		t.Fatalf("invitation reused seat %d, want freed seat %d", again.Seat, freed)
+	}
+	if _, err := s.AcceptInvitation(ctx, againToken, "new password 12", "", ""); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := s.AcceptInvitation(ctx, token, "password again 12", "", ""); err == nil {
 		t.Fatal("consumed token restored revoked member")
+	}
+	if _, err := auth.NewStore(db.SQLDB()).GetProfileByID(extra); err != nil {
+		t.Fatal("identity deleted")
 	}
 }
 func TestCrossOrganizationAndPrimaryProtection(t *testing.T) {
@@ -224,31 +216,4 @@ func TestCrossOrganizationAndPrimaryProtection(t *testing.T) {
 		t.Fatal("consumed invitation accepted")
 	}
 }
-func TestEarlyRenewalKeepsCurrentPeriodAndCalendarClamp(t *testing.T) {
-	_, s, org := fixture(t)
-	ctx := context.Background()
-	if err := s.SetPrice(ctx, "admin", 1000); err != nil {
-		t.Fatal(err)
-	}
-	for _, reference := range []string{"first", "second"} {
-		if err := s.RecordPayment(ctx, org, "admin", teams.Payment{Reference: reference, Quantity: 1, AmountCents: 1000}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	periods, err := s.Payments(ctx, org)
-	if err != nil || len(periods) != 2 {
-		t.Fatal(err)
-	}
-	if !periods[0].StartsAt.Equal(periods[1].ExpiresAt) {
-		t.Fatal("early renewal overlapped existing period")
-	}
-	summary, err := s.Summary(ctx, org)
-	if err != nil || summary.Extra != 1 {
-		t.Fatal("current subscription lost")
-	}
-	at := time.Date(2027, time.January, 31, 15, 0, 0, 0, time.UTC)
-	next := teams.AddCalendarMonth(at)
-	if next.Month() != time.February || next.Day() != 28 {
-		t.Fatalf("calendar clamp: %v", next)
-	}
-}
+

@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/smtp"
@@ -32,9 +31,6 @@ type Config struct {
 	From               string
 	Subject            string
 	ResetSubject       string
-	PixKey             string
-	PaymentLink        string
-	Price              string
 	TLSMode            string // "starttls" | "implicit" | "none"
 	InsecureSkipVerify bool
 	ResendAPIKey       string
@@ -44,14 +40,13 @@ type Config struct {
 const (
 	defaultPort         = 587
 	defaultTLSMode      = "starttls"
-	defaultPrice        = "20,00"
 	defaultSubject      = "Liberação do acesso ao TikTok Live Monitor"
 	defaultResetSubject = "Redefinição de senha — TikTok Live Monitor"
 	defaultFrom         = "Equipe TikTok Live Monitor <no-reply@tiktoklivemonitor.com>"
-	placeholderLine     = "Pagamento: [inserir chave Pix ou link de pagamento]"
 )
 
-// LoadConfigFromEnv reads the SMTP_* and PAYMENT_* env vars.
+// LoadConfigFromEnv reads the SMTP_* env vars. The legacy PAYMENT_* vars are
+// no longer read: billing was removed from the product.
 func LoadConfigFromEnv() Config {
 	port := defaultPort
 	if v := strings.TrimSpace(os.Getenv("SMTP_PORT")); v != "" {
@@ -62,10 +57,6 @@ func LoadConfigFromEnv() Config {
 	tlsMode := strings.ToLower(strings.TrimSpace(os.Getenv("SMTP_TLS_MODE")))
 	if tlsMode == "" {
 		tlsMode = defaultTLSMode
-	}
-	price := strings.TrimSpace(os.Getenv("PAYMENT_PRICE"))
-	if price == "" {
-		price = defaultPrice
 	}
 	subject := strings.TrimSpace(os.Getenv("MAIL_SUBJECT"))
 	if subject == "" {
@@ -87,9 +78,6 @@ func LoadConfigFromEnv() Config {
 		From:               from,
 		Subject:            subject,
 		ResetSubject:       resetSubject,
-		PixKey:             strings.TrimSpace(os.Getenv("PAYMENT_PIX_KEY")),
-		PaymentLink:        strings.TrimSpace(os.Getenv("PAYMENT_LINK")),
-		Price:              price,
 		TLSMode:            tlsMode,
 		InsecureSkipVerify: os.Getenv("SMTP_INSECURE_SKIP_VERIFY") == "1",
 		ResendAPIKey:       strings.TrimSpace(os.Getenv("RESEND_API_KEY")),
@@ -116,9 +104,6 @@ func (m *Mailer) Enabled() bool {
 func (m *Mailer) SendWelcome(to, displayName string) error {
 	if !m.Enabled() {
 		return fmt.Errorf("mailer desabilitado (defina SMTP_HOST e MAIL_FROM)")
-	}
-	if strings.TrimSpace(m.cfg.PaymentLink) == "" && strings.TrimSpace(m.cfg.PixKey) == "" {
-		log.Printf("[Mail] PAYMENT_LINK e PAYMENT_PIX_KEY vazios; e-mail de boas-vindas usará placeholder de pagamento")
 	}
 	body := buildWelcomeBody(m.cfg, displayName)
 	if m.cfg.ResendAPIKey != "" {
@@ -265,18 +250,6 @@ func (m *Mailer) send(to string, msg []byte) error {
 	return nil
 }
 
-// paymentLine monta a linha "Pagamento:". Prioridade: PAYMENT_LINK >
-// PAYMENT_PIX_KEY > placeholder.
-func paymentLine(cfg Config) string {
-	if link := strings.TrimSpace(cfg.PaymentLink); link != "" {
-		return "Pagamento: " + link
-	}
-	if key := strings.TrimSpace(cfg.PixKey); key != "" {
-		return "Pagamento: Pix " + key
-	}
-	return placeholderLine
-}
-
 // buildWelcomeBody renderiza o corpo fixo do e-mail de boas-vindas (texto puro).
 func buildWelcomeBody(cfg Config, displayName string) string {
 	greeting := "Olá!"
@@ -288,19 +261,13 @@ func buildWelcomeBody(cfg Config, displayName string) string {
 			"\n"+
 			"Identificamos que o seu cadastro no TikTok Live Monitor foi concluído com sucesso.\n"+
 			"\n"+
-			"Para liberar o acesso à plataforma, é necessário realizar o pagamento de R$ %s.\n"+
-			"\n"+
-			"%s\n"+
-			"\n"+
-			"Após o pagamento, envie o comprovante respondendo a este e-mail. Assim que confirmarmos, seu acesso será liberado.\n"+
+			"O administrador da plataforma vai conferir os dados do seu canal e, em seguida, liberar o seu acesso ao painel. Assim que estiver liberado, você poderá entrar com o e-mail e a senha definidos no cadastro.\n"+
 			"\n"+
 			"Caso tenha alguma dúvida, estou à disposição.\n"+
 			"\n"+
 			"Atenciosamente,\n"+
 			"Equipe TikTok Live Monitor",
 		greeting,
-		cfg.Price,
-		paymentLine(cfg),
 	)
 }
 

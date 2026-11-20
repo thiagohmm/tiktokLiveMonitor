@@ -110,7 +110,7 @@ func (s *Store) ValidateToken(token string) (*User, error) {
 	ctx, cancel := dbContext()
 	defer cancel()
 	var u User
-	err := s.DB.QueryRowContext(ctx, `SELECT u.id,u.email,u.role,u.active FROM users u JOIN auth_sessions a ON a.user_id=u.id WHERE a.token_hash=$1 AND a.revoked_at IS NULL AND a.expires_at>now() AND (u.role='admin' OR u.subscription_expires_at IS NULL OR u.subscription_expires_at>now())`, TokenHash(token)).Scan(&u.ID, &u.Email, &u.Role, &u.Active)
+	err := s.DB.QueryRowContext(ctx, `SELECT u.id,u.email,u.role,u.active FROM users u JOIN auth_sessions a ON a.user_id=u.id WHERE a.token_hash=$1 AND a.revoked_at IS NULL AND a.expires_at>now()`, TokenHash(token)).Scan(&u.ID, &u.Email, &u.Role, &u.Active)
 	if err != nil {
 		return nil, ErrInvalidCredentials
 	}
@@ -121,10 +121,9 @@ func (s *Store) ValidateToken(token string) (*User, error) {
 func (s *Store) SignInWithPassword(email, password string) (*LoginSession, error) {
 	ctx, cancel := dbContext()
 	defer cancel()
-	var id, hash, role string
+	var id, hash string
 	var active bool
-	var expires sql.NullTime
-	err := s.DB.QueryRowContext(ctx, `SELECT id,COALESCE(password_hash,''),active,role,subscription_expires_at FROM users WHERE email=lower(trim($1))`, email).Scan(&id, &hash, &active, &role, &expires)
+	err := s.DB.QueryRowContext(ctx, `SELECT id,COALESCE(password_hash,''),active FROM users WHERE email=lower(trim($1))`, email).Scan(&id, &hash, &active)
 	if err != nil {
 		VerifyPassword("$argon2id$v=19$m=65536,t=3,p=4$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", password)
 		return nil, ErrInvalidCredentials
@@ -135,9 +134,7 @@ func (s *Store) SignInWithPassword(email, password string) (*LoginSession, error
 	if !VerifyPassword(hash, password) {
 		return nil, ErrInvalidCredentials
 	}
-	// Platform admins are not gated by customer subscription dates (ValidateToken already exempts them).
-	expired := expires.Valid && time.Now().After(expires.Time) && role != "admin"
-	if !active || expired {
+	if !active {
 		return nil, ErrInvalidCredentials
 	}
 	token := RandomToken()

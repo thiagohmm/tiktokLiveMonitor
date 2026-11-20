@@ -1,4 +1,4 @@
-// Package teams implements tenant-scoped seats, invitations and manual subscriptions.
+// Package teams implements tenant-scoped seats and invitations.
 package teams
 
 import (
@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/thiagohmm/tiktok-live-monitor/internal/auth"
@@ -15,8 +14,6 @@ import (
 var (
 	ErrLastOwner      = errors.New("a organização precisa de pelo menos um dono")
 	ErrNotFound       = errors.New("recurso não encontrado")
-	ErrCapacity       = errors.New("não há vaga disponível; contrate uma vaga extra")
-	ErrSuspended      = errors.New("a vaga adicional está suspensa; solicite a renovação ao dono")
 	ErrRegularization = errors.New("regularize a equipe antes de convidar novos membros")
 )
 
@@ -25,22 +22,16 @@ type Store struct{ DB *sql.DB }
 
 func New(db *sql.DB) *Store { return &Store{DB: db} }
 
-// Seat describes an additional position, independent of its occupant's role.
+// Seat describes a team position, independent of its occupant's role.
 type Seat struct {
-	Number    int    `json:"number"`
-	UserID    string `json:"userId"`
-	Included  bool   `json:"included"`
-	Suspended bool   `json:"suspended"`
+	Number int    `json:"number"`
+	UserID string `json:"userId"`
 }
 type Summary struct {
-	Enabled      bool       `json:"enabled"`
-	PrimaryOwner string     `json:"primaryOwner"`
-	Included     int        `json:"included"`
-	Extra        int        `json:"extra"`
-	ExpiresAt    *time.Time `json:"expiresAt"`
-	PriceCents   int64      `json:"priceCents"`
-	Seats        []Seat     `json:"seats"`
-	Pending      int        `json:"pending"`
+	Enabled      bool     `json:"enabled"`
+	PrimaryOwner string   `json:"primaryOwner"`
+	Seats        []Seat   `json:"seats"`
+	Pending      int      `json:"pending"`
 }
 type Invitation struct {
 	ID        string    `json:"id"`
@@ -54,21 +45,10 @@ type AllowedLive struct {
 	Username string `json:"username"`
 	Active   bool   `json:"active"`
 }
-type Payment struct {
-	Reference   string    `json:"reference"`
-	Quantity    int       `json:"quantity"`
-	AmountCents int64     `json:"amountCents"`
-	StartsAt    time.Time `json:"startsAt"`
-	ExpiresAt   time.Time `json:"expiresAt"`
-	Kind        string    `json:"kind"`
-	Notes       string    `json:"notes"`
-}
 
 type orgLock struct {
 	Primary string
 	Enabled bool
-	Extra   int
-	Expires time.Time
 }
 
 func lockOrg(ctx context.Context, tx *sql.Tx, org string) (orgLock, error) {
@@ -84,17 +64,6 @@ func lockOrg(ctx context.Context, tx *sql.Tx, org string) (orgLock, error) {
 	if !active {
 		return o, errors.New("organização desativada")
 	}
-	var start time.Time
-	err = tx.QueryRowContext(ctx, `SELECT quantity,starts_at,expires_at FROM organization_seat_subscriptions WHERE org_id=$1 AND starts_at<=now() AND expires_at>now() ORDER BY expires_at DESC LIMIT 1`, org).Scan(&o.Extra, &start, &o.Expires)
-	if errors.Is(err, sql.ErrNoRows) {
-		return o, nil
-	}
-	if err != nil {
-		return o, err
-	}
-	if time.Now().Before(start) {
-		o.Extra = 0
-	}
 	return o, nil
 }
 func audit(ctx context.Context, tx *sql.Tx, org, actor, action string, data any) error {
@@ -106,44 +75,15 @@ func audit(ctx context.Context, tx *sql.Tx, org, actor, action string, data any)
 	return err
 }
 func expireInvites(ctx context.Context, tx *sql.Tx, org string) error {
-	_, err := tx.ExecContext(ctx, `UPDATE organization_invitations SET status='expired' WHERE org_id=$1 AND status='pending' AND (expires_at<=now() OR (seat_number>2 AND NOT EXISTS(SELECT 1 FROM organization_seat_subscriptions WHERE org_id=$1 AND starts_at<=now() AND expires_at>now() AND quantity>=seat_number-2)))`, org)
+	_, err := tx.ExecContext(ctx, `UPDATE organization_invitations SET status='expired' WHERE org_id=$1 AND status='pending' AND expires_at<=now()`, org)
 	return err
 }
 
-// Access reads current membership and entitlement; no cached claims grant access.
-func (s *Store) Access(ctx context.Context, org, user string) error {
-	var valid bool
-	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM organization_members m JOIN organizations o ON o.id=m.org_id WHERE m.org_id=$1 AND m.user_id=$2 AND o.active AND (NOT o.team_rules_enabled OR o.primary_owner_user_id=m.user_id OR EXISTS(SELECT 1 FROM organization_seats v WHERE v.org_id=o.id AND v.user_id=m.user_id AND (v.number<=2 OR EXISTS(SELECT 1 FROM organization_seat_subscriptions p WHERE p.org_id=o.id AND p.starts_at<=now() AND p.expires_at>now() AND p.quantity>=v.number-2)))))`, org, user).Scan(&valid)
-	if err != nil {
-		return err
-	}
-	if !valid {
-		return ErrSuspended
-	}
-	return nil
-}
-
-// Summary returns only one tenant's capacity and allocations.
+// Summary returns only one tenant's seats and allocations.
 func (s *Store) Summary(ctx context.Context, org string) (Summary, error) {
-	o := Summary{Included: 2, Seats: []Seat{}}
+	o := Summary{Seats: []Seat{}}
 	err := s.DB.QueryRowContext(ctx, `SELECT team_rules_enabled,COALESCE(primary_owner_user_id,'') FROM organizations WHERE id=$1`, org).Scan(&o.Enabled, &o.PrimaryOwner)
 	if err != nil {
-		return o, err
-	}
-	var start, end time.Time
-	err = s.DB.QueryRowContext(ctx, `SELECT quantity,starts_at,expires_at FROM organization_seat_subscriptions WHERE org_id=$1 AND starts_at<=now() AND expires_at>now() ORDER BY expires_at DESC LIMIT 1`, org).Scan(&o.Extra, &start, &end)
-	if err == nil {
-		o.ExpiresAt = &end
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return o, err
-	}
-	var price string
-	err = s.DB.QueryRowContext(ctx, `SELECT value FROM settings WHERE key='billing:seat_price_cents'`).Scan(&price)
-	if err == nil {
-		if _, err = fmt.Sscan(price, &o.PriceCents); err != nil {
-			return o, err
-		}
-	} else if !errors.Is(err, sql.ErrNoRows) {
 		return o, err
 	}
 	rows, err := s.DB.QueryContext(ctx, `SELECT number,COALESCE(user_id,'') FROM organization_seats WHERE org_id=$1 ORDER BY number`, org)
@@ -156,18 +96,17 @@ func (s *Store) Summary(ctx context.Context, org string) (Summary, error) {
 		if err = rows.Scan(&seat.Number, &seat.UserID); err != nil {
 			return o, err
 		}
-		seat.Included = seat.Number <= 2
-		seat.Suspended = !seat.Included && (time.Now().Before(start) || !time.Now().Before(end) || seat.Number > 2+o.Extra)
 		o.Seats = append(o.Seats, seat)
 	}
 	if err = rows.Err(); err != nil {
 		return o, err
 	}
-	err = s.DB.QueryRowContext(ctx, `SELECT count(*) FROM organization_invitations WHERE org_id=$1 AND status='pending' AND expires_at>now() AND (seat_number<=2 OR EXISTS(SELECT 1 FROM organization_seat_subscriptions p WHERE p.org_id=$1 AND p.starts_at<=now() AND p.expires_at>now() AND p.quantity>=seat_number-2))`, org).Scan(&o.Pending)
+	err = s.DB.QueryRowContext(ctx, `SELECT count(*) FROM organization_invitations WHERE org_id=$1 AND status='pending' AND expires_at>now()`, org).Scan(&o.Pending)
 	return o, err
 }
 
-// CreateInvitation reserves one vacant, paid-or-included seat.
+// CreateInvitation reserves one vacant seat, creating a new position when
+// the existing ones are all occupied or reserved.
 func (s *Store) CreateInvitation(ctx context.Context, org, actor, email string) (Invitation, string, error) {
 	email, err := auth.NormalizeEmail(email)
 	if err != nil {
@@ -195,16 +134,14 @@ func (s *Store) CreateInvitation(ctx context.Context, org, actor, email string) 
 	if member {
 		return Invitation{}, "", errors.New("já existe membro com este e-mail")
 	}
-	capacity := 2
-	if time.Now().Before(o.Expires) {
-		capacity += o.Extra
-	}
 	var number int
-	err = tx.QueryRowContext(ctx, `SELECT number FROM organization_seats v WHERE org_id=$1 AND number<=$2 AND user_id IS NULL AND NOT EXISTS(SELECT 1 FROM organization_invitations i WHERE i.org_id=v.org_id AND i.seat_number=v.number AND i.status='pending') ORDER BY number LIMIT 1`, org, capacity).Scan(&number)
+	err = tx.QueryRowContext(ctx, `SELECT number FROM organization_seats v WHERE org_id=$1 AND user_id IS NULL AND NOT EXISTS(SELECT 1 FROM organization_invitations i WHERE i.org_id=v.org_id AND i.seat_number=v.number AND i.status='pending') ORDER BY number LIMIT 1`, org).Scan(&number)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Invitation{}, "", ErrCapacity
-	}
-	if err != nil {
+		err = tx.QueryRowContext(ctx, `INSERT INTO organization_seats(org_id,number) VALUES($1,(SELECT COALESCE(max(number),0)+1 FROM organization_seats WHERE org_id=$1)) RETURNING number`, org).Scan(&number)
+		if err != nil {
+			return Invitation{}, "", errors.New("convite não disponível; confira os convites pendentes")
+		}
+	} else if err != nil {
 		return Invitation{}, "", err
 	}
 	token := auth.RandomToken()
@@ -336,9 +273,6 @@ func (s *Store) AcceptInvitation(ctx context.Context, token, password, name, exi
 	if err != nil {
 		return "", errors.New("convite inválido ou expirado")
 	}
-	if seat > 2 && (!time.Now().Before(o.Expires) || seat > 2+o.Extra) {
-		return "", ErrSuspended
-	}
 	var userID string
 	var active bool
 	err = tx.QueryRowContext(ctx, `SELECT id,active FROM users WHERE email=$1 FOR UPDATE`, email).Scan(&userID, &active)
@@ -371,7 +305,7 @@ func (s *Store) AcceptInvitation(ctx context.Context, token, password, name, exi
 	}
 	n, err := res.RowsAffected()
 	if err != nil || n != 1 {
-		return "", ErrCapacity
+		return "", errors.New("vaga indisponível; recarregue a lista de convites")
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE organization_invitations SET status='accepted' WHERE id=$1`, id); err != nil {
 		return "", err

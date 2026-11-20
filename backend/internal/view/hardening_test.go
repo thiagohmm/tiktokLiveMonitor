@@ -36,7 +36,6 @@ func TestTenantExemptAdminCoversOnlyPlatformAdminRoutes(t *testing.T) {
 	notExempt := []string{
 		"/api/admin/lives",             // rota do dono da org, exige tenant
 		"/api/admin/lives/session/delete",
-		"/api/admin/billing/price",
 		"/api/org",
 		"/api/org/members",
 		"/api/pix/tickets",

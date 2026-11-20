@@ -173,10 +173,7 @@ func (s *HTTPServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 			if err != nil || code != "" || resolved.OrgID != t.OrgID {
 				return false
 			}
-			if u.Role == "admin" {
-				return true
-			}
-			return s.teams.Access(r.Context(), t.OrgID, u.ID) == nil
+			return true
 		}
 	}
 

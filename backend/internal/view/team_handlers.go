@@ -18,16 +18,13 @@ func (s *HTTPServer) registerTeamRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/org/seats", s.handleSeats)
 	mux.HandleFunc("/api/org/allowed-lives", s.handleAllowedLives)
 	mux.HandleFunc("/api/admin/orgs/", s.handleTeamAdministration)
-	mux.HandleFunc("/api/admin/billing/price", s.handleSeatPrice)
 }
 
 func writeTeamError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, teams.ErrNotFound):
 		writeError(w, 404, err.Error())
-	case errors.Is(err, teams.ErrSuspended):
-		writeError(w, 403, err.Error())
-	case errors.Is(err, teams.ErrCapacity) || errors.Is(err, teams.ErrRegularization) || errors.Is(err, teams.ErrLastOwner):
+	case errors.Is(err, teams.ErrRegularization) || errors.Is(err, teams.ErrLastOwner):
 		writeError(w, 409, err.Error())
 	default:
 		writeError(w, 400, "operação não concluída: "+safeTeamError(err))
@@ -203,28 +200,6 @@ func (s *HTTPServer) handleAllowedLives(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, map[string]any{"lives": l})
 }
-func (s *HTTPServer) handleSeatPrice(w http.ResponseWriter, r *http.Request) {
-	u, ok := auth.RequireAdmin(w, r, s.auth)
-	if !ok {
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeError(w, 405, "method not allowed")
-		return
-	}
-	var body struct {
-		Price int64 `json:"priceCents"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, 400, "invalid body")
-		return
-	}
-	if err := s.teams.SetPrice(r.Context(), u.ID, body.Price); err != nil {
-		writeTeamError(w, r, err)
-		return
-	}
-	writeJSON(w, map[string]bool{"success": true})
-}
 func (s *HTTPServer) handleTeamAdministration(w http.ResponseWriter, r *http.Request) {
 	u, ok := auth.RequireAdmin(w, r, s.auth)
 	if !ok {
@@ -241,6 +216,17 @@ func (s *HTTPServer) handleTeamAdministration(w http.ResponseWriter, r *http.Req
 		return
 	}
 	switch action {
+	case "summary":
+		if r.Method != http.MethodGet {
+			writeError(w, 405, "method not allowed")
+			return
+		}
+		summary, err := s.teams.Summary(r.Context(), org)
+		if err != nil {
+			writeTeamError(w, r, err)
+			return
+		}
+		writeJSON(w, map[string]any{"summary": summary})
 	case "invitations":
 		if len(parts) == 2 && r.Method == http.MethodGet {
 			items, err := s.teams.Invitations(r.Context(), org)
@@ -321,34 +307,6 @@ func (s *HTTPServer) handleTeamAdministration(w http.ResponseWriter, r *http.Req
 			return
 		}
 		writeJSON(w, map[string]any{"lives": l})
-	case "seat-subscription":
-		if r.Method == http.MethodPost {
-			var p teams.Payment
-			if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-				writeError(w, 400, "invalid body")
-				return
-			}
-			if err := s.teams.RecordPayment(r.Context(), org, u.ID, p); err != nil {
-				writeTeamError(w, r, err)
-				return
-			}
-			s.tenants.invalidate("")
-			s.kickSSE(org, "")
-		} else if r.Method != http.MethodGet {
-			writeError(w, 405, "method not allowed")
-			return
-		}
-		summary, err := s.teams.Summary(r.Context(), org)
-		if err != nil {
-			writeTeamError(w, r, err)
-			return
-		}
-		payments, err := s.teams.Payments(r.Context(), org)
-		if err != nil {
-			writeTeamError(w, r, err)
-			return
-		}
-		writeJSON(w, map[string]any{"summary": summary, "payments": payments})
 	case "allocation":
 		if r.Method != http.MethodPost {
 			writeError(w, 405, "method not allowed")

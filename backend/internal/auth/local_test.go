@@ -128,32 +128,21 @@ func TestImportIsIdempotentAndPreservesIdentity(t *testing.T) {
 		t.Fatal("identity conflict accepted")
 	}
 }
-func TestAdminLoginIgnoresExpiredSubscription(t *testing.T) {
+func TestInactiveSubscriberCannotSignIn(t *testing.T) {
 	s := localStore(t)
-	p, err := s.CreateSubscriber(auth.CreateSubscriberRequest{Email: "admin@example.com", Password: "admin password 12", SubscriptionExpiresAt: time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)})
+	p, err := s.CreateSubscriber(auth.CreateSubscriberRequest{Email: "pending@example.com", Password: "subscriber password 12"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.DB.Exec(`UPDATE users SET role='admin', active=true WHERE id=$1`, p.ID); err != nil {
-		t.Fatal(err)
-	}
-	login, err := s.SignInWithPassword("admin@example.com", "admin password 12")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = s.ValidateToken(login.AccessToken); err != nil {
-		t.Fatal(err)
-	}
-	sub, err := s.CreateSubscriber(auth.CreateSubscriberRequest{Email: "paid@example.com", Password: "subscriber password 12", SubscriptionExpiresAt: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)})
-	if err != nil {
-		t.Fatal(err)
+	if _, err = s.SignInWithPassword("pending@example.com", "subscriber password 12"); err == nil {
+		t.Fatal("inactive subscriber accepted")
 	}
 	active := true
-	if _, err = s.UpdateSubscriber(auth.UpdateSubscriberRequest{ID: sub.ID, Active: &active}); err != nil {
+	if _, err = s.UpdateSubscriber(auth.UpdateSubscriberRequest{ID: p.ID, Active: &active}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.SignInWithPassword("paid@example.com", "subscriber password 12"); err == nil {
-		t.Fatal("expired subscriber accepted")
+	if _, err = s.SignInWithPassword("pending@example.com", "subscriber password 12"); err != nil {
+		t.Fatalf("active subscriber rejected: %v", err)
 	}
 }
 
