@@ -48,7 +48,9 @@ respondem `409` quando a organização não tem live conectada.
 
 Validações de `start` respondem `400` com mensagem PT-BR (menos de 2 palavras,
 opção com espaço, opção longa, duplicada, título acima de 80 caracteres). Abrir
-outra enquete com uma já ativa responde `409`.
+outra enquete com uma já ativa responde `409` (`encerre a enquete atual antes de
+iniciar outra`); `409` também é retornado quando a organização não tem live
+conectada (`conecte-se a uma live para usar a enquete`).
 
 ## Eventos SSE
 
@@ -60,6 +62,19 @@ outra enquete com uma já ativa responde `409`.
 
 O painel usa `counts[]` como fonte de verdade e completa a lista de votantes com
 o `enquete-vote` (um evento por usuário, já que o voto é travado).
+
+## Estrutura de dados
+
+- `options[]`: cada `{ word, votes, voters[] }` — `word` é a palavra do operador
+  (como digitada), `votes` a contagem e `voters[]` a lista de votantes.
+- `voters[]`: cada `{ uniqueId, nickname, votedAt }` — `uniqueId` é o id do
+  usuário do chat (o mesmo voto travado), `votedAt` em epoch ms.
+- Snapshot (`GET /api/enquete` e eventos `enquete-state`/`enquete-result`): `{ active,
+  live, question, options[], total, winner, tied, startedAt, endedAt }` —
+  `startedAt`/`endedAt` em epoch ms (0 enquanto a enquete ainda não foi aberta).
+- O estado (palavras, votos, votantes, vencedora) vive em memória no `Monitor` da
+  live; o snapshot é uma cópia estável, então o frontend consome sem risco de
+  mutação concorrente.
 
 ## Painel
 
