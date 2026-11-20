@@ -96,9 +96,9 @@ function switchTab(tab) {
     hideSuccess();
     hideAttempts();
     if (tab === 'login') {
-        panelHint.textContent = 'Entre com o e-mail e a senha da sua assinatura.';
+        panelHint.textContent = 'Entre com o e-mail e a senha da sua conta.';
     } else {
-        panelHint.textContent = 'Crie sua conta e informe seu canal para solicitar uma avaliação. Aguarde a orientação da equipe antes de pagar. O acesso é liberado após a confirmação do pagamento.';
+        panelHint.textContent = 'Crie sua conta e informe seu canal para solicitar uma avaliação. O acesso é liberado após a aprovação da equipe.';
     }
 }
 
@@ -195,7 +195,7 @@ signupForm.addEventListener('submit', async (event) => {
         });
         signupForm.reset();
         switchTab('login');
-        showSuccess(result.message || 'Cadastro recebido. Após o pagamento, o administrador libera o acesso.');
+        showSuccess(result.message || 'Cadastro recebido. Após a aprovação do administrador, o acesso é liberado.');
     } catch (error) {
         if (error.locked && error.retryAfterSec) {
             startLockoutCountdown(error.retryAfterSec);

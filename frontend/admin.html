@@ -137,16 +137,15 @@
 
             <section id="usersPanel" class="panel" hidden>
                 <div class="section-head">
-                    <h2>Fila de pagamento</h2>
+                    <h2>Cadastros pendentes</h2>
                     <button id="refreshUsersBtn" class="secondary" type="button">Atualizar</button>
                 </div>
-                <p class="muted" style="margin: 0 0 12px;">Novos cadastros ficam bloqueados até você confirmar o pagamento e clicar em <strong>Aprovar</strong>.</p>
+                <p class="muted" style="margin: 0 0 12px;">Novos cadastros ficam bloqueados até você clicar em <strong>Aprovar</strong>.</p>
                 <div class="form-grid">
                     <input type="email" id="subscriberEmail" placeholder="E-mail do assinante">
                     <input type="password" id="subscriberPassword" placeholder="Senha (mín. 12 caracteres)">
                     <input type="text" id="subscriberName" placeholder="Nome (opcional)">
-                    <input type="datetime-local" id="subscriberExpires" title="Validade da assinatura">
-                    <input type="text" id="subscriberNotes" placeholder="Observações / referência do pagamento">
+                    <input type="text" id="subscriberNotes" placeholder="Observações">
                     <select id="subscriberOrg" title="Organização"><option value="">Sem organização</option></select>
                     <select id="subscriberOrgRole" title="Papel na organização">
                         <option value="operator">Operador</option>
@@ -156,7 +155,7 @@
                 </div>
                 <div class="table-wrap">
                     <table>
-                        <thead><tr><th>E-mail</th><th>Nome</th><th>Status</th><th>Validade</th><th>Observações</th><th>Organização</th><th>Ações</th></tr></thead>
+                        <thead><tr><th>E-mail</th><th>Nome</th><th>Status</th><th>Observações</th><th>Organização</th><th>Ações</th></tr></thead>
                         <tbody id="usersBody"></tbody>
                     </table>
                 </div>

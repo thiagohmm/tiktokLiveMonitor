@@ -22,7 +22,6 @@
 
     const ORG_ERRORS = {
         no_organization: 'Sua conta ainda não está vinculada a nenhuma organização. Peça ao administrador para adicioná-la.',
-        seat_suspended: 'Sua vaga adicional está suspensa. Solicite a renovação ao dono.',
         organization_disabled: 'A organização desta conta está desativada. Fale com o administrador.',
     };
 

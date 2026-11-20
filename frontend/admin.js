@@ -120,8 +120,8 @@
         if (pendingBanner) {
             if (pending > 0) {
                 pendingBanner.textContent = pending === 1
-                    ? '1 cadastro aguardando confirmação de pagamento.'
-                    : pending + ' cadastros aguardando confirmação de pagamento.';
+                    ? '1 cadastro aguardando aprovação.'
+                    : pending + ' cadastros aguardando aprovação.';
                 pendingBanner.classList.add('visible');
             } else {
                 pendingBanner.classList.remove('visible');
@@ -130,7 +130,7 @@
         if (!subscribers.length) {
             const row = document.createElement('tr');
             const td = cell(row, 'Nenhum assinante cadastrado.');
-            td.colSpan = 7;
+            td.colSpan = 6;
             usersBody.appendChild(row);
             return;
         }
@@ -142,15 +142,14 @@
             const statusCell = document.createElement('td');
             const badge = document.createElement('span');
             badge.className = `badge ${user.active ? 'approved' : 'pending'}`;
-            badge.textContent = user.active ? 'Aprovado' : 'Aguardando pagamento';
+            badge.textContent = user.active ? 'Aprovado' : 'Aguardando aprovação';
             statusCell.appendChild(badge);
             row.appendChild(statusCell);
-            cell(row, formatDate(user.subscriptionExpiresAt));
             cell(row, user.notes);
             row.appendChild(orgAssignCell(user));
             const actions = document.createElement('td');
             actions.appendChild(actionButton(
-                user.active ? 'Suspender' : 'Aprovar pagamento',
+                user.active ? 'Suspender' : 'Aprovar',
                 user.active ? 'secondary' : 'approve',
                 () => toggleUser(user)
             ));
@@ -223,14 +222,12 @@
 
     async function createUser() {
         clearMessage();
-        const expires = byId('subscriberExpires').value;
         const body = {
             email: byId('subscriberEmail').value,
             password: byId('subscriberPassword').value,
             displayName: byId('subscriberName').value,
             notes: byId('subscriberNotes').value,
         };
-        if (expires) body.subscriptionExpiresAt = new Date(expires).toISOString();
         const orgId = byId('subscriberOrg').value;
         if (orgId) {
             body.orgId = orgId;
@@ -240,7 +237,7 @@
             await api('/api/admin/users', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
             });
-            ['subscriberEmail', 'subscriberPassword', 'subscriberName', 'subscriberExpires', 'subscriberNotes']
+            ['subscriberEmail', 'subscriberPassword', 'subscriberName', 'subscriberNotes']
                 .forEach(id => { byId(id).value = ''; });
             showMessage('Assinante cadastrado e aguardando aprovação.', 'success');
             await loadUsers();
@@ -252,21 +249,11 @@
     async function toggleUser(user) {
         try {
             const body = { id: user.id, active: !user.active };
-            if (!user.active && !user.subscriptionExpiresAt) {
-                const expires = new Date();
-                expires.setDate(expires.getDate() + 30);
-                body.subscriptionExpiresAt = expires.toISOString();
-            }
             await api('/api/admin/users/update', {
                 method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
             });
-            showMessage(user.active
-                ? 'Assinante suspenso.'
-                : (user.subscriptionExpiresAt
-                    ? 'Pagamento aprovado e acesso liberado.'
-                    : 'Pagamento aprovado. Acesso liberado por 30 dias.'),
-                'success');
+            showMessage(user.active ? 'Assinante suspenso.' : 'Aprovação concluída. Acesso liberado.', 'success');
             await loadUsers();
         } catch (error) {
             showMessage(error.message);
@@ -318,7 +305,7 @@
             row.appendChild(statusCell);
             cell(row, formatDate(org.createdAt));
             const actions = document.createElement('td');
-            if (org.id !== LEGACY_ORG_ID && window.TeamUI) actions.appendChild(actionButton('Equipe e mensalidade','secondary',()=>window.TeamUI.openAdmin(org)));
+            if (org.id !== LEGACY_ORG_ID && window.TeamUI) actions.appendChild(actionButton('Equipe','secondary',()=>window.TeamUI.openAdmin(org)));
             actions.appendChild(actionButton('Renomear', 'secondary', () => editOrg(org, 'name')));
             actions.appendChild(actionButton('Limite de lives', 'secondary', () => editOrg(org, 'maxLives')));
             if (org.id !== LEGACY_ORG_ID) {

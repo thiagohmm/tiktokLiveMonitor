@@ -4256,14 +4256,6 @@ updateGoalButtons();
 
 // --- Administração: assinantes ---
 
-// Formata a data de validade de um assinante.
-function formatSubscriberExpiry(value) {
-    if (!value) return '—';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return '—';
-    return date.toLocaleString('pt-BR');
-}
-
 // Renderiza a tabela de assinantes (excluindo admins).
 function renderAdminUsers(users) {
     if (!adminUsersTableBody) return;
@@ -4271,7 +4263,7 @@ function renderAdminUsers(users) {
     const rows = (users || []).filter(user => user.role !== 'admin');
     if (!rows.length) {
         const tr = document.createElement('tr');
-        tr.innerHTML = '<td colspan="6">Nenhum assinante cadastrado.</td>';
+        tr.innerHTML = '<td colspan="5">Nenhum assinante cadastrado.</td>';
         adminUsersTableBody.appendChild(tr);
         return;
     }
@@ -4282,7 +4274,6 @@ function renderAdminUsers(users) {
             <td data-label="E-mail">${escapeHtml(user.email || '—')}</td>
             <td data-label="Nome">${escapeHtml(user.displayName || '—')}</td>
             <td data-label="Status">${user.active ? 'Aprovado' : 'Aguardando aprovação'}</td>
-            <td data-label="Validade">${formatSubscriberExpiry(user.subscriptionExpiresAt)}</td>
             <td data-label="Observações">${escapeHtml(user.notes || '—')}</td>
             <td data-label="Ações">
                 <button class="small-btn secondary-btn" type="button" data-action="toggle">${user.active ? 'Suspender' : 'Aprovar'}</button>
@@ -4307,7 +4298,7 @@ async function loadAdminUsers() {
         console.error('[Frontend] Falha ao carregar assinantes:', error);
         adminUsersTableBody.innerHTML = '';
         const tr = document.createElement('tr');
-        tr.innerHTML = '<td colspan="6">Não foi possível carregar os assinantes.</td>';
+        tr.innerHTML = '<td colspan="5">Não foi possível carregar os assinantes.</td>';
         adminUsersTableBody.appendChild(tr);
     }
 }
@@ -4318,11 +4309,7 @@ async function createAdminUser() {
     const password = document.getElementById('newSubscriberPassword')?.value || '';
     const displayName = document.getElementById('newSubscriberName')?.value || '';
     const notes = document.getElementById('newSubscriberNotes')?.value || '';
-    const expiresRaw = document.getElementById('newSubscriberExpires')?.value || '';
     const body = { email, password, displayName, notes };
-    if (expiresRaw) {
-        body.subscriptionExpiresAt = new Date(expiresRaw).toISOString();
-    }
     try {
         const response = await fetch('/api/admin/users', {
             method: 'POST',
@@ -4337,7 +4324,6 @@ async function createAdminUser() {
         document.getElementById('newSubscriberPassword').value = '';
         document.getElementById('newSubscriberName').value = '';
         document.getElementById('newSubscriberNotes').value = '';
-        document.getElementById('newSubscriberExpires').value = '';
         loadAdminUsers();
     } catch (error) {
         alert(error.message || 'Não foi possível criar o assinante.');
