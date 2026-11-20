@@ -46,10 +46,11 @@ rodando com o modelo **`deepseek/deepseek-v4-pro`** (ex.: agente `reviewer` com
   (`model.DefaultOrgID`), que não aceita membros (só admin da plataforma) e cujas lives o admin
  move para a org de um cliente (`POST /api/admin/lives/assign`, só a partir do legado); identidades e vínculos são importados ou atribuídos explicitamente; reiniciar
   nunca recria uma organização para uma conta revogada.
-- Equipes: dono principal + 2 vagas incluídas; outros donos consomem vagas.
-  Ajudantes são somente leitura. Convites reservam vagas; extras têm mensalidade
-  manual e vencimento. Regras ativadas após regularização de cada organização.
-  Só o admin geral cadastra usernames TikTok permitidos. Ver `docs/auth-local.md`.
+- Equipes: dono principal + membros ilimitados (sem cobrança). Ajudantes são
+  somente leitura. Convites criam a vaga automaticamente; regras ativadas após
+  a primeira alocação de cada organização. A cobrança (preço, períodos,
+  `subscription_expires_at`) foi removida sem apagar dados. Ver
+  `docs/auth-local.md` e `docs/plano-remocao-cobranca.md`.
 - Auth fail-closed: sem `DATABASE_URL` o backend não sobe; `AUTH_ENABLED=0` só
   para dev local, recusado quando `SITE_URL` usa HTTPS.
 - Vercel e Railway foram desligados; o único deploy é o docker compose no VPS (ver `PRODUCAO.md`)

@@ -1,6 +1,6 @@
 # Autenticação local e equipes no VPS
 
-Usuários, senhas, sessões, organizações e cobrança de vagas ficam no PostgreSQL
+Usuários, senhas, sessões e organizações ficam no PostgreSQL
 do VPS. SMTP/Resend apenas entrega mensagens. A conta administrativa existente
 é importada pelo ID e papel originais; e-mail não concede administração.
 
@@ -60,31 +60,24 @@ correção local ou restauração coordenada; sessões antigas não são reaprov
 
 ## Equipes e lives
 
-- Dono principal + duas vagas adicionais incluídas. Outros donos consomem vagas.
-- Ajudantes visualizam dados; donos operam e gerenciam. A API aplica a regra,
-  inclusive em chamadas feitas fora do navegador.
-- Convites valem sete dias e reservam vagas. Reenvio invalida o link anterior.
+- Dono principal + membros ilimitados (sem cobrança). A API aplica as regras de
+  papel (dono opera e gerencia; ajudante visualiza), inclusive em chamadas feitas
+  fora do navegador.
+- Convites valem sete dias e criam a vaga automaticamente quando não há vaga
+  livre. Reenvio invalida o link anterior.
 - Revogação remove o vínculo, preserva conta/histórico e desconecta SSE.
 - Apenas o administrador geral registra usernames TikTok autorizados.
-- Regras antigas permanecem sem expansão até regularização. No painel de cada
-  organização, registre as vagas extras necessárias e selecione o dono principal
-  e a posição de todos os membros antes de salvar a alocação.
+- Regras antigas permanecem sem expansão até a primeira alocação. No painel de
+  cada organização, selecione o dono principal e a posição de todos os membros
+  antes de salvar a alocação.
 - Salvar a primeira alocação ativa as regras da organização. Cadastre as contas
   TikTok antes disso. Novas organizações com dono já são ativadas nesse fluxo.
 
-## Mensalidades
-
-No painel administrativo, abra **Equipe e mensalidade** na organização.
-
-1. Configure o preço global por vaga em reais.
-2. Registre referência única, quantidade extra, valor recebido e período.
-3. Para exceções, selecione liberação temporária e informe justificativa.
-4. Para redução, realoque/revogue ocupantes das vagas removidas primeiro.
-
-Renovação antecipada começa no vencimento atual. Vencimento sugerido é um mês
-calendário, ajustado ao último dia do mês e exibido no horário de São Paulo.
-Períodos sobrepostos e referências repetidas são rejeitados. Vencimento suspende
-apenas vagas extras; renovar não restaura membros revogados.
+A cobrança (preço por vaga, períodos e "Fila de pagamento") foi removida do
+produto sem apagar dados: as tabelas `organization_seat_subscriptions`,
+`organization_seat_payments`, a coluna `users.subscription_expires_at` e as
+keys de preço/auditoria em `settings` permanecem no banco, sem leitura nem
+escrita pela aplicação (ver `docs/plano-remocao-cobranca.md`).
 
 ## Configuração e manutenção
 
